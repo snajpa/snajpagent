@@ -4261,6 +4261,11 @@ snapshot_network(const struct snag_irc_core *irc, struct snag_buf *out, struct s
                 agent->accepted_nick, link->accepted_nick) < 0)
             goto fail;
         const struct irc_channel *primary = channel_find(link, link->room);
+        if (snag_buf_printf(out, "agent[%s]: %s%s\n", agent->endpoint,
+                agent->joined ? "joined " : agent->registered ? "registered"
+                    : agent->connecting ? "connecting" : "disconnected",
+                agent->joined ? agent->room : "") < 0)
+            goto fail;
         if (snapshot_channel(link, primary, out, nicks) < 0) goto fail;
         for (const struct irc_channel *channel = link->channels; channel; channel = channel->next)
             if (channel != primary && snapshot_channel(link, channel, out, NULL) < 0) goto fail;

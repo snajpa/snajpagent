@@ -403,6 +403,8 @@ int snag_app_irc_select_conversation(
     struct app_state *, const struct snag_irc_conversation_target *);
 int snag_app_irc_conversation_send(struct app_state *, const struct snag_irc_conversation_target *,
     enum snag_irc_event_kind, const char *, bool, struct snag_buf *, char *, size_t);
+bool snag_app_irc_conversation_available(
+    const struct snag_irc_scopes *, const json_t *, const struct snag_irc_event *);
 int snag_app_irc_query_target(struct app_state *, const struct snag_irc_scopes *, const json_t *,
     enum snag_irc_identity, uint32_t, const char *, const struct snag_irc_query_target *,
     struct snag_irc_query_target *, char *, size_t);

@@ -913,6 +913,8 @@ reply_context(const struct app_state *app, struct snag_buf *text)
                                            app->irc_turn_replies.count) < 0)
         return -1;
     bool first = true;
+    struct snag_irc_scopes scopes;
+    snag_irc_capture_scopes(&app->irc_request_destinations, &scopes);
     const char *key;
     json_t *entry;
     json_object_foreach(app->irc_turn_conversations, key, entry)
@@ -938,7 +940,8 @@ reply_context(const struct app_state *app, struct snag_buf *text)
                 current.route.kind == original.route.kind &&
                 current.route.generation == original.route.generation &&
                 generation == original.route.generation &&
-                json_is_true(json_object_get(json_object_get(connection, "connected"), "agent")) &&
+                snag_app_irc_conversation_available(
+                    &scopes, app->irc_request_conversations, &current) &&
                 (channel ? current.route.joined &&
                                !strcmp(current.route.membership, original.reply_membership)
                          : current.kind != SNAG_IRC_QUIT);

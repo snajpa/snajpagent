@@ -28,6 +28,28 @@ query_identity(const json_t *data, enum snag_irc_identity identity)
         !strcmp(role, identity == SNAG_IRC_AGENT ? "agent" : "operator");
 }
 
+bool
+snag_app_irc_conversation_available(const struct snag_irc_scopes *scopes,
+    const json_t *directory, const struct snag_irc_event *event)
+{
+    const struct snag_irc_event_route *route = &event->route;
+    const json_t *connection = json_object_get(directory, route->connection);
+    uint64_t generation = 0u;
+    if (!event->routed || snag_json_integer_u64(connection, "generation", &generation) < 0 ||
+        generation != route->generation ||
+        !json_is_true(json_object_get(json_object_get(connection, "connected"),
+            route->identity == SNAG_IRC_AGENT ? "agent" : "operator")) ||
+        (route->kind == SNAG_IRC_QUERY ? event->kind == SNAG_IRC_QUIT : !route->joined))
+        return false;
+    for (size_t i = 0u; i < scopes->count; ++i) {
+        const struct snag_irc_query_target *scope = &scopes->items[i].target;
+        if (!strcmp(scope->connection, route->connection) &&
+            scope->generation == route->generation)
+            return true;
+    }
+    return false;
+}
+
 int
 snag_app_irc_query_target(struct app_state *app, const struct snag_irc_scopes *scopes,
                          const json_t *directory, enum snag_irc_identity identity,
@@ -70,6 +92,9 @@ snag_app_irc_query_target(struct app_state *app, const struct snag_irc_scopes *s
             if (!query_id && (event.route.generation != scope->target.generation ||
                 event.kind == SNAG_IRC_QUIT || !snag_irc_name_equal(scope->casemapping[identity],
                     address.target, event.route.peer))) continue;
+            if (!snag_app_irc_conversation_available(scopes, directory, &event))
+                return snag_fail(error, error_size, ESTALE,
+                    "query is unavailable for this connection; select an explicit endpoint/nick");
             if (!snag_irc_event_query_target(app->irc, &event, target))
                 return snag_fail(error, error_size, ESTALE, "query endpoint is unavailable");
             target->destination = scope->target.destination;

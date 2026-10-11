@@ -436,8 +436,11 @@ agent_query(const json_t *data)
 }
 
 static int
-query_listing(struct snag_buf *out, const json_t *directory)
+query_listing(struct snag_buf *out, const struct snag_irc_destinations *destinations,
+    const json_t *directory)
 {
+    struct snag_irc_scopes scopes;
+    if (out) snag_irc_capture_scopes(destinations, &scopes);
     const char *connection, *conversation;
     json_t *entry, *item;
     int found = 0;
@@ -449,12 +452,17 @@ query_listing(struct snag_buf *out, const json_t *directory)
             const json_t *data = json_object_get(item, "data");
             if (!agent_query(data)) continue;
             found = 1;
-            if (out && snag_buf_printf(out, "query:%s endpoint=%s peer=%s generation=%lld\n",
-                           conversation, snag_json_string(entry, "endpoint"),
-                           snag_json_string(json_object_get(data, "routing"), "peer"),
-                           (long long)json_integer_value(json_object_get(
-                               json_object_get(data, "routing"), "generation"))) < 0)
-                return -1;
+            if (out) {
+                struct snag_irc_event event;
+                if (snag_irc_event_record_read("irc_event_v2", data, &event) < 0) return -1;
+                bool available = snag_app_irc_conversation_available(&scopes, directory, &event);
+                if (snag_buf_printf(out,
+                    "query:%s endpoint=%s peer=%s generation=%llu status=%s\n",
+                    conversation, event.endpoint, event.route.peer,
+                    (unsigned long long)event.route.generation,
+                    available ? "available" : "unavailable") < 0)
+                    return -1;
+            }
         }
     }
     return found;
@@ -474,6 +482,8 @@ static int
 channel_listing(
     struct snag_buf *out, const struct snag_irc_destinations *destinations, const json_t *directory)
 {
+    struct snag_irc_scopes scopes;
+    snag_irc_capture_scopes(destinations, &scopes);
     bool extra = false;
     for (size_t i = 0u; i < destinations->count; ++i) {
         const struct snag_irc_destination *scope = &destinations->items[i];
@@ -492,7 +502,7 @@ channel_listing(
             if (snag_irc_event_record_read("irc_event_v2", data, &event) < 0) return -1;
             if (!snag_irc_name_equal(scope->casemapping[SNAG_IRC_AGENT], event.room, scope->room))
                 extra = true;
-            bool joined = event.route.joined && event.route.generation == scope->generation;
+            bool joined = snag_app_irc_conversation_available(&scopes, directory, &event);
             if (out &&
                 snag_buf_printf(out, "channel:%s endpoint=%s room=%s generation=%llu joined=%s\n",
                     id, scope->endpoint, event.room, (unsigned long long)event.route.generation,
@@ -966,9 +976,10 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         struct snag_buf state = {.max = SNAG_MAX_IRC_SNAPSHOT};
         rc = app->irc ? snag_irc_state(app->irc, &state, error, error_size)
                       : snag_buf_printf(&state, "no active endpoints\n");
-        if (!rc && query_listing(&state, app->session.irc_conversations) < 0) rc = -1;
         struct snag_irc_destinations destinations;
         snag_irc_destinations(app->irc, &destinations);
+        if (!rc && query_listing(&state, &destinations,
+            app->session.irc_conversations) < 0) rc = -1;
         if (!rc && channel_listing(&state, &destinations, app->session.irc_conversations) < 0)
             rc = -1;
         if (!rc)
@@ -1026,7 +1037,8 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
             return irc_tool_query_send(
                 app, selector, text, notice, action, result, error, error_size);
         }
-        if (!topic && !nick && !selector && query_listing(NULL, app->irc_request_conversations)) {
+        if (!topic && !nick && !selector &&
+            query_listing(NULL, NULL, app->irc_request_conversations)) {
             *result = snag_tool_result_terminal(false,
                 "Select query:CONVERSATION_ID or endpoint/nick for a private message; "
                 "select an explicit destination number for channel chat. No message was sent.");

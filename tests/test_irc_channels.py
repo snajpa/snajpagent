@@ -25,6 +25,7 @@ class ChannelServer:
         self.links = {}
         self.lines = []
         self.defer_operator_join = False
+        self.force_side_join = True
         self.chantypes = '#&+!'
         self.capabilities = ''
         self.rejected_nick = None
@@ -88,7 +89,7 @@ class ChannelServer:
                             continue
                         # Server-forced joins also exercise non-default rooms.
                         self.send(nick, f':{nick}!u@fake JOIN {room}\r\n')
-                        if room == '#lab':
+                        if room == '#lab' and self.force_side_join:
                             self.send(nick, f':{nick}!u@fake JOIN #side\r\n')
                     elif line.startswith('PART '):
                         self.send(nick, f':{nick}!u@fake {line}\r\n')
@@ -478,6 +479,76 @@ class ReminderTests(ChannelFixture):
 
 
 class ChannelTests(ChannelFixture):
+    def test_resume_restores_renamed_identities_and_agent_rooms(self):
+        self.run_calls(('irc_nick', dict(destination='1', nick='resumed-agent')))
+        self.wait(lambda: 'resumed-agent' in self.server.links)
+        self.command('/nick resumed-op')
+        self.wait(lambda: 'resumed-op' in self.server.links)
+        self.command('/part #side')
+        self.wait(lambda: not self.channels()[('operator', '#side')]['routing']['joined'])
+        self.wait_idle()
+        self.server.send('resumed-agent',
+            ':private-peer!u@fake PRIVMSG resumed-agent :private-before-resume\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'private-before-resume'
+                             for e in self.events()))
+        self.wait_idle()
+        previous = self.channels()[('agent', '#side')]['routing']
+        old_query = next(e['data']['routing']['conversation_id'] for e in self.events()
+                         if e['data'].get('text') == 'private-before-resume')
+        path = read_events(self.root / 'state')[0]
+        self.term.write(b'/exit\r')
+        self.term.wait_exit()
+        self.assertEqual(self.term.process.returncode, 0)
+        prefix = path.read_bytes()
+        self.server.force_side_join = False
+        self.server.lines.clear()
+        self.term = self.start('--resume', path.parent.name, ready=b'resumed-op@')
+        self.wait(lambda: all(self.channels().get(('agent', room), {})
+                  .get('routing', {}).get('joined') and
+                  self.channels()[('agent', room)]['routing']['generation'] >
+                  previous['generation'] for room in ('#lab', '#side')))
+        self.wait_idle()
+        self.assertIn(('resumed-agent', 'JOIN #side'), self.server.lines)
+        current = self.channels()[('agent', '#side')]['routing']
+        self.assertEqual(current['conversation_id'], previous['conversation_id'])
+        self.assertNotEqual(current['membership'], previous['membership'])
+        self.run_calls(self.send_call(self.selector('#lab'), 'default-after-resume'),
+                       self.send_call(self.selector(), 'side-after-resume'))
+        self.wait(lambda: ('resumed-agent', 'PRIVMSG #lab :default-after-resume')
+                  in self.server.lines)
+        self.wait(lambda: ('resumed-agent', 'PRIVMSG #side :side-after-resume')
+                  in self.server.lines)
+        self.seen.clear()
+        self.server.send('resumed-op',
+            ':private-peer!u@fake PRIVMSG resumed-op :operator-private-after-resume\r\n')
+        self.server.send('resumed-agent',
+            ':private-peer!u@fake PRIVMSG resumed-agent :agent-private-after-resume\r\n')
+        self.server.send('resumed-agent',
+            ':channel-peer!u@fake PRIVMSG #side :resumed-agent: inbound-side\r\n')
+        self.wait(lambda: 'agent-private-after-resume' in json.dumps(self.seen) and
+                  'inbound-side' in json.dumps(self.seen))
+        self.wait_idle()
+        self.assertNotIn('operator-private-after-resume', json.dumps(self.seen))
+        self.run_calls(('irc_state', {}))
+        state = self.send_outputs()[-1]['model_text']
+        old_line = next(line for line in state.splitlines()
+                        if line.startswith('query:' + old_query + ' '))
+        self.assertIn('status=unavailable', old_line)
+        self.assertIn('agent[' + self.server.endpoint + ']: joined #lab', state)
+        fresh_query = next(e['data']['routing']['conversation_id'] for e in self.events()
+                           if e['data'].get('text') == 'agent-private-after-resume')
+        fresh_line = next(line for line in state.splitlines()
+                          if line.startswith('query:' + fresh_query + ' '))
+        self.assertIn('status=available', fresh_line)
+        self.run_calls(self.send_call('query:' + old_query, 'stale-private-forbidden'),
+                       self.send_call(self.server.endpoint + '/private-peer', 'fresh-private'))
+        self.assertEqual([output['status'] for output in self.send_outputs()[-2:]],
+                         ['failed', 'succeeded'])
+        self.assert_no_wire('stale-private-forbidden')
+        self.wait(lambda: ('resumed-agent', 'PRIVMSG private-peer :fresh-private')
+                  in self.server.lines)
+        self.assertTrue(path.read_bytes().startswith(prefix))
+
     def test_native_durable_response_and_repaint(self):
         self.submit("native durable initial response")
         path, before = read_events(self.root / 'state')

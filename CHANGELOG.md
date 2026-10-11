@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Report agent and operator IRC membership separately after resume. Mark
+  retained private-query IDs available or unavailable against the live
+  connection generation, sharing that check with pending replies and sends.
+  Preserve renamed identities, additional channels and exact private routing.
+
 - Accept exact private-query NOTICE replies so informational exchanges can end
   without mandatory PRIVMSG acknowledgement loops. Preserve channel reply,
   recipient, connection and delivery-state checks.

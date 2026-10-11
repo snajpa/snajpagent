@@ -6084,16 +6084,24 @@ transition. Use irc_state to inspect the current endpoint and room state after i
 .B irc_state
 accepts an empty object and reports the actual current destinations, room state,
 agent channel IDs with joined status, and retained agent query IDs with their
-endpoint, peer and generation.
+endpoint, peer, generation and available/unavailable status. The room snapshot
+reports agent and operator registration/membership separately. Resume restores
+saved nicknames and wanted channels; channel IDs retain history while each new
+connection uses a new generation and membership.
 Operator queries are excluded. This tool does not open connections.
 .B irc_send
 accepts destination, notice, action and text. Null/false notice sends a normal
-message; true sends an informational notice, which does not satisfy a required
-reply. A private destination can be query:CONVERSATION_ID, endpoint/nick or
+message; true sends an informational notice. A NOTICE to the exact private query
+can close its informational reply; channel replies require a normal message.
+A private destination can be query:CONVERSATION_ID, endpoint/nick or
 session/endpoint/nick. A bare nick requires a unique endpoint; the session
 component must name the current session. Queries always use the agent identity.
 Use a query ID to reply to that exact conversation. Addressing a nick can open a
-new query on an existing endpoint. A channel destination can be
+new query on an existing endpoint. Query IDs from an earlier connection
+generation remain visible as unavailable history. Resume and reconnect preserve
+their original reply scope; select a fresh endpoint/nick explicitly to start a
+new private conversation. Failed private sends retain their private target.
+A channel destination can be
 channel:CONVERSATION_ID, endpoint/#room or session/endpoint/#room;
 a bare #room requires a unique endpoint. It selects an already joined agent
 channel on an external server. action true sends a CTCP action to an explicit

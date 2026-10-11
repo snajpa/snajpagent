@@ -695,6 +695,15 @@ the old queued messages rather than sending them to the replacement room.
 
 ## Durability, Bounds, And Failure Semantics
 
+Resume restores role/nickname preferences and wanted agent/operator channels.
+Each connection lifetime has a new generation and channel membership. Retained
+private-query history keeps its original identity, peer and generation; state
+lists its current availability against both the durable directory and captured
+live endpoint scopes. Pending replies and exact sends share that availability
+check. An unavailable private target requires fresh explicit peer addressing.
+Room snapshots report the agent's registration and default-room membership
+separately from the operator's connection and channel roster.
+
 Network configuration is process configuration; IRC room traffic that reaches
 the agent is session state. Typed events cover connections, joins/leaves,
 messages, nick/mode/topic changes, outbound model/operator chat, delivered

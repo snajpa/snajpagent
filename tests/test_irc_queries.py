@@ -267,6 +267,55 @@ class QueryFixture(unittest.TestCase):
 
 
 class QueryTests(QueryFixture):
+    def test_client_resume_uses_native_server_channels_and_private_identity(self):
+        self.root = self.root / 'client'
+        self.root.mkdir()
+        self.workspace, self.config = irc_workspace(
+            self.root / 'workspace', self.provider.port, 'host-model')
+        self.term = self.start('--no-listen', '-c', f'127.0.0.1:{self.port}',
+            '-n', 'native-agent', '-o', 'native-op', '-r', 'lab', ready=b'native-op@')
+
+        def respond(handler, request, sequence):
+            prompt = self.provider.latest_user(request)
+            if prompt in ('native-before', 'native-after') and prompt not in self.issued:
+                self.seen.append(request)
+                self.issued.add(prompt)
+                self.reply_call(handler, sequence, prompt, f'127.0.0.1:{self.port}/#lab',
+                    prompt + '-channel')
+            else:
+                self.respond(handler, request, sequence)
+
+        self.provider.runtime_handler = respond
+        self.submit('native-before')
+        self.wait_wire(self.peer, b':native-agent!')
+        self.wait_wire(self.peer, b'PRIVMSG #lab :native-before-channel\r\n')
+        self.direct('native-agent', 'private-before-native-resume')
+        self.wait_idle()
+        path = read_events(self.root / 'state')[0]
+        old_query = next(e['data']['routing'] for e in self.events()
+                         if e['data'].get('text') == 'private-before-native-resume')
+        self.term.write(b'/exit\r')
+        self.term.wait_exit()
+        self.assertEqual(self.term.process.returncode, 0)
+        prefix = path.read_bytes()
+        self.term = self.start('--resume', path.parent.name, ready=b'native-op@')
+        self.submit('native-after')
+        self.wait_wire(self.peer, b'PRIVMSG #lab :native-after-channel\r\n')
+        self.seen.clear()
+        self.direct('native-op', 'native-operator-secret')
+        self.direct('native-agent', 'native-agent-direct')
+        self.peer.sock.sendall(b'PRIVMSG #lab :native-agent: native-inbound-channel\r\n')
+        self.wait(lambda: 'native-agent-direct' in json.dumps(self.seen) and
+                  'native-inbound-channel' in json.dumps(self.seen))
+        self.wait_idle()
+        self.assertNotIn('native-operator-secret', json.dumps(self.seen))
+        current = next(e['data']['routing'] for e in self.events()
+                       if e['data'].get('text') == 'native-agent-direct')
+        self.assertEqual(current['connection_id'], old_query['connection_id'])
+        self.assertGreater(current['generation'], old_query['generation'])
+        self.assertNotEqual(current['conversation_id'], old_query['conversation_id'])
+        self.assertTrue(path.read_bytes().startswith(prefix))
+
     def test_private_notice_reply_closes_obligation(self):
         self.direct('querybot', 'private-close-with-notice')
         self.wait_wire(self.peer, b'NOTICE query-peer :closure-ack\r\n')
@@ -369,10 +418,13 @@ class QueryTests(QueryFixture):
         if boundary == 'irc_admitted':
             self.assertIn(source['seq'], event['data']['sequences'])
             self.assertIn('input', event['data'])
+        self.seen.clear()
         self.resume_at(event['seq'])
         self.wait(lambda: any(e['seq'] > event['seq'] and e['type'] == 'irc_reply_reminder'
                   for e in self.events()))
         self.wait_idle()
+        target = 'target=query:' + source['data']['routing']['conversation_id']
+        self.assertIn(target + ' status=unavailable', json.dumps(self.seen))
 
     def test_pending_query_reply_survives_resume(self):
         self.resume_reply_at('irc_admitted')
