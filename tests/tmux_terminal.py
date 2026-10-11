@@ -1621,11 +1621,13 @@ def run_steer_draft_handoff_case(binary, root, with_draft=True):
             terminal.wait("» late steer")
             expected = "late steer"
         terminal.send_key("Enter")
-        second_start.set()
-        second_finish.set()
+        # tmux queues the key; keep the pending response blocked until the app
+        # has admitted steering, rather than racing its completion with Enter.
         events = wait_event_count(state, "steering_added", 1)
         steering = event_list(events, "steering_added")
         assert len(steering) == 1 and steering[0]["data"]["text"] == expected, steering
+        second_start.set()
+        second_finish.set()
         terminal.wait("steer accepted", timeout=20)
         terminal.exit()
         print("tmux_terminal steer {} handoff: ok".format(
