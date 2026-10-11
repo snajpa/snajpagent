@@ -657,7 +657,7 @@ class MCPTests(unittest.TestCase):
         snapshot = next(self.state.glob('sessions/*/mcp-turn.json'))
         session = snapshot.parent.name
         result = subprocess.run(self.args('-e', '--resume', session), cwd=self.root,
-                                env=self.env, capture_output=True, timeout=10)
+                                env=self.env, input=b'', capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(len(seen), 1)
         original = [t for t in first[0]['tools'] if t.get('name', '').startswith('mcp_')]
