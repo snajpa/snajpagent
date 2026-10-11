@@ -6009,6 +6009,7 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
         arrived, release = threading.Event(), threading.Event()
         requests = []
         marker = "fresh-input-" + mode
+        hold_backoff = mode in ("steer", "chat", "mention", "queue")
 
         def respond(handler, request, sequence):
             if provider.latest_user(request) == "retry-original":
@@ -6025,9 +6026,9 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
                 handler.send_response(200)
                 handler.send_header("Content-Type", "text/event-stream")
                 handler.send_header("Connection", "close")
-                if mode in ("steer", "chat", "mention", "queue"):
+                if hold_backoff:
                     # Keep backoff open for the bounded input-admission check.
-                    handler.send_header("Retry-After", "60")
+                    handler.send_header("Retry-After", "30")
                 handler.end_headers()
                 handler.wfile.write(created.encode())
                 handler.wfile.flush()
@@ -6079,7 +6080,7 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
             assert arrived.wait(5.0)
             if mode not in ("before", "zero", "healthy"):
                 release.set()
-                terminal.wait("provider retry 1/2", timeout=5.0)
+                terminal.wait("in 30000ms" if hold_backoff else "provider retry 1/2", timeout=5.0)
             if mode == "steer":
                 terminal.submit(marker)
             elif mode == "queue":
