@@ -851,7 +851,7 @@ read_linked_batch(int fd, uint64_t boundary, uint64_t offset, const unsigned cha
     unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE];
     if (read_wire_header(fd, offset, header) < 0) return -1;
     struct snag_binary_anchor previous;
-    uint64_t length;
+    uint64_t length = 0u;
     size_t wire_size;
     if (batch_header_anchor(header, offset, &previous, &length) < 0 ||
         snag_binary_wire_size((size_t)length, &wire_size) < 0 ||

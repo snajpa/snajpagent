@@ -837,7 +837,7 @@ remote_upstream(struct remote_transfer *client)
             if (ready < 0 && errno == EINTR) continue;
             if (ready < 0) return -1;
             if (!ready) continue;
-            if (client->key_len == sizeof(client->keys)) return 0;
+            if (client->key_len >= sizeof(client->keys)) return 0;
             ssize_t amount = read(STDIN_FILENO, client->keys + client->key_len,
                 sizeof(client->keys) - client->key_len);
             if (amount <= 0) return amount < 0 ? -1 : 0;

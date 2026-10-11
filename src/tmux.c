@@ -47,9 +47,10 @@ client_row(char *row, const struct snag_terminal_profile *profile,
     if (!readonly) return snag_errno(EPROTO);
     *readonly++ = '\0';
     if (strcmp(pane, profile->pane) || strcmp(control, "0") || strcmp(readonly, "0")) return 0;
-    if (++*matches != 1u || row[0] != '/' || strlen(row) >= SNAG_TERMINAL_NAME_BYTES)
+    size_t length = strlen(row);
+    if (++*matches != 1u || row[0] != '/' || length >= SNAG_TERMINAL_NAME_BYTES)
         return snag_errno(ENOTSUP);
-    (void)snprintf(terminal, SNAG_TERMINAL_NAME_BYTES, "%s", row);
+    memcpy(terminal, row, length + 1u);
     return 0;
 }
 
