@@ -433,7 +433,7 @@ class MCPTests(unittest.TestCase):
             process.kill()
         process.communicate(timeout=3)
 
-    def login(self, bad_state=False, callback_mode='paste'):
+    def login(self, bad_state=False, callback_mode='paste', read_size=8192):
         tty = callback_mode.startswith('tty_')
         master, slave = pty.openpty() if tty else (-1, -1)
         if tty:
@@ -450,11 +450,11 @@ class MCPTests(unittest.TestCase):
         while time.monotonic() < deadline:
             ready, _, _ = select.select([p.stderr], [], [], .1)
             if ready:
-                data = os.read(p.stderr.fileno(), 8192)
+                data = os.read(p.stderr.fileno(), read_size)
                 if not data:
                     break
                 output.extend(data)
-                match = re.search(rb'(http://[^\s]+/authorize\?[^\s]+)', output)
+                match = re.search(rb'(http://[^\s]+/authorize\?[^\s]+)\s', output)
                 if match and (not tty or b'Waiting for the loopback' in output):
                     authorize = match[1].decode()
                     break
@@ -511,6 +511,9 @@ class MCPTests(unittest.TestCase):
             self.assertNotIn(b'fixture-access-secret', stdout + output)
             self.assertNotIn(b'fixture-code', stdout + output)
         return p.returncode
+
+    def test_oauth_login_accepts_fragmented_authorization_url(self):
+        self.assertEqual(self.login(read_size=1), 0)
 
     def test_oauth_pkce_refresh_and_logout(self):
         self.server.expires = 1
