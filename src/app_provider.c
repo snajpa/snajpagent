@@ -96,7 +96,8 @@ fail:
         return -1;
     rc = snag_provider_models_list(
         (struct snag_provider_connection){app->config, provider, &credential, &app->ui,
-            snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL},
+            snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL,
+            NULL},
         models, error, error_size);
     snag_credential_clear(&credential);
     return rc;
@@ -235,7 +236,8 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
     }
     rc = snag_provider_responses_count(
         (struct snag_provider_connection){app->config, app->turn_provider, credential, &app->ui,
-            snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL},
+            snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL,
+            NULL},
         count_request, &exact_tokens, &endpoint_unsupported, error, error_size, NULL);
     if (rc == 0) {
         *input_tokens = exact_tokens;
@@ -298,7 +300,8 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
 #else
     return snag_provider_responses_compact(
         (struct snag_provider_connection){app->config, app->turn_provider, credential, &app->ui,
-            snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL},
+            snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL,
+            NULL},
         compact_request, output, error, error_size, NULL);
 #endif
 }

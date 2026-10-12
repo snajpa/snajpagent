@@ -49,6 +49,8 @@ struct snag_provider_connection {
     /* Consulted at retry boundaries with pump_opaque; NULL uses config. */
     bool (*retry_allowed)(const void *opaque);
     snag_provider_progress_fn progress;
+    /* Optional frozen secrets, borrowed for this call and merged before filtering. */
+    const struct snag_secret_set *protection;
 };
 
 enum snag_audio_operation { SNAG_AUDIO_LISTEN, SNAG_AUDIO_TRANSCRIBE, SNAG_AUDIO_SPEAK };

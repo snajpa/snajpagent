@@ -16,54 +16,26 @@ stream_fail(struct snag_responses_stream *stream, int code, const char *fmt, ...
 
     stream->failed = true;
     va_start(ap, fmt);
-    (void)vsnprintf(stream->error, sizeof(stream->error), fmt, ap);
+    int wrote = vsnprintf(stream->error, sizeof(stream->error), fmt, ap);
     va_end(ap);
+    if (wrote < 0 || (size_t)wrote >= sizeof(stream->error))
+        (void)snag_strcpy(stream->error, sizeof(stream->error), "provider diagnostic omitted");
     errno = code;
     return -1;
-}
-
-static void
-diagnostic_text(char *out, size_t out_size, const unsigned char *text, size_t len)
-{
-    size_t pos = 0u;
-
-    if (!out_size) return;
-    for (size_t i = 0u; i < len && i < 64u && pos + 1u < out_size; ++i) {
-        unsigned char c = text[i];
-        out[pos++] = c >= 0x20u && c <= 0x7eu ? (char)c : '?';
-    }
-    out[pos] = '\0';
 }
 
 static void
 record_diagnostic(struct snag_responses_stream *stream, const struct snag_sse_record *record,
     const json_t *root, const char *json_class)
 {
-    char event[65] = "-";
     char digest[SNAG_SHA256_HEX_LEN + 1u];
-    char keys[273] = "-";
-    size_t keys_len = 0u;
-    unsigned int count = 0u;
 
-    if (record->event_len) diagnostic_text(event, sizeof(event), record->event, record->event_len);
     snag_sha256_hex(record->data, record->data_len, digest);
-    if (root && json_is_object(root)) {
-        keys[0] = '\0';
-        for (void *it = json_object_iter((json_t *)root); it && count < 8u;
-            it = json_object_iter_next((json_t *)root, it), ++count) {
-            char key[65];
-            diagnostic_text(key, sizeof(key), (const unsigned char *)json_object_iter_key(it),
-                json_object_iter_key_len(it));
-            int wrote = snprintf(
-                keys + keys_len, sizeof(keys) - keys_len, "%s%s", keys_len ? "," : "", key);
-            if (wrote < 0 || (size_t)wrote >= sizeof(keys) - keys_len) break;
-            keys_len += (size_t)wrote;
-        }
-        if (!keys_len) (void)snprintf(keys, sizeof(keys), "-");
-    }
+    /* Numeric shape and a digest stay useful without clipping provider-controlled names. */
     (void)snprintf(stream->diagnostic, sizeof(stream->diagnostic),
-        "Responses record diagnostic: event=%s bytes=%zu sha256=%.16s json=%s keys=%s", event,
-        record->data_len, digest, json_class, keys);
+        "Responses record diagnostic: event_bytes=%zu bytes=%zu sha256=%.16s json=%s keys=%zu",
+        record->event_len, record->data_len, digest, json_class,
+        root && json_is_object(root) ? json_object_size(root) : 0u);
 }
 
 bool

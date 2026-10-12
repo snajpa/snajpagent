@@ -6072,7 +6072,16 @@ Native resume also restores pending input from older checkpoints whose context
 recipe omitted those receipts.
 .PP
 At most one IRC summary runs per owner. A failed request leaves the original
-context intact; another attempt requires more admitted updates or a new
+context intact and reports a secret-filtered failure reason in its warning.
+The captured provider and tool secrets protect diagnostics from the first filter,
+including when one secret contains another.
+Potentially truncated and parser-derived diagnostics omit raw details.
+HTTP failure warnings report the status without an error-body excerpt.
+Record diagnostics contain byte/key counts, JSON shape and a hash prefix.
+Provider-controlled event and key names are omitted; formatting preserves a
+complete failure reason or a safe placeholder.
+IRC summary triggers are independent of the main-context capacity threshold.
+Another attempt requires more admitted updates or a new
 irc_compact call. A concurrent conversation compaction or context reset supersedes
 the branch. Interrupting a foreground turn, configuration reload,
 disabling/reconfiguring this tool and

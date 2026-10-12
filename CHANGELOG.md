@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Include secret-filtered provider failure reasons in IRC-summary warnings so
+  transport failures can be distinguished from main-context capacity triggers.
+  Omit truncated and parser-derived excerpts before filtering can shorten a
+  clipped buffer. Keep HTTP summary warnings to status only. Record diagnostics
+  retain numeric shape and a hash, with complete reasons filtered without
+  delimiter slicing, so credential fragments and JSON-escaped secrets stay out
+  of failure warnings. Apply the full captured protection set before the first
+  filter to protect overlapping provider and tool secrets.
+
 - Retain the foreground tool-schema prefix in full-context IRC summary requests
   while disabling tool selection. Background summaries remain unable to execute
   tools and preserve original context when a provider returns a tool call.

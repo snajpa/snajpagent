@@ -1436,7 +1436,11 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
     }
     if (models == MODEL_CREATE_TYPELESS) {
         serve_one(listen_fd, 200u, "POST", "/v1/responses", NULL, "text/event-stream",
-            "data: {\"kind\":\"private-value\"}\n\n");
+            "event: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "transport-secret\n"
+            "data: {\"kind\":\"private-value\","
+            "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            "transport-secret\":\"private-key-value\"}\n\n");
         _exit(0);
     }
     static const char create_sse[] =
@@ -2192,7 +2196,7 @@ transport_connection(
         config->providers[0].base_url, sizeof(config->providers[0].base_url), base_url));
     transport_settings(&config->providers[0], credential);
     return (struct snag_provider_connection){
-        config, &config->providers[0], credential, NULL, NULL, NULL, NULL, 0, NULL, NULL};
+        config, &config->providers[0], credential, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL};
 }
 
 /* The proxy keys prompt-cache affinity on a session identity from its session lane; without it
@@ -2220,7 +2224,8 @@ test_session_identity_header(void)
     struct snag_provider_connection connection;
     snag_config_init(&config);
     connection = (struct snag_provider_connection){
-        &config, &config.providers[1], &credential, NULL, NULL, NULL, session_id, 0, NULL, NULL};
+        &config, &config.providers[1], &credential, NULL, NULL, NULL, session_id, 0, NULL, NULL,
+        NULL};
     snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name, sizeof(config.providers[1].name), "transport") > 0);
@@ -2280,7 +2285,7 @@ test_local_provider_transport(void)
     struct snag_provider_connection connection;
     snag_config_init(&config);
     connection = (struct snag_provider_connection){
-        &config, &config.providers[1], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL};
+        &config, &config.providers[1], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL};
     snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name, sizeof(config.providers[1].name), "transport") > 0);
@@ -2376,7 +2381,7 @@ test_codex_path_selection(void)
 
     snag_config_init(&config);
     connection = (struct snag_provider_connection){
-        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL};
+        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL};
     transport_settings(&config.providers[0], &credential);
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         json_t *models = NULL;
@@ -2481,9 +2486,13 @@ test_typeless_create_diagnostic(void)
                transport_connection(&config, &credential, server.endpoint), request, NULL, NULL,
                NULL, NULL, NULL, NULL, &graph, NULL, NULL, error, sizeof(error), NULL) < 0);
     assert(strstr(error, "Responses event has no type") != NULL);
-    assert(strstr(error, "Responses record diagnostic: event=-") != NULL);
+    assert(strstr(error,
+               "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatran") == NULL);
+    assert(strstr(error,
+               "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbtran") == NULL);
+    assert(strstr(error, "Responses record diagnostic: event_bytes=76") != NULL);
     assert(strstr(error, "json=object") != NULL);
-    assert(strstr(error, "keys=kind") != NULL);
+    assert(strstr(error, "keys=2") != NULL);
     assert(strstr(error, "private-value") == NULL);
     snag_response_graph_free(&graph);
     json_decref(request);
@@ -2600,7 +2609,7 @@ test_create_retries(void)
         {created, "", 200, 1, 1, false, NULL, "local transport"},
         {created, "data: {", 200, 1, 0, false, "mid-event", ""},
         {created, "data: {", 200, 1, 0, true, "provider transport failed", ""},
-        {created, "data: {bad}\n\n", 200, 1, 0, false, "JSON", ""},
+        {created, "data: {bad}\n\n", 200, 1, 0, false, "provider diagnostic omitted", ""},
         {partial, transient, 200, 1, 0, false, "[server_error]", "once"},
         {partial, "", 200, 1, 0, true, "provider transport failed", "once"},
         {created,
@@ -2659,7 +2668,7 @@ test_create_retries(void)
         int rc = snag_provider_responses_create(
             (struct snag_provider_connection){&config, &config.providers[0], &credential,
                 cancellation.code ? &ui : NULL, cancellation.code ? cancel_retry : NULL,
-                &cancellation, NULL, 0, NULL, NULL},
+                &cancellation, NULL, 0, NULL, NULL, NULL},
             request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph, &failure, NULL, error,
             sizeof(error), &retries);
         if (cancellation.code) {
@@ -2733,7 +2742,8 @@ test_policy_clarification_after_reasoning(void)
     snag_buf_init(&emitted.text, 1024u);
     int rc = snag_provider_responses_create(
         (struct snag_provider_connection){
-            &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL},
+            &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL,
+            NULL},
         request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph, &failure, NULL, error,
         sizeof(error), &retries);
     assert(rc < 0 && retries == 0u && emitted.text.len == 0u);
@@ -3129,7 +3139,8 @@ test_native_compaction_probe(void)
         if (!cases[i].live) stop_server(&server);
         int rc = snag_provider_native_compaction_probe(
             (struct snag_provider_connection){
-                &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL},
+                &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL,
+                NULL},
             "gpt-5.5", error, sizeof(error));
         if (cases[i].live) stop_server(&server);
         assert(rc == cases[i].expected);
@@ -6452,7 +6463,7 @@ test_provider_auth(void)
             int rc = snag_provider_models_list(
                 (struct snag_provider_connection){
                     &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL,
-                    NULL},
+                    NULL, NULL},
                 &models, error, sizeof(error));
             if (rc < 0 && mode == MODEL_AUTH_401)
                 (void)fprintf(stderr, "auth fixture failed: %s\n", error);
@@ -6568,7 +6579,8 @@ test_provider_auth(void)
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         int rc = snag_provider_responses_compact(
             (struct snag_provider_connection){
-                &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL},
+                &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL,
+                NULL},
             request, &output, error, sizeof(error), NULL);
         assert(rc == (pass < 3u ? SNAG_PROVIDER_UNSUPPORTED : -1));
         assert(output.value == NULL);

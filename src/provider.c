@@ -38,6 +38,7 @@ struct provider_ctx {
     struct curl_slist *headers;
     CURL *curl;
     const struct snag_config *config;
+    const struct snag_secret_set *protection_in;
     const struct snag_provider_config *provider;
     const char *session_id;
     struct snag_ui *render;
@@ -77,7 +78,9 @@ struct provider_ctx {
 static void
 ctx_error(struct provider_ctx *ctx, const char *message)
 {
-    (void)snprintf(ctx->error, sizeof(ctx->error), "%s", message);
+    int wrote = snprintf(ctx->error, sizeof(ctx->error), "%s", message);
+    if (wrote < 0 || (size_t)wrote >= sizeof(ctx->error))
+        (void)snag_strcpy(ctx->error, sizeof(ctx->error), "provider diagnostic omitted");
 }
 
 static const char *
@@ -787,9 +790,12 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
                                             .text = (const char *)redacted.data,
                                             .len = redacted.len});
     if (ctx->error_body.len) {
-        if (rc == 0)
+        if (rc == 0 && redacted.len <= 160u)
             (void)snprintf(error, error_size, "provider HTTP %ld: %.*s", ctx->http_status,
-                (int)(redacted.len > 160u ? 160u : redacted.len), (const char *)redacted.data);
+                (int)redacted.len, (const char *)redacted.data);
+        else if (rc == 0)
+            (void)snprintf(error, error_size,
+                "provider HTTP %ld (error body diagnostic omitted)", ctx->http_status);
         else
             (void)snprintf(error, error_size, "provider HTTP %ld with non-JSON error body (%s)",
                 ctx->http_status, json_error[0] ? json_error : "unreadable");
@@ -1213,6 +1219,7 @@ provider_ctx_init(struct provider_ctx *ctx, struct snag_provider_connection conn
 {
     memset(ctx, 0, sizeof(*ctx));
     ctx->config = connection.config;
+    ctx->protection_in = connection.protection;
     ctx->provider = connection.provider;
     ctx->session_id = connection.session_id;
     ctx->render = connection.render;
@@ -1239,10 +1246,16 @@ redact_diagnostic(const struct snag_secret_set *secrets, char *error, size_t err
     json_t *message;
     const char *text = NULL;
     if (!error || !error_size || !error[0]) return;
+    /* Redaction can shorten a clipped buffer; reject partial diagnostics first. */
+    if (strlen(error) == error_size - 1u || strstr(error, "JSON at line ")) {
+        (void)snprintf(error, error_size, "%s", "provider diagnostic omitted");
+        return;
+    }
     message = json_object();
     if (message && json_object_set_new(message, "model_text", json_string(error)) == 0 &&
         snag_secret_result(secrets, message, NULL, 0u) == 0)
         text = snag_json_string(message, "model_text");
+    if (text && strlen(text) >= error_size) text = NULL;
     (void)snprintf(error, error_size, "%s", text ? text : "provider diagnostic omitted");
     json_decref(message);
 }
@@ -1313,6 +1326,9 @@ provider_request_setup(struct provider_ctx *ctx, const struct snag_credential *c
 
     ctx->accept = accept;
     ctx->has_body = has_body;
+    if (ctx->protection_in && snag_secret_set_merge(&ctx->secrets, ctx->protection_in,
+            error, error_size) < 0)
+        return -1;
     if (credential->root_fd >= 0 && snag_auth_read(credential->root_fd, ctx->provider, false, NULL,
                                         &ctx->credential, auth_pump, ctx, error, error_size) < 0)
         return -1;
@@ -1744,8 +1760,10 @@ out:
     rc = provider_ctx_finish(&ctx, rc, error, error_size);
     if (rc < 0 && diagnostic[0] && error && error_size) {
         char message[1024];
-        (void)snprintf(message, sizeof(message), "%s; %s", error, diagnostic);
-        (void)snag_strcpy(error, error_size, message);
+        int wrote = snprintf(message, sizeof(message), "%s; %s", error, diagnostic);
+        /* Keep the complete reason when metadata would clip it or itself. */
+        if (wrote >= 0 && (size_t)wrote < sizeof(message) && (size_t)wrote < error_size)
+            memcpy(error, message, (size_t)wrote + 1u);
     }
     return rc;
 }
@@ -1889,7 +1907,7 @@ snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
             "Selected provider supports dictation and live voice, not this audio API operation");
     provider_ctx_init(&ctx,
         (struct snag_provider_connection){
-            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL},
+            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL, NULL},
         20u * 1024u * 1024u, 65536u);
     ctx.audio_output = output;
     ctx.multipart = operation == SNAG_AUDIO_TRANSCRIBE;
@@ -1985,7 +2003,7 @@ snag_provider_voice_call(const struct snag_config *config,
     if (!snag_provider_native_audio(provider) || !sdp || !json_is_object(session)) return -1;
     provider_ctx_init(&ctx,
         (struct snag_provider_connection){
-            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL},
+            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL, NULL},
         65536u, 65536u);
     /* The caller resolves credentials before starting voice. Keep that same
      * snapshot for the call and WebSocket attachment. The session owner protects

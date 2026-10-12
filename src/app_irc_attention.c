@@ -126,13 +126,14 @@ static void *
 summary_owner(void *opaque)
 {
     struct app_irc_summary *job = opaque;
-    /* Transport needs no mutable application configuration. Public output uses
-     * the protection snapshot captured by the owner before this thread starts. */
+    /* Every transport filter uses the owner's full frozen protection set. Filtering
+     * a shorter credential first would expose fragments of an overlapping secret. */
     const struct snag_config config = {0};
     struct snag_provider_failure failure = {0};
 
     job->outcome = snag_provider_responses_create((struct snag_provider_connection){
         .config = &config, .provider = &job->provider, .credential = &job->credential,
+        .protection = &job->secrets,
         .pump = summary_pump, .pump_opaque = job, .retry_allowed = summary_retry_allowed,
         .session_id = job->session_id,
         .low_speed_override_ms = job->provider.request_timeout_ms},
@@ -252,9 +253,33 @@ snag_app_irc_summary_take(struct app_state *app, char *error, size_t size)
     if (!rc) rc = snag_ui_text(&app->ui, SNAG_UI_RUNTIME,
         "IRC context compacted; operator transcript preserved");
     goto out;
-failed:
-    rc = snag_ui_text(&app->ui, SNAG_UI_WARNING,
-        "IRC context compaction failed; original context retained");
+failed: {
+    const char *prefix = "IRC context compaction failed; original context retained";
+    struct snag_buf warning = {.max = SNAG_WIRE_BODY_MAX};
+    char reason[sizeof(job->error)];
+    (void)snag_strcpy(reason, sizeof(reason), job->error);
+    /* Serialized HTTP previews can escape secrets before this filter. Keep status only. */
+    if (!strncmp(reason, "provider HTTP ", sizeof("provider HTTP ") - 1u)) {
+        char *body = strchr(reason, ':');
+        if (body) *body = '\0';
+    }
+    result = json_pack("{s:s}", "model_text", reason[0] ? reason :
+        "summary did not produce a completed text response");
+    /* Parser snippets and clipped metadata can create secret prefixes before
+     * formatting; a full buffer can do so during formatting. Exact filtering
+     * cannot recognize these fragments. Retain only complete failure reasons. */
+    if (strlen(job->error) < sizeof(job->error) - 1u &&
+        !strstr(reason, "JSON at line ") && result &&
+        snag_secret_set_merge(&job->secrets, &job->transport_secrets,
+            job->error, sizeof(job->error)) == 0 &&
+        snag_secret_result(&job->secrets, result, job->error, sizeof(job->error)) == 0 &&
+        snag_buf_printf(&warning, "%s (%s)", prefix,
+            snag_json_string(result, "model_text")) == 0 &&
+        snag_buf_terminate(&warning) == 0)
+        prefix = (const char *)warning.data;
+    rc = snag_ui_text(&app->ui, SNAG_UI_WARNING, prefix);
+    snag_buf_free(&warning);
+}
 out:
     json_decref(result);
     snag_app_irc_summary_close(app);

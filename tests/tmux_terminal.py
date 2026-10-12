@@ -125,7 +125,8 @@ class FakeResponses:
         "two-model": "twobot",
     }
 
-    def __init__(self):
+    def __init__(self, credential="irc-ui-secret"):
+        self.credential = credential
         self.lock = threading.Lock()
         self.requests = []
         self.catalog_requests = []
@@ -264,7 +265,7 @@ class FakeResponses:
             compacting = handler.path == "/v1/responses/compact"
             if handler.path != "/v1/responses" and not (counting or compacting):
                 raise AssertionError(f"unexpected fake endpoint {handler.path!r}")
-            if handler.headers.get("Authorization") != "Bearer irc-ui-secret":
+            if handler.headers.get("Authorization") != "Bearer " + self.credential:
                 raise AssertionError("fake endpoint received the wrong credential")
             length = int(handler.headers.get("Content-Length", "-1"))
             if length < 0 or length > 32 * 1024 * 1024:
@@ -497,7 +498,7 @@ class FakeResponses:
 
     def handle_catalog(self, handler):
         try:
-            if handler.headers.get("Authorization") != "Bearer irc-ui-secret":
+            if handler.headers.get("Authorization") != "Bearer " + self.credential:
                 raise AssertionError("catalog endpoint received the wrong credential")
             with self.lock:
                 self.catalog_requests.append(handler.path)

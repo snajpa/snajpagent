@@ -15,18 +15,27 @@ from tmux_terminal import (
 
 def run_irc_attention_case(binary, root):
     root.mkdir(parents=True, exist_ok=True)
-    provider = FakeResponses()
+    credential = "sk-review-0123456789abcdefghijklmn"
+    extra_secret = "overlap-prefix-" + credential + "-overlap-suffix"
+    escaped_secret = 'escaped-review-"credential\\tail'
+    delimiter_secret = "sensitive-prefix; Responses record diagnostic:tail"
+    provider = FakeResponses(credential=credential)
     workspace, config = irc_workspace(root / "workspace", provider.port, "host-model")
     config.write_text(config.read_text().replace("idle_timeout_ms = 3000",
         "idle_timeout_ms = 20000").replace("request_timeout_ms = 5000",
         "request_timeout_ms = 25000"))
+    config.write_text(config.read_text() + "\n[tool]\nsecret = ${SNAJ_HTTP_PREVIEW_SECRET}\n"
+                      "secret = ${SNAJ_HTTP_ESCAPED_SECRET}\n"
+                      "secret = ${SNAJ_DIAGNOSTIC_DELIMITER_SECRET}\n")
     state = root / "state"
     port = free_loopback_port()
     release, started = threading.Event(), threading.Event()
     tool_call_response_sent = threading.Event()
+    truncated_response_sent = threading.Event()
     seen, branches, issued = [], [], set()
     branch_failure = False
     branch_tool_call = False
+    branch_truncated = False
     commands = {
         "sleep-count": ("irc_sleep", {"delay_ms": 60000, "wake_after_messages": 2}),
         "sleep-mention": ("irc_sleep", {"delay_ms": 60000, "wake_after_messages": 20}),
@@ -36,6 +45,20 @@ def run_irc_attention_case(binary, root):
                                            "instruction": "retain decisions"}),
         "compact-off": ("irc_compact", {"after_updates": 0}),
         "compact-fail": ("irc_compact", {"after_updates": 1}),
+        "compact-off-truncated": ("irc_compact", {"after_updates": 0}),
+        "compact-truncated": ("irc_compact", {"after_updates": 1}),
+        "compact-off-parser": ("irc_compact", {"after_updates": 0}),
+        "compact-parser": ("irc_compact", {"after_updates": 1}),
+        "compact-off-metadata": ("irc_compact", {"after_updates": 0}),
+        "compact-metadata": ("irc_compact", {"after_updates": 1}),
+        "compact-off-redaction": ("irc_compact", {"after_updates": 0}),
+        "compact-redaction": ("irc_compact", {"after_updates": 1}),
+        "compact-off-http-preview": ("irc_compact", {"after_updates": 0}),
+        "compact-http-preview": ("irc_compact", {"after_updates": 1}),
+        "compact-off-http-escaped": ("irc_compact", {"after_updates": 0}),
+        "compact-http-escaped": ("irc_compact", {"after_updates": 1}),
+        "compact-off-delimiter": ("irc_compact", {"after_updates": 0}),
+        "compact-delimiter": ("irc_compact", {"after_updates": 1}),
         "compact-off-toolcall": ("irc_compact", {"after_updates": 0}),
         "compact-toolcall": ("irc_compact", {"after_updates": 1}),
         "compact-reload": ("irc_compact", {"after_updates": 1}),
@@ -63,12 +86,46 @@ def run_irc_attention_case(binary, root):
     def respond(handler, request, sequence):
         if "IRC context compaction branch" in json.dumps(request):
             fail_branch, tool_call_branch = branch_failure, branch_tool_call
+            truncated_branch = branch_truncated
             branches.append(request)
             started.set()
             assert release.wait(20), "summary branch was not released"
             if fail_branch:
-                provider.reply(handler, b'{"error":{"message":"summary rejected"}}',
-                               "application/json", status=400, close_header=True)
+                wire = "data: " + json.dumps({"type": "error", "error": {
+                    "message": "summary rejected " + credential + " " + extra_secret}}) + "\n\n"
+                provider.reply(handler, wire.encode(), close_header=True)
+            elif truncated_branch == "http-preview":
+                # A long HTTP preview must never clip a protected tool secret.
+                body = json.dumps({"error": {"message": "A" * 128 + extra_secret}})
+                provider.reply(handler, body.encode(), "application/json", status=400,
+                               close_header=True)
+                truncated_response_sent.set()
+            elif truncated_branch == "http-escaped":
+                body = json.dumps({"error": {"message": escaped_secret}})
+                assert len(body.encode()) < 160, "escaped-secret control must be a complete preview"
+                provider.reply(handler, body.encode(), "application/json", status=400,
+                               close_header=True)
+                truncated_response_sent.set()
+            elif truncated_branch:
+                if truncated_branch == "delimiter":
+                    wire = "data: " + json.dumps({"type": "error", "error": {
+                        "message": "summary rejected " + delimiter_secret}}) + "\n\n"
+                elif truncated_branch == "parser":
+                    # Lexing stops at the dash, creating a prefix before final formatting.
+                    wire = 'data: {"type":"error","padding":' + "A" * 10 + credential + '}\n\n'
+                elif truncated_branch == "metadata":
+                    # The record diagnostic retains only64 bytes of this event name.
+                    wire = "event: " + "A" * 60 + credential + "\n" + "data: " + json.dumps({
+                        "type": "error", "error": {"message": "summary rejected"}}) + "\n\n"
+                elif truncated_branch == "redaction":
+                    # Redacting the first complete credential shrinks a clipped buffer.
+                    wire = "data: " + json.dumps({"type": "error", "error": {
+                        "message": credential + " " + "A" * 203 + credential}}) + "\n\n"
+                else:
+                    wire = "data: " + json.dumps({"type": "error", "error": {
+                        "message": "A" * 238 + credential}}) + "\n\n"
+                provider.reply(handler, wire.encode(), close_header=True)
+                truncated_response_sent.set()
             elif tool_call_branch:
                 wire = provider.function_body(sequence, "forbidden_summary_call",
                     "exec_command", {"command": "touch summary-tool-executed",
@@ -110,7 +167,10 @@ def run_irc_attention_case(binary, root):
 
     provider.runtime_handler = respond
     peer = None
-    environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    environment = {"SNAJPAGENT_IRC_UI_KEY": credential,
+                   "SNAJ_HTTP_PREVIEW_SECRET": extra_secret,
+                   "SNAJ_HTTP_ESCAPED_SECRET": escaped_secret,
+                   "SNAJ_DIAGNOSTIC_DELIMITER_SECRET": delimiter_secret}
     args = ("-s", f"127.0.0.1:{port}", "-n", "hostbot", "-o", "hostop", "-r", "lab")
     try:
         with fixture_terminal(TmuxTerminal(root / "terminal", binary, workspace, state,
@@ -203,11 +263,65 @@ def run_irc_attention_case(binary, root):
             tool(term, "compact-fail", "irc_compact_configured")
             assert started.wait(10)
             term.wait("IRC context compaction failed")
+            term.wait("summary rejected")
+            assert credential not in term.capture(join_wrapped=True)
+            assert "overlap-prefix" not in term.capture(join_wrapped=True), \
+                "overlapping secret prefix leaked"
+            assert "overlap-suffix" not in term.capture(join_wrapped=True), \
+                "overlapping secret suffix leaked"
+            assert extra_secret not in term.capture(join_wrapped=True)
             term.submit("verify-failure-kept")
             wait_for(lambda: any(provider.latest_user(r) == "verify-failure-kept" for r in seen),
                      "failure follow-up missing")
             checked = next(r for r in seen if provider.latest_user(r) == "verify-failure-kept")
             assert contains(checked, "keep-after-summary-failure")
+
+            # Producer-created prefixes and clipped metadata evade full-secret matching.
+            for branch, fragment in (("truncated", "sk-review-"),
+                                     ("parser", "A" * 10 + "sk"),
+                                     ("metadata", "A" * 60 + "sk-r"),
+                                     ("redaction", "sk-review-"),
+                                     ("http-preview", "overlap-prefix"),
+                                     ("http-escaped", json.dumps(escaped_secret)[1:-1]),
+                                     ("delimiter", "sensitive-prefix")):
+                tool(term, "compact-off-" + branch, "irc_compact_configured")
+                retained = "keep-after-" + branch + "-summary"
+                peer.message(retained)
+                wait_for(lambda: any(contains(r, retained) for r in seen),
+                         "diagnostic failure source missing")
+                branch_failure = False
+                branch_truncated = branch
+                release.clear()
+                started.clear()
+                truncated_response_sent.clear()
+                failures_before = term.capture().count("IRC context compaction failed")
+                summaries_before = len(event_list(read_events(state)[1], "irc_compacted"))
+                tool(term, "compact-" + branch, "irc_compact_configured")
+                assert started.wait(10)
+                assert not truncated_response_sent.is_set()
+                release.set()
+                assert truncated_response_sent.wait(10), "diagnostic summary error was not sent"
+                term.wait_until(lambda screen:
+                    screen.count("IRC context compaction failed") > failures_before,
+                    "new diagnostic summary rejection")
+                assert fragment not in term.capture(join_wrapped=True), \
+                    branch + " credential fragment leaked"
+                if branch == "delimiter":
+                    warning = term.capture(join_wrapped=True).rsplit(
+                        "IRC context compaction failed", 1)[1]
+                    assert "summary rejected" in warning, "complete filtered reason was lost"
+                if branch.startswith("http-"):
+                    warning = term.capture(join_wrapped=True).rsplit(
+                        "IRC context compaction failed", 1)[1]
+                    assert "provider HTTP 400" in warning, "HTTP failure status was lost"
+                followup = "verify-" + branch + "-kept"
+                term.submit(followup)
+                wait_for(lambda: any(provider.latest_user(r) == followup for r in seen),
+                         "diagnostic failure follow-up missing")
+                checked = next(r for r in seen if provider.latest_user(r) == followup)
+                assert contains(checked, retained)
+                assert len(event_list(read_events(state)[1], "irc_compacted")) == summaries_before
+                branch_truncated = False
 
             # A provider violating tool_choice must never dispatch a summary tool.
             tool(term, "compact-off-toolcall", "irc_compact_configured")

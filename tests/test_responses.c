@@ -1728,9 +1728,9 @@ test_typeless_and_non_object_records_rejected(void)
     assert(errno == EPROTO);
     assert(stream.failed);
     assert(strcmp(stream.error, "Responses event has no type") == 0);
-    assert(strstr(stream.diagnostic, "event=-") != NULL);
+    assert(strstr(stream.diagnostic, "event_bytes=0") != NULL);
     assert(strstr(stream.diagnostic, "json=object") != NULL);
-    assert(strstr(stream.diagnostic, "keys=kind") != NULL);
+    assert(strstr(stream.diagnostic, "keys=1") != NULL);
     assert(strstr(stream.diagnostic, "private-value") == NULL);
     snag_responses_stream_free(&stream);
 
@@ -1751,6 +1751,27 @@ test_typeless_and_non_object_records_rejected(void)
     record.data_len = strlen(keepalive);
     assert(snag_responses_sse_record(&stream, &record) == 0);
     assert(!stream.failed);
+    snag_responses_stream_free(&stream);
+}
+
+static void
+test_failure_reason_omits_formatter_fragments(void)
+{
+    struct snag_responses_stream stream;
+    struct snag_sse_record record = {.kind = SNAG_SSE_EVENT};
+    char message[300], body[512];
+
+    memset(message, 'A', sizeof(message) - 1u);
+    memcpy(message + 240u, "transport-secret", sizeof("transport-secret") - 1u);
+    message[sizeof(message) - 1u] = '\0';
+    int wrote = snprintf(body, sizeof(body),
+        "{\"type\":\"error\",\"error\":{\"message\":\"%s\"}}", message);
+    assert(wrote > 0 && (size_t)wrote < sizeof(body));
+    record.data = (const unsigned char *)body;
+    record.data_len = (size_t)wrote;
+    snag_responses_stream_init(&stream, NULL, NULL);
+    assert(snag_responses_sse_record(&stream, &record) < 0);
+    assert(!strcmp(stream.error, "provider diagnostic omitted"));
     snag_responses_stream_free(&stream);
 }
 
@@ -2249,6 +2270,7 @@ main(void)
     test_invalid_call_after_public_item();
     test_protocol_conflicts_fail_closed();
     test_typeless_and_non_object_records_rejected();
+    test_failure_reason_omits_formatter_fragments();
     test_event_name_fallback_for_typeless_records();
     test_structured_capacity_failure();
     test_interleaved_content_bound();
