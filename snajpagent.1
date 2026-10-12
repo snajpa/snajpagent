@@ -6284,6 +6284,10 @@ recovered active work; use
 to restart a paused queue.  Interrupted active turns are recovered from their
 durable prefix.
 .PP
+An initial prompt supplied with an interactive resume is submitted first.
+In chat view, an unmentioned initial message goes to the selected IRC conversation;
+eligible recovered work and active goals then continue automatically.
+.PP
 Model requests preserve the distinction between intermediate assistant updates
 and final answers across tool calls, goal continuation, resumed sessions and
 compaction input.

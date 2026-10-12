@@ -7243,6 +7243,7 @@ interactive_loop(struct app_state *app, const char *initial)
 {
     char *owned = NULL;
     int rc = 0;
+    bool startup_prompt = initial != NULL;
 
     if (set_input_prompt(app, false) < 0 ||
         (initial &&
@@ -7417,6 +7418,14 @@ interactive_loop(struct app_state *app, const char *initial)
         rc = submit_idle(
             app, prompt, owned ? app->ui.input_view : snag_ui_view(&app->ui), &prompt_ready);
         if (rc != 0) break;
+        if (startup_prompt) {
+            startup_prompt = false;
+            /* A startup chat message can leave restored work ready without
+             * entering a model turn. Preserve its submission priority, then
+             * service the same saved-work chain as a promptless resume. */
+            rc = run_ready_chains(app);
+            if (rc == 3 || rc == 6) break;
+        }
         if (!prompt_ready && set_input_prompt(app, false) < 0) goto ui_failed;
     }
     free(owned);

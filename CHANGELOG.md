@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Continue eligible saved work after an initial interactive-resume prompt is
+  submitted. An unmentioned startup message in IRC chat view preserves its
+  conversation route while the restored active goal resumes automatically.
+
 - Preserve native compaction's selected reasoning effort and foreground tool
   catalog, including model-advertised Responses-v2 compact API parameters.
   Count the same native request prefix at the input-token boundary. Retain

@@ -6541,17 +6541,27 @@ def test_ctrl_d_exit():
             assert b"engine-block-end" not in child.buf
 
 
-def test_goal_orderly_quit_resume():
-    for mode in ("eof", "five-ctrl-c", "sigterm", "sighup", "host"):
+def test_goal_orderly_quit_resume(modes=("eof", "five-ctrl-c", "sigterm", "sighup", "host",
+                                      "host-chat", "host-chat-initial")):
+    for mode in modes:
         before = session_ids()
         args = []
-        if mode == "host":
+        chat_only = mode in ("host-chat", "host-chat-initial")
+        if mode.startswith("host"):
             args = ["-v", "--listen", f"127.0.0.1:{free_port()}", "--no-client",
                     "-n", "goalagent", "-o", "goalop", "-r", "lab"]
-        with Child(args, ready=chat_prompt("goalop") if mode == "host" else PROMPT.rstrip()) as child:
+        with Child(args, ready=chat_prompt("goalop") if mode.startswith("host") else PROMPT.rstrip()) as child:
             if mode == "host":
                 switched = child.send_wait_idle(b"/rollout\r", "── rollout ──".encode())
-            child.send_wait(b"/goal slow goal\r", b"working on goal")
+            if chat_only:
+                child.send(b"/goal slow goal\r")
+                deadline = time.monotonic() + 4.0
+                while not any(e["type"] == "response_started"
+                              for sid in session_ids() - before for e in events(sid)):
+                    assert time.monotonic() < deadline, bytes(child.buf)
+                    child.read_once(0.01)
+            else:
+                child.send_wait(b"/goal slow goal\r", b"working on goal")
             session_id = new_session(before)
             child.send(b"/goal lock\r")
             # The notice is queued behind the open response. Wait for the
@@ -6580,7 +6590,8 @@ def test_goal_orderly_quit_resume():
                 child.send(b"\x03" * 4)
             else:
                 child.send(b"\x04")
-            child.wait(b"Goal wording locked against model changes")
+            if not chat_only:
+                child.wait(b"Goal wording locked against model changes")
             child.wait(RESUME_HEADER, timeout=4.0)
             command = child.finish(expected=expected)
         stopped = events(session_id)
@@ -6595,6 +6606,8 @@ def test_goal_orderly_quit_resume():
             one(stopped, "turn_interrupted")
         else:
             assert not [e for e in stopped if e["type"] == "turn_interrupted"]
+        if mode == "host-chat-initial":
+            command += " -- " + shlex.quote("fixture unmentioned chat")
         with Child.from_command(command) as resumed:
             if mode == "five-ctrl-c":
                 restored = resumed.wait(f"goal {goal['goal_id']}: paused · wording locked".encode())
@@ -6603,9 +6616,12 @@ def test_goal_orderly_quit_resume():
                 assert_resume_metadata_only_after(session_id, stopped)
                 print("explicit Ctrl-C pause then quit/resume: ok", flush=True)
                 continue
-            restored = resumed.wait(f"goal {goal['goal_id']}: active · wording locked".encode())
-            resumed.wait(b"slow goal", start=restored)
-            if mode == "host":
+            if chat_only:
+                restored = resumed.wait(chat_prompt("goalop"))
+            else:
+                restored = resumed.wait(f"goal {goal['goal_id']}: active · wording locked".encode())
+                resumed.wait(b"slow goal", start=restored)
+            if mode.startswith("host"):
                 # The resumed slow goal first completes its checkpoint turn,
                 # then starts a continuation whose tool call completes the
                 # goal. Wait for that durable tool event and the later turn
@@ -6629,6 +6645,14 @@ def test_goal_orderly_quit_resume():
         assert one(restored_log, "goal_completed")["data"]["goal_id"] == goal["goal_id"]
         assert not [e for e in restored_log if e["type"] in
                     ("goal_paused", "goal_resumed", "goal_reworded", "goal_replaced")]
+        if mode == "host-chat-initial":
+            tail = restored_log[len(stopped):]
+            message, = [e for e in tail if e["type"] == "irc_event_v2" and
+                        e["data"].get("local") and
+                        e["data"].get("text") == "fixture unmentioned chat"]
+            assert message["data"]["room"] == "#lab"
+            assert message["seq"] < next(e["seq"] for e in tail
+                                        if e["type"] == "response_started")
         print(f"goal orderly quit/resume {mode}: ok", flush=True)
 
 
