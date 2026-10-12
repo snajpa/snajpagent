@@ -145,7 +145,9 @@ class RetryAutoTests(RetryFixture):
         branches, issued = [], []
 
         def respond(handler, request, sequence):
-            if not request.get('tools') and 'IRC context compaction branch' in json.dumps(request):
+            if 'IRC context compaction branch' in json.dumps(request):
+                self.assertTrue(request.get('tools'), 'summary lost its cached tool declarations')
+                self.assertEqual(request.get('tool_choice'), 'none')
                 branches.append(request)
                 self.held.set()
                 assert self.release.wait(10), 'summary fixture was not released'

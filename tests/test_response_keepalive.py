@@ -39,7 +39,7 @@ def check_keepalives(binary):
                  "data: [DONE]\n\n"
                  "event: response.subscription_usage\ndata: {}\n\n"
                  "data: {\"type\":\"keepalive\"}\n\n", None),
-                ("malformed", "event: keepalive\ndata: {broken\n\n", "invalid Responses JSON"),
+                ("malformed", "event: keepalive\ndata: {broken\n\n", "provider diagnostic omitted"),
                 ("non-object", "event: keepalive\ndata: []\n\n", "Responses event has no type"),
                 ("mismatch", "event: keepalive\ndata: {\"type\":\"response.completed\"}\n\n",
                  "SSE event name and JSON type disagree"),

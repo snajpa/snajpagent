@@ -19,6 +19,8 @@ from test_upload_client import CLIENT, PRODUCT, Session, frame
 
 class DownloadSession(Session):
     def __init__(self, root, wrapper=None, command=None, screen=False):
+        # Native bootstrap requires canonical paths, including custom commands.
+        root = root.resolve()
         self.home = root / "home"
         self.dotdir = root / "dotdir"
         self.downloads = root / "downloads"
@@ -219,7 +221,7 @@ class DownloadTests(unittest.TestCase):
 
     def test_one_shot_tool_queues_without_a_live_workstation_client(self):
         with tempfile.TemporaryDirectory(prefix="snag-download-queue-") as path:
-            root = Path(path)
+            root = Path(path).resolve()
             home, dotdir = root / "home", root / "dotdir"
             home.mkdir(mode=0o700)
             dotdir.mkdir(mode=0o700)
@@ -254,7 +256,7 @@ class DownloadTests(unittest.TestCase):
 
     def test_download_queue_remove_clear_and_read_only_guard(self):
         with tempfile.TemporaryDirectory(prefix="snag-download-queue-tool-") as path:
-            root = Path(path)
+            root = Path(path).resolve()
             home, dotdir = root / "home", root / "dotdir"
             home.mkdir(mode=0o700)
             dotdir.mkdir(mode=0o700)
@@ -391,7 +393,7 @@ class DownloadTests(unittest.TestCase):
     @unittest.skipUnless(CLIENT, "requires the pinned real trzsz client")
     def test_plain_screen_term_is_not_a_screen_backend(self):
         with tempfile.TemporaryDirectory(prefix="snag-download-term-") as path:
-            root = Path(path)
+            root = Path(path).resolve()
             command = ["env", "TERM=screen-256color", str(PRODUCT),
                        "--dotdir", str(root / "dotdir")]
             session = DownloadSession(root, CLIENT, command=command)
@@ -432,7 +434,7 @@ class DownloadTests(unittest.TestCase):
                     self.assertEqual((session.downloads / "report").read_bytes(), data)
                     session.write(b"\x01d")
                     self.assertEqual(session.process.wait(timeout=5), 0)
-                    attach_root = Path(path) / "reattach"
+                    attach_root = Path(path).resolve() / "reattach"
                     attach_root.mkdir()
                     again = Session(attach_root, CLIENT, command=["screen", "-r", session.screen_name],
                                     ready="› ".encode(), cwd=session.home, env=session.screen_env)
@@ -458,7 +460,7 @@ class DownloadTests(unittest.TestCase):
                     session.read_until(b"1 unsent attachment(s)", 15)
                     session.write(b"\x01d")
                     self.assertEqual(session.process.wait(timeout=5), 0)
-                    attach_root = Path(path) / "reattach"
+                    attach_root = Path(path).resolve() / "reattach"
                     attach_root.mkdir()
                     again = Session(attach_root, CLIENT, command=["screen", "-r", session.screen_name],
                                     ready="› ".encode(), cwd=session.home, env=session.screen_env)

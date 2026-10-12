@@ -299,6 +299,9 @@ class Session:
 
 class ProductSession(Session):
     def __init__(self, root, wrapper=None, extra_env=None):
+        # Native bootstrap validates the canonical root; macOS temporary
+        # directories commonly reach it through /var or /tmp aliases.
+        root = root.resolve()
         self.dotdir = root / "dotdir"
         home = root / "home"
         for path in (self.dotdir, home):
@@ -444,7 +447,7 @@ class UploadClientTests(unittest.TestCase):
     @unittest.skipUnless(CLIENT and Path(CLIENT).is_file(), "TRZSZ_CLIENT not supplied")
     def test_pinned_client_multiple_binary_files(self):
         with tempfile.TemporaryDirectory(prefix="snag-upload-go-") as path:
-            root = Path(path)
+            root = Path(path).resolve()
             first = root / "all-bytes.bin"
             second = root / "second-file.dat"
             first.write_bytes(bytes(range(256)) * 16)
@@ -558,7 +561,7 @@ class UploadProductTests(unittest.TestCase):
 
     def test_attach_generic_binary_uses_same_retained_file_path(self):
         with tempfile.TemporaryDirectory(prefix="snag-upload-product-") as path:
-            root = Path(path)
+            root = Path(path).resolve()
             source = root / "example.bin"
             source.write_bytes(bytes(range(256)) * 16)
             session = ProductSession(root)
@@ -575,7 +578,7 @@ class UploadProductTests(unittest.TestCase):
     @unittest.skipUnless(CLIENT and Path(CLIENT).is_file(), "TRZSZ_CLIENT not supplied")
     def test_pinned_client_product_multifile_retains_without_sending(self):
         with tempfile.TemporaryDirectory(prefix="snag-upload-product-go-") as path:
-            root = Path(path)
+            root = Path(path).resolve()
             binary = root / "all-bytes.bin"
             text = root / "script.txt"
             binary.write_bytes(bytes(range(256)) * 16)
@@ -598,7 +601,7 @@ class UploadProductTests(unittest.TestCase):
     @unittest.skipUnless(CLIENT and Path(CLIENT).is_file(), "TRZSZ_CLIENT not supplied")
     def test_pinned_client_product_bad_image_rolls_back(self):
         with tempfile.TemporaryDirectory(prefix="snag-upload-product-invalid-image-") as path:
-            root = Path(path)
+            root = Path(path).resolve()
             first = root / "valid.bin"
             first.write_bytes(bytes(range(256)) * 16)
             damaged = root / "broken.png"
@@ -619,7 +622,7 @@ class UploadProductTests(unittest.TestCase):
 
     def test_explicit_upload_bad_digest_preserves_existing_pending(self):
         with tempfile.TemporaryDirectory(prefix="snag-upload-product-failure-") as path:
-            root = Path(path)
+            root = Path(path).resolve()
             original = root / "existing.txt"
             original.write_bytes(b"keep this existing attachment\n")
             session = ProductSession(root)

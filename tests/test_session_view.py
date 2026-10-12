@@ -541,10 +541,14 @@ class SessionViewTests(unittest.TestCase):
             child = self.start(['--resume', self.sid])
         child.until(b'Attached session', 10)
         if classic_early:
+            # Owner completion alone misses a blocked physical PTY writer.
+            # Require both retained prefix and live tail at the real frontend.
             child.until(prefix.strip().encode())
             child.until(tail.strip().encode())
             self.assertEqual(child.output.count(prefix.strip().encode()), 1)
             self.assertEqual(child.output.count(tail.strip().encode()), 1)
+            self.assertIsNone(child.process.poll(), 'classic frontend exited after replay')
+            self.status('attached')
         else:
             child.until((prefix + tail).strip().encode())
         self.finish(child, b'/s d')
