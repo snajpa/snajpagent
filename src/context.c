@@ -3204,6 +3204,28 @@ snag_context_codex_request(json_t *request)
 }
 
 int
+snag_context_native_compact_parameters(json_t *request, const struct snag_config *config,
+    const struct snag_session *session, const struct snag_provider_config *provider,
+    const char *effort, const json_t *mcp_tools)
+{
+    if (!request || !config || !session || !provider || !effort) return snag_errno(EINVAL);
+    json_t *tools = tool_schemas(session->goal_status == SNAG_GOAL_ACTIVE,
+        !snag_goal_unfinished(session->goal_status), false, config, session,
+        provider->name, session->active_read_only);
+    int rc = -1;
+    if (!tools || (mcp_tools && json_array_extend(tools, (json_t *)mcp_tools) < 0) ||
+        json_object_set(request, "tools", tools) < 0 ||
+        snag_json_set_new(request, "reasoning", json_pack("{s:s}", "effort", effort)) < 0 ||
+        snag_json_set_new(
+            request, "parallel_tool_calls", json_boolean(session->parallel_tool_calls)) < 0)
+        goto out;
+    rc = 0;
+out:
+    json_decref(tools);
+    return rc;
+}
+
+int
 snag_context_codex_compact_request(json_t *request)
 {
     json_t *input = json_copy(json_object_get(request, "input"));
@@ -3213,7 +3235,8 @@ snag_context_codex_compact_request(json_t *request)
         json_object_set(request, "input", input) < 0 ||
         snag_json_set_new(request, "stream", json_true()) < 0 ||
         snag_json_set_new(request, "store", json_false()) < 0 ||
-        snag_json_set_new(request, "tools", json_array()) < 0 ||
+        (!json_object_get(request, "tools") &&
+            snag_json_set_new(request, "tools", json_array()) < 0) ||
         snag_json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
         snag_context_codex_request(request) < 0)
         goto out;

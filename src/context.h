@@ -16,6 +16,9 @@
 
 int snag_context_codex_request(json_t *request);
 int snag_context_codex_compact_request(json_t *request);
+int snag_context_native_compact_parameters(json_t *request, const struct snag_config *config,
+    const struct snag_session *session, const struct snag_provider_config *provider,
+    const char *effort, const json_t *mcp_tools);
 /* Shared native file/history-reading schemas; NULL outside this capability. */
 json_t *snag_context_read_tool_schema(const char *name);
 struct snag_credential;

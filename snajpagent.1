@@ -3937,8 +3937,9 @@ compaction; each new attempt announces itself.  A long turn can compact again af
 tool progress when its next request exceeds the hard budget.  A recovery rebase clears the
 previous usage measurement while a fresh display estimate remains available.
 Native compaction is used when enabled. Direct ChatGPT/Codex sends a compaction
-trigger through the Responses stream and retains the completed encrypted result
-with recent complete user messages, up to 256,000 encoded bytes. Older or oversized
+trigger through the Responses stream and retains the complete returned context
+window, including its encrypted result and retained messages. A capsule-only reply
+carries recent complete user messages, up to 256,000 encoded bytes. Older or oversized
 messages are represented by the encrypted summary; their original text remains in
 session history. This bounds verbatim context carried between compactions, including
 IRC updates and host context. A model, endpoint or account change rebuilds earlier
@@ -3946,10 +3947,11 @@ history when the encrypted result cannot be reused. API providers use the separa
 Responses compact endpoint. Set
 .B native_compaction=false
 to summarize through ordinary Responses; the application wraps the returned
-summary text in its stored message format. Direct ChatGPT/Codex also falls back
-once to Responses summarization when its native endpoint is unavailable;
-failed native requests may retry with a smaller complete-history source within
-the bounded attempt.  Failures that remain report an error and retain the
+summary text in its stored message format. Native compaction failures report an
+error and retain the original source and previous compacted context. An unavailable
+native endpoint does not switch to ordinary-text summarization. Capacity fitting
+can select a smaller source before dispatch; a failed native request is not retried
+with progressively less history. Failures retain the
 previous context.  Manual
 .B /compact
 is accepted at idle and during active work.  It reports when compaction starts,
@@ -4563,14 +4565,23 @@ history under the new binding.
 .TP
 .B native_compaction
 Use the provider's native compaction protocol. Direct ChatGPT/Codex uses an
-encrypted compaction item returned through the Responses stream; API providers
-use the separate compact endpoint. When false, use an ordinary
-Responses summarization request instead.  Default:
+encrypted compaction item returned through the Responses stream, with the selected
+reasoning effort and foreground tool catalog. API providers use the separate
+compact endpoint and its documented fields. A model advertising
+.B metadata.native_compaction_protocol=responses_v2
+in the provider's model catalog also receives reasoning and tool-prefix fields.
+Discovery uses the selected provider and upstream model; the model cache format
+stays unchanged. When false, use an ordinary Responses summarization request.
+Default:
 .BR true .
 .PP
-An unavailable native compaction endpoint falls back
-once to Responses summarization and reports the provider error. Authentication failures do not trigger this
-fallback, and the configured provider/account and hard context guard stay intact.
+Native compaction errors retain the original context and provider error.
+An unavailable native endpoint fails the operation. Source reduction follows
+measured capacity rejections; provider and transport failures keep the source
+unchanged. Set
+.B native_compaction=false
+for a provider that supports textual Responses summarization instead of native
+compaction.
 .TP
 .B parallel_tool_calls
 Request native multiple function calls from this provider.  Default: true.

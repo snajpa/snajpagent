@@ -25,6 +25,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+const char *snag_app_resolve_effort(const char *preference);
+
 struct partial_public_item {
     size_t graph_index;
     enum snag_item_kind kind;

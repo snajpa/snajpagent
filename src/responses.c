@@ -747,8 +747,11 @@ item_snapshot(struct snag_responses_stream *stream, size_t output_index, const j
             return stream_fail(stream, EPROTO, "response item changed kind");
         }
     }
-    if (strcmp(type, "message") == 0)
+    if (strcmp(type, "message") == 0) {
+        if (stream->compact_context)
+            return inert_snapshot(stream, output_index, snag_json_string(snapshot, "id"));
         return message_snapshot(stream, output_index, snapshot, complete);
+    }
     if (strcmp(type, "function_call") == 0)
         return function_snapshot(stream, output_index, snapshot, complete);
     if (hosted_search_type(type)) return hosted_snapshot(stream, output_index, snapshot, complete);

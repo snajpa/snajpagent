@@ -131,6 +131,9 @@ int snag_provider_responses_create(struct snag_provider_connection connection,
 int snag_provider_models_list(
     struct snag_provider_connection connection, json_t **models, char *error, size_t error_size);
 
+int snag_provider_native_compaction_protocol(struct snag_provider_connection connection,
+    const char *model, bool *responses_v2, char *error, size_t error_size);
+
 const char *snag_provider_catalog_protocol(const struct snag_provider_config *provider);
 
 #endif

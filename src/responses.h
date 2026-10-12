@@ -93,6 +93,8 @@ struct snag_responses_stream {
     void *opaque;
     snag_responses_hosted_fn hosted;
     void *hosted_opaque;
+    /* Compact windows contain retained input messages, not rendered replies. */
+    bool compact_context;
     bool created;
     bool terminal;
     bool failed;

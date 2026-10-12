@@ -176,107 +176,45 @@ out:
 }
 
 static int
-prepare_native_compaction(const struct app_state *app, struct snag_json_document *request)
+prepare_native_compaction(struct app_state *app, struct snag_json_document *request,
+    const struct snag_credential *credential, const char *effort, char *error, size_t error_size)
 {
-    if (!snag_auth_uses_codex(app->turn_provider->auth)) return 0;
-    if (snag_context_codex_compact_request(request->value) < 0) return -1;
+    bool codex = snag_auth_uses_codex(app->turn_provider->auth);
+    bool responses_v2 = codex;
+#ifndef SNAJPAGENT_TEST_FIXTURE
+    if (!codex) {
+        int discovery = snag_provider_native_compaction_protocol(
+            (struct snag_provider_connection){app->config, app->turn_provider, credential,
+                &app->ui, snag_app_provider_input_pump, app, app->session.id, 0,
+                snag_app_retry_allowed, NULL, NULL},
+            snag_json_string(request->value, "model"), &responses_v2, error, error_size);
+        if (discovery != 0) return discovery;
+    }
+#else
+    (void)credential;
+    (void)error;
+    (void)error_size;
+#endif
+    static const char *const response_fields[] = {
+        "include", "store", "stream", "tool_choice", "truncation", "tools",
+        "reasoning", "parallel_tool_calls"};
+    for (size_t i = 0u; i < sizeof(response_fields) / sizeof(response_fields[0]); ++i)
+        (void)json_object_del(request->value, response_fields[i]);
+    if (!json_object_get(request->value, "instructions") &&
+        snag_json_set_new(request->value, "instructions", json_string("")) < 0)
+        return -1;
+    if (!responses_v2)
+        return snag_json_document_measure(request, SNAG_CONTEXT_MAX_COMPACT);
+    if (snag_context_native_compact_parameters(request->value, app->config, &app->session,
+            app->turn_provider, effort, snag_mcp_tools(app->mcp)) < 0 ||
+        (codex && snag_context_codex_compact_request(request->value) < 0))
+        return -1;
     return snag_json_document_measure(request, SNAG_CONTEXT_MAX_COMPACT);
-}
-
-/* Nothing uncovered: the history is already summarized in full, so no chunk can
- * be compacted and a capacity rejection can only be reduced by condensing the
- * merged summary itself (the merge step) under the same binding. Returns 1 when
- * a reduce ran and committed, 0 when there was nothing to condense, <0 on a
- * real failure. */
-static int
-run_reduce_attempt(struct app_state *app, const char *reason,
-    const struct snag_credential *credential, bool native, const char *model,
-    const char *continuation_scope, char *error, size_t error_size)
-{
-    static const char instruction[] =
-        "merge these summaries of overlapping chunks, deduplicating anything that appears twice";
-    struct snag_json_document request = {0}, output = {0};
-    char compact_id[SNAG_ID_HEX_LEN + 1u];
-    char source_hash[SNAG_SHA256_HEX_LEN + 1u];
-    bool started = false;
-    int rc = 0, stage_rc;
-
-    if (!app->session.compact_output || !app->session.compact_id[0]) return 0;
-    if (snag_context_compact_reduce_request_build(&app->session, app->turn_provider, model,
-            app->turn_effort, app->session.compact_output, instruction, &request, error,
-            error_size) != 0)
-        return 0; /* no portable text: nothing to condense */
-    rc = -1;
-    if (native && prepare_native_compaction(app, &request) < 0) goto out;
-    if (snag_context_compact_output_valid(
-            app->session.compact_output, source_hash, NULL, error, error_size) < 0 ||
-        snag_random_id(compact_id) < 0)
-        goto out;
-    if (strcmp(reason, "manual") && snag_ui_text(&app->ui, SNAG_UI_HOST,
-                                        "Condensing the merged summary; Ctrl-C interrupts") < 0)
-        goto out;
-    if (commit_rendered(app, "compaction_started",
-            json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s,s:s,s:s,s:s,s:s,s:I,s:s,s:s}",
-                "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "compact_id", compact_id,
-                "count_method", "unknown", "count_request_sha256", request.sha256,
-                "input_tokens_bound", (json_int_t)0, "model",
-                app->session.active_turn_model[0] ? app->session.active_turn_model : model,
-                "compaction_model", model, "predecessor_compact_id", app->session.compact_id,
-                /* The store accepts an unchanged boundary only for this
-                 * reason; emitting the caller's reason here made the commit
-                 * fail and the reduce retry until the turn gave up. */
-                "profile_id", SNAJPAGENT_PROFILE_ID, "reason", "reduce", "request_sha256",
-                request.sha256, "source_seq", (json_int_t)app->session.compact_seq, "source_sha256",
-                source_hash, "continuation_scope", continuation_scope),
-            error, error_size) < 0)
-        goto out;
-    started = true;
-    if (snag_app_provider_activity(app, true) < 0) goto out;
-    if (native) {
-        stage_rc =
-            snag_app_provider_compact(app, request.value, credential, &output, error, error_size);
-    } else {
-        /* Every other compaction request goes through this wrapper: an empty
-         * tools array, no tool_choice, the compaction instruction and the
-         * capacity output limit. The reduce must not diverge from it. */
-        json_t *wire =
-            snag_app_summary_request(request.value, model, app->turn_effort, &app->turn_capacity);
-        if (!wire) {
-            snag_errorf(error, error_size, "cannot build the reduce wire request");
-            goto out;
-        }
-        stage_rc = run_responses_compaction(app, wire, credential, &output, error, error_size);
-        json_decref(wire);
-    }
-    if (snag_app_provider_activity(app, false) < 0) goto out;
-    if (stage_rc != 0) goto out;
-    if (commit_rendered(app, "compaction_completed",
-            json_pack("{s:s,s:s,s:I,s:O,s:s,s:s,s:s,s:I,s:s,s:s}", "compact_id", compact_id,
-                "count_method", "unknown", "input_tokens_bound", (json_int_t)0, "output",
-                json_incref(output.value), "output_count_method", "unknown",
-                "output_count_request_sha256", request.sha256, "output_sha256", output.sha256,
-                "output_tokens_bound", (json_int_t)0, "source_sha256", source_hash,
-                "continuation_scope", continuation_scope),
-            error, error_size) < 0)
-        goto out;
-    if (app->networked && snag_app_irc_snapshot(app, "compaction", error, error_size) < 0) goto out;
-    started = false;
-    rc = 1;
-out:
-    if (rc < 0 && started) {
-        if (commit_rendered(app, "compaction_interrupted",
-                compaction_interrupted_data(compact_id, "error"), error, error_size) < 0) {
-            /* the interruption failure is the one worth reporting */
-        }
-    }
-    snag_json_document_free(&request);
-    snag_json_document_free(&output);
-    return rc;
 }
 
 static int
 run_compaction_attempt(struct app_state *app, const char *reason, bool active_prefix,
-    bool allow_native, const struct snag_credential *provided_credential, bool *compacted,
+    const struct snag_credential *provided_credential, bool *compacted,
     char *error, size_t error_size)
 {
     struct snag_credential owned_credential;
@@ -307,9 +245,13 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     if (compacted) *compacted = false;
     if (compaction_state_valid(app, reason, active_prefix, error, error_size) < 0) return -1;
     model = active_prefix && app->turn_model ? app->turn_model : app->session.default_model;
-    effort = active_prefix && app->turn_effort ? app->turn_effort : app->session.default_effort;
+    effort = snag_app_resolve_effort(
+        active_prefix && app->turn_effort ? app->turn_effort : app->session.default_effort);
+    if (!effort)
+        return snag_fail(error, error_size, ENOTSUP, "invalid compaction reasoning effort");
     if (!active_prefix) {
         app->turn_model = model;
+        app->turn_effort = effort;
         app->turn_provider = snag_config_provider(
             app->config, app->session.default_provider[0] ? app->session.default_provider : NULL);
     }
@@ -318,7 +260,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             "selected provider is not present in the current configuration");
         goto out;
     }
-    native = allow_native && app->turn_provider->native_compaction;
+    native = app->turn_provider->native_compaction;
     if (!active_prefix && snag_app_capacity_resolve(app, app->turn_provider, model,
                               &app->turn_capacity, error, error_size) < 0)
         goto out;
@@ -394,21 +336,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                     "no complete history prefix fits the hard context budget");
                 goto out;
             }
-            /* The history is summarized in full, so no chunk is left to compact:
-             * a capacity rejection can then only be reduced by condensing the
-             * merged summary itself under this same binding. */
-            /* Only a capacity rejection justifies condensing an already
-             * complete summary; routine "nothing new" checks must stay quiet. */
-            int reduce_rc = strcmp(reason, "provider_rejection") == 0
-                                ? run_reduce_attempt(app, reason, credential, native, model,
-                                      continuation_scope, error, error_size)
-                                : 0;
-            if (reduce_rc < 0) goto out;
-            if (reduce_rc == 1) {
-                if (compacted) *compacted = true;
-                rc = 0;
-                goto out;
-            }
+            /* Capacity rejection now uses the owning turn's minimal-history
+             * recovery; an already covered prefix has no new compact source. */
             if (strcmp(reason, "manual") == 0 &&
                 snag_ui_text(&app->ui, SNAG_UI_HOST,
                     active_prefix
@@ -464,7 +393,16 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                 error, error_size, ENOMEM, "cannot build bounded compaction provider request");
             goto out;
         }
-        if (native && prepare_native_compaction(app, &projection.create_request) < 0) goto out;
+        if (native) {
+            rc = prepare_native_compaction(app, &projection.create_request, credential,
+                effort, error, error_size);
+            if (rc != 0) goto out;
+            rc = -1;
+            json_decref(projection.count_request.value);
+            projection.count_request.value =
+                snag_context_count_request(projection.create_request.value);
+            if (!projection.count_request.value) goto out;
+        }
         if (snag_json_document_measure(&projection.create_request, SNAG_CONTEXT_MAX_COMPACT) < 0 ||
             projection.create_request.bytes == 0u ||
             snag_json_document_measure(&projection.count_request, SNAG_CONTEXT_MAX_COMPACT) < 0 ||
@@ -547,33 +485,9 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                     goto out;
                 started = false;
             }
-            /* A transport or provider failure on a large source (a gateway
-             * dropping the body as "Failure when receiving data from the peer")
-             * shrinks the source and retries inside this bounded loop instead of
-             * failing the turn; the floor stops the budget collapsing. Only the
-             * native compact route needs this: a responses-style compaction that
-             * answered at all is a rejection, not a lost body. */
-            bool retry_smaller = native && stage_rc < 0 && stage_rc != SNAG_PROVIDER_UNSUPPORTED &&
-                                 source_budget > SNAG_CONTEXT_COMPACT_FLOOR;
-            if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW && !retry_smaller) {
-                /* A rejected request fails the command: the interruption is already
-                 * recorded, and the caller must report the failure (not a silent
-                 * success) with the provider's own message. */
+            if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW) {
                 rc = stage_rc == SNAG_PROVIDER_REJECTED ? -1 : stage_rc;
                 goto out;
-            }
-            if (retry_smaller) {
-                if (started) {
-                    if (commit_rendered(app, "compaction_interrupted",
-                            compaction_interrupted_data(compact_id, "error"), error,
-                            error_size) < 0)
-                        goto out;
-                    started = false;
-                }
-                if (snag_ui_text(&app->ui, SNAG_UI_HOST,
-                        "compaction request failed; retrying with a smaller source (Ctrl-C "
-                        "interrupts)") < 0)
-                    goto out;
             }
         }
         /* Shrink bytes only after a measured rejection/count: no token conversion.
@@ -624,7 +538,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                 "twice",
                 &reduce_request, reduce_error, sizeof(reduce_error));
             if (reduce_rc == 0 && native)
-                reduce_rc = prepare_native_compaction(app, &reduce_request);
+                reduce_rc = prepare_native_compaction(app, &reduce_request, credential, effort,
+                    reduce_error, sizeof(reduce_error));
             if (reduce_rc == 0) {
                 if (snag_app_provider_activity(app, true) < 0) goto out;
                 reduce_rc = native ? snag_app_provider_compact(app, reduce_request.value,
@@ -725,17 +640,8 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
             app->compaction_failures);
     }
     int rc = run_compaction_attempt(
-        app, reason, active_prefix, true, credential, &did_compact, error, error_size);
-    if (rc == SNAG_PROVIDER_UNSUPPORTED) {
-        char message[1024];
-        (void)snprintf(message, sizeof(message),
-            "native compaction unavailable; compacting through Responses%s%s",
-            error && error_size && error[0] ? ": " : "", error && error_size ? error : "");
-        if (snag_ui_text(&app->ui, SNAG_UI_WARNING, message) < 0) return -1;
-        if (error_size) error[0] = '\0';
-        rc = run_compaction_attempt(
-            app, reason, active_prefix, false, credential, &did_compact, error, error_size);
-    }
+        app, reason, active_prefix, credential, &did_compact, error, error_size);
+    if (rc == SNAG_PROVIDER_UNSUPPORTED) rc = -1;
     if (compacted) *compacted = did_compact;
     if (rc == 0 && did_compact) {
         app->compaction_failures = 0u;

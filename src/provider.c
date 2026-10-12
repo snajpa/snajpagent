@@ -30,6 +30,7 @@
 struct provider_ctx {
     struct snag_sse_parser sse;
     struct snag_responses_stream stream;
+    json_t *compact_window;
     struct snag_buf body;
     struct snag_buf error_body;
     struct snag_secret_set secrets;
@@ -559,6 +560,8 @@ begin_attempt(struct provider_ctx *ctx)
         void *hosted_opaque = ctx->stream.hosted_opaque;
         snag_sse_free(&ctx->sse);
         snag_responses_stream_free(&ctx->stream);
+        json_decref(ctx->compact_window);
+        ctx->compact_window = NULL;
         snag_responses_stream_init(&ctx->stream, emit, opaque);
         snag_responses_stream_set_hosted(&ctx->stream, hosted, hosted_opaque);
         snag_sse_init(&ctx->sse, record, record_opaque);
@@ -838,6 +841,47 @@ out:
 }
 
 static int
+native_compact_output_set(struct snag_json_document *output, const json_t *items,
+    char *error, size_t error_size)
+{
+    size_t encrypted_count = 0u;
+    for (size_t i = 0; i < json_array_size(items); ++i) {
+        const json_t *item = json_array_get(items, i);
+        const char *type = snag_json_string(item, "type");
+        const char *encrypted = snag_json_string(item, "encrypted_content");
+        if (type && !strcmp(type, "message")) {
+            const char *role = snag_json_string(item, "role");
+            json_t *content = json_object_get(item, "content");
+            if (!role || (strcmp(role, "user") && strcmp(role, "assistant") &&
+                             strcmp(role, "system") && strcmp(role, "developer")) ||
+                (!json_is_string(content) && !json_is_array(content)))
+                return snag_fail(error, error_size, EINVAL,
+                    "compact output contains a malformed message");
+            for (size_t p = 0u; p < json_array_size(content); ++p) {
+                json_t *part = json_array_get(content, p);
+                const char *part_type = snag_json_string(part, "type");
+                if (!json_is_object(part) || !part_type || !*part_type ||
+                    ((!strcmp(part_type, "input_text") || !strcmp(part_type, "output_text")) &&
+                        !json_is_string(json_object_get(part, "text"))))
+                    return snag_fail(error, error_size, EINVAL,
+                        "compact output contains malformed message content");
+            }
+        }
+        if (!type || strcmp(type, "compaction")) continue;
+        ++encrypted_count;
+        if (!encrypted || !*encrypted) {
+            return snag_fail(error, error_size, EPROTO,
+                "native compaction returned invalid encrypted content");
+        }
+    }
+    if (encrypted_count != 1u) {
+        return snag_fail(error, error_size, EPROTO,
+            "native compaction must return exactly one encrypted compaction item");
+    }
+    return snag_context_compact_output_set(output, json_incref((json_t *)items), error, error_size);
+}
+
+static int
 parse_compact_body(
     struct provider_ctx *ctx, struct snag_json_document *output, char *error, size_t error_size)
 {
@@ -858,7 +902,7 @@ parse_compact_body(
     object = snag_json_string(root, "object");
     body_output = json_object_get(root, "output");
     if (!object || strcmp(object, "response.compaction") != 0 ||
-        snag_context_compact_output_set(output, json_incref(body_output), error, error_size) < 0) {
+        native_compact_output_set(output, body_output, error, error_size) < 0) {
         if (error && !error[0])
             snag_errorf(error, error_size, "compact response has an invalid shape");
         errno = EPROTO;
@@ -1068,7 +1112,7 @@ codex_model_ref_compare(const void *left, const void *right)
 
 static int
 decode_models(const unsigned char *data, size_t len, bool codex, json_t **models, char *error,
-    size_t error_size)
+    size_t error_size, const char *compact_model, bool *compact_v2)
 {
     char json_error[128] = {0};
     json_t *root = NULL;
@@ -1092,6 +1136,20 @@ decode_models(const unsigned char *data, size_t len, bool codex, json_t **models
         (void)snag_fail(
             error, error_size, EPROTO, "model-list response has no bounded models array");
         goto out;
+    }
+    if (compact_v2) {
+        *compact_v2 = false;
+        for (size_t i = 0; i < json_array_size(source); ++i) {
+            json_t *entry = json_array_get(source, i);
+            const char *id = snag_json_string(entry, codex ? "slug" : "id");
+            const char *protocol = snag_json_string(
+                json_object_get(entry, "metadata"), "native_compaction_protocol");
+            if (id && compact_model && !strcmp(id, compact_model) && protocol &&
+                !strcmp(protocol, "responses_v2")) {
+                *compact_v2 = true;
+                break;
+            }
+        }
     }
     out = json_array();
     if (!out) {
@@ -1146,15 +1204,16 @@ out:
 }
 
 static int
-parse_models_body(
-    struct provider_ctx *ctx, bool codex, json_t **models, char *error, size_t error_size)
+parse_models_body(struct provider_ctx *ctx, bool codex, json_t **models, char *error,
+    size_t error_size, const char *compact_model, bool *compact_v2)
 {
     if (ctx->body_failed) {
         return snag_fail(error, error_size, EOVERFLOW,
             ctx->error[0] ? ctx->error : "model-list response body exceeds the supported limit");
     }
     return decode_models(
-        ctx->error_body.data, ctx->error_body.len, codex, models, error, error_size);
+        ctx->error_body.data, ctx->error_body.len, codex, models, error, error_size,
+        compact_model, compact_v2);
 }
 
 static bool
@@ -1271,6 +1330,7 @@ provider_ctx_finish(struct provider_ctx *ctx, int rc, char *error, size_t error_
     snag_buf_free(&ctx->error_body);
     snag_sse_free(&ctx->sse);
     snag_responses_stream_free(&ctx->stream);
+    json_decref(ctx->compact_window);
     snag_credential_clear(&ctx->credential);
     if (ctx->protection_out) {
         snag_secret_set_free(ctx->protection_out);
@@ -1449,9 +1509,9 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure, char *er
     return 0;
 }
 
-int
-snag_provider_models_list(
-    struct snag_provider_connection connection, json_t **models, char *error, size_t error_size)
+static int
+provider_models_list(struct snag_provider_connection connection, json_t **models, char *error,
+    size_t error_size, const char *compact_model, bool *compact_v2)
 {
     struct provider_ctx ctx;
     const char *path;
@@ -1469,8 +1529,35 @@ snag_provider_models_list(
             count_write_cb, error, error_size) == 0 &&
         provider_request_perform(&ctx, "model discovery failed", error, error_size, &retry_count) ==
             0)
-        rc = parse_models_body(&ctx, codex, models, error, error_size);
-    return provider_ctx_finish(&ctx, rc, error, error_size) == 0 ? 0 : -1;
+        rc = parse_models_body(&ctx, codex, models, error, error_size, compact_model, compact_v2);
+    long status = 0;
+    if (ctx.curl) (void)curl_easy_getinfo(ctx.curl, CURLINFO_RESPONSE_CODE, &status);
+    if (compact_v2 && (status == 404 || status == 405)) {
+        *compact_v2 = false;
+        rc = 0;
+        if (error_size) error[0] = '\0';
+    }
+    return provider_ctx_finish(&ctx, rc, error, error_size);
+}
+
+int
+snag_provider_models_list(
+    struct snag_provider_connection connection, json_t **models, char *error, size_t error_size)
+{
+    return provider_models_list(connection, models, error, error_size, NULL, NULL);
+}
+
+int
+snag_provider_native_compaction_protocol(struct snag_provider_connection connection,
+    const char *model, bool *responses_v2, char *error, size_t error_size)
+{
+    json_t *models = NULL;
+    if (!model || !responses_v2) return snag_fail(error, error_size, EINVAL,
+        "invalid native compaction protocol discovery");
+    *responses_v2 = false;
+    int rc = provider_models_list(connection, &models, error, error_size, model, responses_v2);
+    json_decref(models);
+    return rc;
 }
 
 int
@@ -1514,7 +1601,23 @@ static int
 codex_compact_record(void *opaque, const struct snag_sse_record *record)
 {
     struct provider_ctx *ctx = opaque;
-    return snag_responses_sse_record(&ctx->stream, record);
+    ctx->stream.compact_context = true;
+    if (ctx->stream.terminal) return snag_responses_sse_record(&ctx->stream, record);
+    if (record->data_len > SNAG_CONTEXT_MAX_COMPACT)
+        return snag_fail(ctx->error, sizeof(ctx->error), EOVERFLOW,
+            "native compact response exceeds the bounded output");
+    json_t *root = snag_json_load_strict(
+        record->data, record->data_len, SNAG_CONTEXT_MAX_COMPACT, NULL, 0u);
+    const json_t *response = json_object_get(root, "response");
+    json_t *window = json_object_get(response, "output");
+    int rc = snag_responses_sse_record(&ctx->stream, record);
+    if (rc == 0 && ctx->stream.terminal && !ctx->stream.failed &&
+        json_is_array(window) && json_array_size(window) > 1u) {
+        json_decref(ctx->compact_window);
+        ctx->compact_window = json_incref(window);
+    }
+    json_decref(root);
+    return rc;
 }
 
 static int
@@ -1534,6 +1637,8 @@ codex_compact_output(struct provider_ctx *ctx, const json_t *request,
     }
     if (!compact)
         return snag_fail(error, error_size, EPROTO, "native compaction returned no encrypted item");
+    if (ctx->compact_window)
+        return native_compact_output_set(output, ctx->compact_window, error, error_size);
     json_t *window = json_array();
     const json_t *input = json_object_get(request, "input");
     if (!window) return -1;

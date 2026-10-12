@@ -18,6 +18,19 @@ from test_remote_terminal import RemoteProcess
 
 class MeasuredHandler(Handler):
     def reply(self, status, body):
+        returned_window = getattr(self.server, "returned_window", None)
+        if returned_window is not None:
+            lines = body.splitlines(keepends=True)
+            for i, line in enumerate(lines):
+                if not line.startswith(b"data: ") or line[6:].strip() == b"[DONE]":
+                    continue
+                event = json.loads(line[6:])
+                if event.get("type") == "response.completed":
+                    output = event["response"].get("output", [])
+                    if any(item.get("type") == "compaction" for item in output):
+                        event["response"]["output"] = [returned_window, *output]
+                        lines[i] = ("data: " + json.dumps(event) + "\n").encode()
+            body = b"".join(lines)
         if getattr(self.server, "measure_requests", False) and b'"usage"' in body:
             request = self.server.requests[-1][3]
             tokens = len(json.dumps(request).encode()) // 4
@@ -76,6 +89,7 @@ def check(binary):
                 if not legacy:
                     journal, = journal_paths(state)
                 sid = journal.parent.name
+                foreground = [r[3] for r in server.requests if r[0] == "POST"][-1]
                 server.requests.clear()
                 server.raw_requests.clear()
                 child = RemoteProcess(root, [*prefix, "--resume", sid], wrapped=None,
@@ -93,6 +107,8 @@ def check(binary):
                 assert len(posts) == 1 and posts[0][1] == "/responses", posts
                 request = posts[0][3]
                 assert request["input"][-1] == {"type": "compaction_trigger"}
+                assert request.get("reasoning") == foreground["reasoning"], ("compact lost reasoning effort", request.get("reasoning"), foreground["reasoning"])
+                assert request.get("tools") == foreground["tools"], "compact lost foreground tool prefix"
                 raw, = server.raw_requests
                 digest = hashlib.sha256(raw).hexdigest()
                 events = read_events(journal)
@@ -111,6 +127,28 @@ def check(binary):
                 request, = [r[3] for r in server.requests if r[0] == "POST"]
                 assert capsule[0] in request["input"]
                 assert not any(i.get("type") == "compaction_trigger" for i in request["input"])
+            returned = {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": "Provider-retained native context."}]}
+            server.returned_window = returned
+            server.requests.clear()
+            child = RemoteProcess(root, [*prefix, "--resume", sid], wrapped=None,
+                                  extra_env=env, winsize=(24, 100))
+            try:
+                child.until("›".encode(), timeout=10)
+                os.write(child.master, b"/compact\r")
+                child.until(b"Compacted", timeout=10)
+                os.write(child.master, b"/exit\r")
+                child.wait(0)
+            finally:
+                child.close()
+            completed = [e for e in read_events(journal) if e["type"] == "compaction_completed"]
+            assert completed[-1]["data"]["output"][0] == returned, "lost provider native window"
+            assert len(completed[-1]["data"]["output"]) == 2, completed[-1]
+            server.returned_window = None
+            server.requests.clear()
+            run("--resume", sid, "-e", "--", "Use the retained native window.")
+            resumed, = [r[3] for r in server.requests if r[0] == "POST"]
+            assert returned in resumed["input"]
             config.write_text(config.read_text().replace("native_compaction = true",
                 "native_compaction = true\nauto_compact_input_tokens = 100000") +
                 "\n[model-limit codex/gpt-fixture]\ncontext_window_tokens = 1000000\n")

@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Preserve native compaction's selected reasoning effort and foreground tool
+  catalog, including model-advertised Responses-v2 compact API parameters.
+  Count the same native request prefix at the input-token boundary. Retain
+  the complete returned native context window and preserve source context and
+  error identity on failure. Configured native compaction uses its real endpoint
+  without silent text-summary fallback.
+
 - Include secret-filtered provider failure reasons in IRC-summary warnings so
   transport failures can be distinguished from main-context capacity triggers.
   Omit truncated and parser-derived excerpts before filtering can shorten a

@@ -303,8 +303,8 @@ effective_model(const char *model)
 {
     return strcmp(model, "default") == 0 ? SNAJPAGENT_MODEL : model;
 }
-static const char *
-resolve_effort(const char *preference)
+const char *
+snag_app_resolve_effort(const char *preference)
 {
     if (!preference || strcmp(preference, "default") == 0) return "medium";
     if (!snag_text_valid(preference, 1u, SNAG_CONFIG_EFFORT_MAX - 1u)) return NULL;
@@ -426,7 +426,7 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
                                     : use_pending
                                         ? snag_json_string(app->session.pending_input, "effort")
                                         : app->session.default_effort;
-    const char *effort = resolve_effort(effort_preference);
+    const char *effort = snag_app_resolve_effort(effort_preference);
     const struct snag_provider_config *provider =
         use_active ? snag_config_provider(app->config, app->session.active_turn_provider)
         : use_pending ? snag_config_provider(app->config,
@@ -780,7 +780,8 @@ format_context_meter(struct app_state *app, bool active, char meter[32u])
 {
     const struct snag_provider_config *provider = active ? app->turn_provider : next_provider(app);
     const char *model = active ? app->turn_model : app->session.default_model;
-    const char *effort = active ? app->turn_effort : resolve_effort(app->session.default_effort);
+    const char *effort =
+        active ? app->turn_effort : snag_app_resolve_effort(app->session.default_effort);
     struct snag_model_capacity resolved;
     const struct snag_model_capacity *capacity = &app->turn_capacity;
     uint64_t used;
@@ -853,7 +854,8 @@ render_prompt(struct app_state *app, bool active, const char *submitted)
         active || submitted ? app->turn_provider : next_provider(app);
     const char *model = active || submitted ? app->turn_model : app->session.default_model;
     const char *effort =
-        active || submitted ? app->turn_effort : resolve_effort(app->session.default_effort);
+        active || submitted ? app->turn_effort
+                            : snag_app_resolve_effort(app->session.default_effort);
     char hostname[256u], meter[32u], label[SNAG_TERM_LABEL_BYTES];
     char queue[64u] = "";
     const char *values[SNAG_PROMPT_HOUR];
@@ -988,7 +990,7 @@ validate_prompt_candidate(
         config, app->session.default_provider[0] ? app->session.default_provider : NULL);
 
     return validate_prompt_values(&app->ui, config, provider, app->session.default_model,
-        resolve_effort(app->session.default_effort), session_name);
+        snag_app_resolve_effort(app->session.default_effort), session_name);
 }
 
 static unsigned int
@@ -1570,7 +1572,7 @@ render_status(struct app_state *app)
         goto out;
     if (app->session.context_meter.valid) {
         bool matches = context_meter_matches(
-            app, provider, model, resolve_effort(effort));
+            app, provider, model, snag_app_resolve_effort(effort));
         if (snag_buf_printf(&text,
                 "\nobserved usage: input=%llu tokens · provider=%s · model=%s · effort=%s · %s",
                 (unsigned long long)app->session.context_meter.input_tokens,
@@ -2117,8 +2119,8 @@ render_model_catalog(struct app_state *app)
         return app_error(app, error);
     snag_buf_init(&text, 16u * 1024u * 1024u);
     if (snag_buf_printf(&text, "selected: %s / %s / %s", selected->name, app->session.default_model,
-            resolve_effort(app->session.default_effort)
-                ? resolve_effort(app->session.default_effort)
+            snag_app_resolve_effort(app->session.default_effort)
+                ? snag_app_resolve_effort(app->session.default_effort)
                 : app->session.default_effort) < 0 ||
         append_compact_threshold(&text, selected, &capacity) < 0)
         goto out;
@@ -2127,7 +2129,7 @@ render_model_catalog(struct app_state *app)
         append_capacity_value(
             &text, "hard-input", capacity.hard_input_known, capacity.hard_input_tokens) < 0 ||
         snag_model_each(&app->model_cache, app->config,
-            resolve_effort(app->config->reasoning_effort), append_model_row, &view) < 0)
+            snag_app_resolve_effort(app->config->reasoning_effort), append_model_row, &view) < 0)
         goto out;
     cache_timestamp(timestamp, sizeof(timestamp), app->model_cache.updated_at_ms);
     if (snag_buf_printf(&text, "\ncache updated: %s", timestamp) < 0) goto out;
@@ -2301,8 +2303,8 @@ commit_model_selection(struct app_state *app, const struct snag_provider_config 
         (app->session.turn_fallback_active ||
             strcmp(app->session.active_turn_provider, app->session.default_provider) != 0 ||
             strcmp(app->session.active_turn_model, app->session.default_model) != 0 ||
-            strcmp(app->session.active_turn_effort, resolve_effort(app->session.default_effort)) !=
-                0))
+            strcmp(app->session.active_turn_effort,
+                snag_app_resolve_effort(app->session.default_effort)) != 0))
         app->model_switch_requested = true;
     if (save) {
         (void)snprintf(app->config->provider, sizeof(app->config->provider), "%s", provider->name);
@@ -2336,7 +2338,7 @@ select_cached_model(struct app_state *app, const char *value, bool save,
     if (!parse_model_index(value, &index)) return 1;
     if (load_model_cache(app, false, error, sizeof(error)) < 0) return app_error(app, error);
     entry_rc = snag_model_entry(&app->model_cache, app->config, index,
-        resolve_effort(app->config->reasoning_effort), &provider, &model, &effort);
+        snag_app_resolve_effort(app->config->reasoning_effort), &provider, &model, &effort);
     if (entry_rc != 0) return app_error(app, "model index is not in the displayed cache");
     provider_config = snag_config_provider(app->config, provider);
     if (!provider_config)
@@ -2401,7 +2403,7 @@ select_typed_model(struct app_state *app, char *value, bool save,
     effort = count >= 2u ? parts[count - 1u] : app->session.default_effort;
     if (strlen(model) >= SNAG_CONFIG_MODEL_MAX ||
         !snag_utf8_valid((const unsigned char *)model, strlen(model), true) ||
-        !resolve_effort(effort)) {
+        !snag_app_resolve_effort(effort)) {
         (void)app_error(app, "model or effort exceeds the supported structural bounds");
         return -1;
     }
@@ -2413,10 +2415,10 @@ select_typed_model(struct app_state *app, char *value, bool save,
         known_in_cache = cached != NULL;
         if (count == 1u)
             effort = snag_model_best_effort(
-                app->config, provider->name, model, cached, resolve_effort(effort));
+                app->config, provider->name, model, cached, snag_app_resolve_effort(effort));
     }
     return commit_model_selection(
-        app, provider, model, resolve_effort(effort), known_in_cache, save, choice);
+        app, provider, model, snag_app_resolve_effort(effort), known_in_cache, save, choice);
 }
 
 static bool
@@ -2446,11 +2448,11 @@ resolve_fallback(struct app_state *app, const char *value, struct snag_model_sel
     char cache_error[256] = {0};
     (void)load_model_cache(app, false, cache_error, sizeof(cache_error));
     if (snag_model_select_selector(&app->model_cache, app->config, value, next_provider(app),
-            resolve_effort(app->session.default_effort), selected, error, error_size) < 0)
+            snag_app_resolve_effort(app->session.default_effort), selected, error, error_size) < 0)
         return -1;
     if (!selected->context_set)
         selected->context = (struct snag_context_choice){SNAG_CONTEXT_MODE_DEFAULT, 0u};
-    const char *effort = resolve_effort(selected->effort);
+    const char *effort = snag_app_resolve_effort(selected->effort);
     if (!effort) return snag_fail(error, error_size, EINVAL, "invalid fallback effort");
     if (effort != selected->effort)
         (void)snag_strcpy(selected->effort, sizeof(selected->effort), effort);
@@ -2903,7 +2905,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
         app->session.active_turn ? app->session.active_turn_provider : selected_provider);
     if (!app->session.active_turn) {
         app->turn_model = app->session.default_model;
-        app->turn_effort = resolve_effort(app->session.default_effort);
+        app->turn_effort = snag_app_resolve_effort(app->session.default_effort);
     }
     snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_COLOR,
                                .data.value = snag_cli_color(app->cli, app->config->color)});
@@ -3016,7 +3018,7 @@ change_effort(struct app_state *app, const char *value, bool active)
     if (!value) return show_setting(app, "effort", app->session.default_effort);
     copy = snag_strdup_checked(value, SNAG_CONFIG_EFFORT_MAX - 1u);
     if (copy) effort = trim_selector_part(copy);
-    if (!effort || !resolve_effort(effort)) {
+    if (!effort || !snag_app_resolve_effort(effort)) {
         free(copy);
         return app_error(app, "effort exceeds the supported structural bounds");
     }
@@ -3078,7 +3080,7 @@ report_context(struct app_state *app, const struct snag_provider_config *provide
         goto out;
     over_budget = capacity.hard_input_known &&
                   context_meter_matches(app, provider, app->session.default_model,
-                      resolve_effort(app->session.default_effort)) &&
+                      snag_app_resolve_effort(app->session.default_effort)) &&
                   app->session.context_meter.input_tokens >=
                       snag_model_compact_threshold(provider, &capacity);
     if (over_budget &&
@@ -5766,11 +5768,11 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 strcmp(app->session.active_turn_provider, app->session.default_provider) != 0 ||
                 strcmp(app->session.active_turn_model, app->session.default_model) != 0 ||
                 strcmp(app->session.active_turn_effort,
-                    resolve_effort(app->session.default_effort)) != 0);
+                    snag_app_resolve_effort(app->session.default_effort)) != 0);
         if (selected_new_model &&
             commit_event(app, "turn_model_changed",
                 json_pack("{s:s,s:s,s:s,s:s,s:s}", "new_effort",
-                    resolve_effort(app->session.default_effort), "old_provider",
+                    snag_app_resolve_effort(app->session.default_effort), "old_provider",
                     app->session.active_turn_provider, "old_model", app->session.active_turn_model,
                     "old_effort", app->session.active_turn_effort, "turn_id", turn_id),
                 error, sizeof(error)) < 0)
@@ -6581,7 +6583,7 @@ snag_app_input_received_data(
     struct app_state *app, const char *text, bool read_only, bool timer_turn)
 {
     const struct snag_provider_config *provider = next_provider(app);
-    const char *effort = resolve_effort(app->session.default_effort);
+    const char *effort = snag_app_resolve_effort(app->session.default_effort);
     if (!provider || !effort || !snag_text_valid(text, 1u, SNAG_MAX_DIRECT_PROMPT)) return NULL;
     json_t *data = json_pack("{s:s,s:o,s:s,s:s,s:b,s:I,s:s}", "effort", effort, "instructions",
         snag_instructions_metadata_json(&app->cli->doc_instructions), "model",
@@ -7640,7 +7642,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
                 &capacity, error, sizeof(error)) < 0)
             goto invalid;
     }
-    if ((!cli->resume || cli->effort || cli->model) && !resolve_effort(new_effort)) {
+    if ((!cli->resume || cli->effort || cli->model) && !snag_app_resolve_effort(new_effort)) {
         invalid_message = "reasoning effort is empty, oversized, or invalid UTF-8";
         goto invalid;
     }
@@ -7679,7 +7681,8 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         if (!cli->execute &&
             validate_prompt_values(&app.ui, &config, resume_provider,
                 cli->model ? new_model : app.session.default_model,
-                resolve_effort(cli->model || cli->effort ? new_effort : app.session.default_effort),
+                snag_app_resolve_effort(
+                    cli->model || cli->effort ? new_effort : app.session.default_effort),
                 app.session.name) < 0) {
             invalid_message = "configured prompt cannot be rendered with the current selection";
             goto invalid;
@@ -7697,7 +7700,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
             goto fail;
         }
         app.turn_model = app.session.default_model;
-        app.turn_effort = resolve_effort(app.session.default_effort);
+        app.turn_effort = snag_app_resolve_effort(app.session.default_effort);
         app.turn_provider = next_provider(&app);
     } else {
         const struct snag_provider_config *selected_provider =
@@ -7706,7 +7709,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
                                                        : config.provider[0] ? config.provider
                                                                             : NULL);
         if (!cli->execute && validate_prompt_values(&app.ui, &config, selected_provider, new_model,
-                                 resolve_effort(new_effort), cli->session_name) < 0) {
+                                 snag_app_resolve_effort(new_effort), cli->session_name) < 0) {
             invalid_message = "configured prompt cannot be rendered with the current selection";
             goto invalid;
         }
@@ -7721,7 +7724,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
             goto fail;
         snag_context_start_new(&app.session);
         app.turn_model = app.session.default_model;
-        app.turn_effort = resolve_effort(app.session.default_effort);
+        app.turn_effort = snag_app_resolve_effort(app.session.default_effort);
         app.turn_provider = selected_provider;
     }
     if (selection.context_set &&
