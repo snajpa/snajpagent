@@ -397,7 +397,9 @@ snag_session_client_step(struct snag_session_client *client, int timeout_ms,
         client->terminal_deadline = 0u;
         packet_clear(&client->output);
     }
-    if (client->output_pending && fds[0].revents & POLLOUT && terminal_write(client) < 0) return -1;
+    /* PTY poll readiness can lag a drained master on macOS. Try the
+     * nonblocking writer after every bounded wait; EAGAIN retains its deadline. */
+    if (client->output_pending && terminal_write(client) < 0) return -1;
     /* The poll's readable input precedes any destination ACK in this batch. */
     if (fds[0].revents & POLLIN && !client->input.used) {
         unsigned char bytes[SNAG_SESSION_FRAME_MAX];

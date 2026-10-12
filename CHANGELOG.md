@@ -13,6 +13,10 @@
   of failure warnings. Apply the full captured protection set before the first
   filter to protect overlapping provider and tool secrets.
 
+- Keep macOS terminal output progressing after active workspace-to-classic
+  attachment when PTY readiness reporting lags. Retain bounded backpressure and
+  acknowledge only bytes actually written.
+
 - Retain the foreground tool-schema prefix in full-context IRC summary requests
   while disabling tool selection. Background summaries remain unable to execute
   tools and preserve original context when a provider returns a tool call.

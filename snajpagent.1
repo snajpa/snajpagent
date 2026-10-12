@@ -1955,6 +1955,8 @@ before input can be sent.
 Detaching a workspace controller or losing its connection leaves the owner running
 and retaining streamed output. A later terminal attachment restores that output
 and the ordinary session prompt.
+If the physical terminal stops accepting output, the attachment times out;
+the owner retains its output for a later attachment.
 Older or stopped owners use the last complete snapshot, labelled snapshot.
 Live owner notifications update visible panes as output arrives; stored snapshots
 are checked once per second. An unchanged committed position

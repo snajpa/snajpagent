@@ -43,6 +43,13 @@ is unknown. Older owners keep their advertised controls.
 
 ## Framing and service
 
+Classic attachment uses its existing nonblocking terminal writer after each
+bounded poll wait, even when PTY write readiness is not reported. On macOS,
+readiness can lag after the physical consumer drains queued history. A pending
+frame retains its offset and existing stall deadline on EAGAIN; acknowledgement
+covers only bytes actually written. Owner completion is distinct from physical
+frontend delivery, including during active streamed controller handoff.
+
 Each frame has the existing eight-byte header shape: `SV`, version byte `1`,
 frame type byte `1`, and a four-byte little-endian payload length. Payloads are
 at most 16 KiB. Their first two little-endian u64 fields are the byte offset

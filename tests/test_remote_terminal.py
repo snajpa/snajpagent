@@ -141,7 +141,7 @@ class RemoteProcess:
 class RemoteStartupTests(unittest.TestCase):
     def test_workspace_mosh_prediction_is_disabled_unless_explicit(self):
         with tempfile.TemporaryDirectory(prefix='snag-mosh-prediction-') as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             mosh = root / 'mosh'
             mosh.write_text(f'#!{sys.executable}\n' +
                             'import json,sys\nfrom pathlib import Path\n' +
@@ -221,7 +221,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_exited_child_does_not_wait_for_inherited_terminal_slave(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-subshell-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             peer = textwrap.dedent('''
                 import subprocess
                 import sys
@@ -240,7 +240,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_upload_picker_exits_when_transport_exits(self):
         with tempfile.TemporaryDirectory(prefix="snag-picker-exit-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             release = root / "release"
             peer = textwrap.dedent(r'''
                 import sys, time
@@ -643,7 +643,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_screen_title_handshake_is_hidden_from_terminal(self):
         with tempfile.TemporaryDirectory(prefix="snag-title-handshake-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             peer = textwrap.dedent(r'''
                 import os
                 import termios
@@ -671,7 +671,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_screen_title_frames_do_not_leak_and_other_titles_pass(self):
         with tempfile.TemporaryDirectory(prefix="snag-title-bounds-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             peer = textwrap.dedent(r'''
                 import os
                 import termios
@@ -710,7 +710,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_partial_transfer_title_cannot_escape_on_child_exit(self):
         with tempfile.TemporaryDirectory(prefix="snag-title-partial-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             peer = textwrap.dedent(r'''
                 import os
 
@@ -736,7 +736,7 @@ class RemoteStartupTests(unittest.TestCase):
     def test_plain_terminal_startup_keeps_direct_owner(self):
         for term in ("dumb", ""):
             with self.subTest(term=term), tempfile.TemporaryDirectory(prefix="snag-plain-") as tmp:
-                home = Path(tmp)
+                home = Path(tmp).resolve()
                 child = RemoteProcess(home, ["--dotdir", str(home / "dotdir")],
                                       wrapped=False, extra_env={"TERM": term})
                 try:
@@ -754,7 +754,7 @@ class RemoteStartupTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, "pidfd_open"), "native attachment needs Linux")
     def test_native_attach_refuses_unsupported_terminal_without_taking_owner(self):
         with tempfile.TemporaryDirectory(prefix="snag-attach-capability-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             original = ProductSession(root)
             home = root / "home"
             try:
@@ -790,7 +790,7 @@ class RemoteStartupTests(unittest.TestCase):
                          "native profile replacement needs Linux and GNU screen")
     def test_native_attachment_rebinds_terminal_profile(self):
         with tempfile.TemporaryDirectory(prefix="snag-attach-profile-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             original_root = root / "original"
             original_root.mkdir(mode=0o700)
             sockets = root / "screens"
@@ -856,7 +856,7 @@ class RemoteStartupTests(unittest.TestCase):
     def test_native_drop_keeps_one_composer_and_sealed_rollout(self):
         from tmux_terminal import TmuxTerminal, DEFAULT_ACCOUNTED_IDLE_PROMPT
         with tempfile.TemporaryDirectory(prefix="snag-drop-view-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             launcher = root / "wrapped-agent"
             program = shlex.quote(str(PRODUCT))
             launcher.write_text(f'#!/bin/sh\nexec {program} remote {program} "$@"\n')
@@ -880,7 +880,7 @@ class RemoteStartupTests(unittest.TestCase):
     def test_native_drop_preserves_draft(self):
         for form in ("plain", "escaped", "quoted", "paste", "fragmented", "nested", "active", "narrow"):
             with self.subTest(form=form), tempfile.TemporaryDirectory(prefix="snag-drop-") as tmp:
-                root = Path(tmp)
+                root = Path(tmp).resolve()
                 name = "HANDOFF_ALL.md" if form == "plain" else "résumé 'notes'.md"
                 source = root / name
                 source.write_bytes(b"native dropped file\n")
@@ -932,7 +932,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_native_drop_leaves_generic_child_input_unchanged(self):
         with tempfile.TemporaryDirectory(prefix="snag-drop-shell-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             source = root / "regular.md"
             source.write_text("do not transfer to generic child")
             code = textwrap.dedent('''
@@ -956,7 +956,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_native_drop_keeps_nonfile_and_embedded_paths_literal(self):
         with tempfile.TemporaryDirectory(prefix="snag-drop-literal-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             source = root / "regular.md"
             source.write_text("explicit drops only")
             link = root / "link.md"
@@ -992,7 +992,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_native_drop_cancel_keeps_draft(self):
         with tempfile.TemporaryDirectory(prefix="snag-drop-cancel-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             source = root / "cancel.bin"
             source.write_bytes(os.urandom(65536))
             child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")])
@@ -1012,7 +1012,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_native_upload_caps_bursts_when_peer_advertises_large_blocks(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-burst-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             upload = root / "bulk.bin"
             upload.write_bytes(os.urandom(16384))
             peer = textwrap.dedent(r'''
@@ -1064,7 +1064,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_agent_transfer_names_have_no_old_aliases(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-names-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")],
                                   extra_env={"PAGER": "cat"})
             try:
@@ -1106,7 +1106,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_native_upload_cancel_restores_input(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-cancel-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")])
             try:
                 child.until("›".encode(), 8)
@@ -1128,7 +1128,7 @@ class RemoteStartupTests(unittest.TestCase):
             if screen and not shutil.which("screen"):
                 continue
             with self.subTest(screen=screen), tempfile.TemporaryDirectory(prefix="snag-nested-") as tmp:
-                root = Path(tmp)
+                root = Path(tmp).resolve()
                 home = root / "client"
                 home.mkdir()
                 source = root / "nested.bin"
@@ -1226,7 +1226,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_literal_child_argv_exit_and_no_agent_state(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-") as tmp:
-            home = Path(tmp)
+            home = Path(tmp).resolve()
             args = ["-e", "a b", "$(touch forbidden)", "résumé"]
             child = RemoteProcess(home, [sys.executable, "-c",
                 "import json,sys; print(json.dumps(sys.argv[1:],ensure_ascii=False),flush=True); sys.exit(37)",
@@ -1241,7 +1241,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_config_reads_only_terminal_without_provider_startup(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-cfg-") as tmp:
-            home = Path(tmp)
+            home = Path(tmp).resolve()
             config = home / "config.ini"
             config.write_text("[provider invalid provider]\nnot even valid agent config\n"
                               "[terminal]\ndownload_dir = ~/Incoming files\n")
@@ -1257,7 +1257,7 @@ class RemoteStartupTests(unittest.TestCase):
         for text in ("[terminal]\nprovider = nonsense\n",
                      "[terminal]\ndownload_dir = /tmp\ndownload_dir = /tmp\n"):
             with self.subTest(text=text), tempfile.TemporaryDirectory(prefix="snag-remote-bad-") as tmp:
-                home = Path(tmp)
+                home = Path(tmp).resolve()
                 config = home / "config.ini"
                 config.write_text(text)
                 child = RemoteProcess(home, ["--config", str(config), "/bin/sh", "-c", "touch launched"])
@@ -1281,7 +1281,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_native_download_default_directory_and_remote_receipt(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-download-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             home, server = root / "client", root / "server"
             home.mkdir()
             server.mkdir()
@@ -1311,7 +1311,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_native_upload_selection_then_prompt_roundtrip(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-upload-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             home, dotdir = root / "client", root / "remote-session"
             home.mkdir()
             source = home / "notes file.txt"
@@ -1334,7 +1334,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_native_empty_collision_and_configured_destination(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-collision-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             home, server, destination = root / "client", root / "server", root / "chosen files"
             home.mkdir()
             server.mkdir()
@@ -1388,7 +1388,7 @@ class RemoteStartupTests(unittest.TestCase):
     def test_wrapped_resume_delivers_queued_download_and_clears_item(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-reconnect-") as tmp:
             data = ("queued reconnect bytes\n" * 2000).encode()
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             client_home, remote_home, dotdir, journal, sid, _source, env = \
                 self.queue_detached_download(root, data)
             child = RemoteProcess(client_home, [str(PRODUCT), "--dotdir", str(dotdir), "--resume", sid])
@@ -1414,7 +1414,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_unwrapped_resume_leaves_queued_download_pending(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-unwrapped-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             client_home, remote_home, dotdir, journal, sid, _source, env = \
                 self.queue_detached_download(root)
             child = RemoteProcess(remote_home, ["--dotdir", str(dotdir), "--resume", sid],
@@ -1441,7 +1441,7 @@ class RemoteStartupTests(unittest.TestCase):
     def test_wrapped_resume_keeps_changed_queued_source_pending(self):
         for digest_only in (False, True):
             with self.subTest(digest_only=digest_only), tempfile.TemporaryDirectory(prefix="snag-remote-stale-") as tmp:
-                root = Path(tmp)
+                root = Path(tmp).resolve()
                 original = b"original queued bytes\n"
                 client_home, _remote_home, dotdir, journal, sid, source, _env = \
                     self.queue_detached_download(root, original)
@@ -1465,7 +1465,7 @@ class RemoteStartupTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("screen"), "GNU screen unavailable")
     def test_detached_screen_send_queues_then_wrapped_attach_delivers(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-detach-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             home, remote = root / "client", root / "server"
             home.mkdir()
             remote.mkdir()
@@ -1545,7 +1545,7 @@ class RemoteStartupTests(unittest.TestCase):
 
     def test_help_is_pure_and_nonterminal_refusal_is_factual(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-help-") as tmp:
-            home = Path(tmp)
+            home = Path(tmp).resolve()
             env = dict(os.environ, HOME=tmp)
             for option, status in (("--help", 0), ("--unknown-option", 2)):
                 result = subprocess.run([str(PRODUCT), "remote", option], env=env,
