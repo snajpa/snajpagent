@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Align the context and architecture contracts and manual checkpoint reference
+  with current native storage, retaining the legacy JSONL recovery rules.
+
 - Validate the measured input request's continuation binding for automatic
   compaction, status and context-selection advice. Account or API-key changes
   leave incompatible usage historical while exact preflight remains authoritative.

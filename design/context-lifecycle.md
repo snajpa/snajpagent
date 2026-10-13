@@ -8,9 +8,9 @@ component ownership; `goals.md` owns goal lifecycle; `interactive-io.md` owns
 terminal interaction. Those surfaces must use the transitions defined here.
 Implementation and test reconciliation is in progress; this design is not a
 claim that every existing path already satisfies it. [Binary session storage](session-storage.md)
-defines the next-format layout, replacement checkpoints, index and grouped I/O.
-Its explicit layout decisions supersede the one-file restrictions below for that
-future format; the descriptions below still apply to the current JSONL store.
+defines the native layout, paired replacement checkpoints, indexes and grouped I/O.
+Current source creates native sessions. Embedded checkpoints and JSONL record
+navigation described here apply to retained legacy sessions.
 
 ## Requirements
 
@@ -72,11 +72,13 @@ routine reopen reads that boundary and its suffix, not the lifetime prefix.
 
 ## One state and its derived views
 
-The session journal is authoritative. Its indexed `session_checkpoint` record
-contains the reducer state and materialized provider view at the same sequence,
-plus deferred input, call pairing and the bounded event seam needed to extend
-that view. The journal suffix advances that state through the same interpreter
-used live. Checkpoint creation changes no conversation meaning or goal state.
+The session journal is authoritative. A checkpoint captures reducer state and
+provider-view state at the same verified journal boundary, including deferred
+input, call pairing and the bounded event seam needed to extend that view. Native
+storage pairs core and provider checkpoint images; legacy JSONL embeds an indexed
+`session_checkpoint` record. The journal suffix advances that state through the
+same interpreter used live. Checkpoint creation preserves conversation meaning
+and goal state.
 The cache, checkpoint encoding and request projection are representations of
 that state, not competing owners of it.
 
@@ -109,8 +111,9 @@ There are two explicit ways to change coverage in that state:
 
 A goal turn's final answer is a continuation boundary, not a storage checkpoint
 or compaction. Describe it as a *goal continuation boundary* when distinguishing
-these operations. No separate checkpoint files, history database, process
-controller or session-wide quota is needed.
+these operations. Native storage publishes paired replacement checkpoint images
+and journal indexes under the binary storage contract. Legacy JSONL retains its
+embedded checkpoint layout.
 
 ### Durable transaction
 
@@ -368,9 +371,11 @@ outside the window. They remain recoverable from the original journal. Display
 restoration is separate from authoritative IRC recovery: deduplication cursors,
 pending admissions and reply obligations cannot be dropped to bound a preview.
 
-Each record uses the existing envelope/digest validator and links to the previous
-record. One derived in-memory position per session avoids rediscovering the last
-page boundary; it is discarded on reopen and is not another durable index.
+Native history readers use verified commit batches and sequence indexes under
+the binary storage contract. Legacy JSONL records use the existing envelope/digest
+validator and link to the previous record. One derived in-memory position per
+session avoids rediscovering the last page boundary; it is discarded on reopen
+and is not another durable index.
 An arbitrary older sequence is located by searching complete JSONL records by
 their monotonic sequence, validating the inspected records. Unread older records
 are not represented as checked. Malformed records or broken links remain errors;

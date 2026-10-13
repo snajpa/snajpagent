@@ -6,9 +6,9 @@ The common context requirements and transition rules are maintained in
 [Context lifecycle](context-lifecycle.md). Component details below must agree
 with that contract across live operation, checkpoint restore and history tools.
 The [binary storage design](session-storage.md) defines replacement checkpoints
-and indexed history. Existing native sessions use that bounded admission path;
-new session creation and legacy recovery still use the JSONL format described
-below while native provisional persistence and conversion are integrated.
+and indexed history. Current source creates native sessions and opens them
+through bounded checkpoint admission. Existing JSONL sessions retain their legacy
+recovery path until explicitly converted. Release 0.99.8c uses that legacy format.
 
 The proposed [Vim workspace and pager-retention design](vim-mode.md) adds an
 explicit full-screen frontend over semantic session history. Its windowed
@@ -184,8 +184,8 @@ byte counts and request views, rather than copying it into unrelated locals.
 Mutable session state is staged once per event and adopted only after durable
 append; a failed append leaves the live session unchanged.
 
-New sessions use journal format 4. Legacy format-2 and format-3 records remain
-readable; checkpoint creation does not destructively rewrite their prefix.
+New sessions use native storage. Legacy JSONL format-4 checkpoints and format-2/3
+records remain readable; checkpoint creation preserves their original prefix.
 Model selection changes use `model_selection_changed`. A compaction summary is
 the coverage boundary for provider input, not a second checkpoint file or a
 request to replay covered images and completed tool exchanges. The next indexed
