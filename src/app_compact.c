@@ -641,16 +641,15 @@ snag_app_compact_image_boundary(struct app_state *app, char *error, size_t error
 }
 
 int
-snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
-    const char *count_method, char *error, size_t error_size)
+snag_app_compact_after_turn(struct app_state *app, char *error, size_t error_size)
 {
+    uint64_t input_tokens;
     uint64_t threshold;
 
-    if (!app || !app->config || !app->turn_provider || !count_method_valid(count_method))
+    if (!app || !app->config || !app->turn_provider)
         return snag_fail(error, error_size, EINVAL, "invalid proactive compaction state");
     threshold = snag_model_compact_threshold(app->turn_provider, &app->turn_capacity);
-    if (!snag_app_measured_input(app, &input_tokens_bound) || !threshold ||
-        input_tokens_bound < threshold)
+    if (!snag_app_measured_input(app, &input_tokens) || !threshold || input_tokens < threshold)
         return 0;
     return run_compaction(app, "proactive", false, NULL, NULL, error, error_size);
 }

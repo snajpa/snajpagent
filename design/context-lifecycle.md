@@ -309,8 +309,10 @@ Summary completion and recovery rebases retain their existing invalidation of
 measured anchors. Failed compaction preserves the current binding and measurements.
 
 An exact outgoing count becomes durable at `response_started`; provider usage
-may replace it at `response_completed`. There is no `input_token_count` journal
-transition. Refresh at those real transitions and at completed compaction/rebase.
+may replace it at `response_completed`. Post-turn compaction reads this committed
+measurement directly after the completed response's usage has been applied.
+There is no `input_token_count` journal transition. Refresh at those real
+transitions and at completed compaction/rebase.
 Use the same binding/compaction matcher for the meter, status annotation and
 context-selection budget advice. Status may retain a historical observation for
 diagnostics, but must label it ineligible rather than implying current occupancy.

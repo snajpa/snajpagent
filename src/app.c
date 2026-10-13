@@ -6505,8 +6505,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 report_message = "final answer could not be written to stdout";
                 goto output_fail;
             }
-            if (snag_app_compact_after_turn(
-                    app, projection.input_tokens_bound, count_method, error, sizeof(error)) < 0)
+            if (snag_app_compact_after_turn(app, error, sizeof(error)) < 0)
                 (void)app_warning(app, error);
             result = 0;
             goto out;

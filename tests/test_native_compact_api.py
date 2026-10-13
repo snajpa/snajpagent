@@ -448,6 +448,73 @@ def check_compact_byte_ratios(binary, mode, exact=True):
     print(f"Compact {mode}, exact={exact}: byte ratios do not select or reduce context: ok")
 
 
+def check_post_turn_usage(binary):
+    with tempfile.TemporaryDirectory(prefix="snag-post-turn-usage-") as directory:
+        root = Path(directory).resolve()
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.requests, server.count_requests = [], []
+        server.v2, server.catalog_status, server.catalog_delay = True, 200, False
+        server.invalid_output = [{"type": "compaction", "encrypted_content": "measured-summary"}]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for exact in (False, True):
+                for usage, threshold, failure in ((4999, 5000, 0), (5000, 5000, 0),
+                                                  (5001, 5000, 0), (9000, 0, 0),
+                                                  (5000, 5000, 404)):
+                    case = root / f"{exact}-{usage}-{threshold}-{failure}"
+                    case.mkdir(mode=0o700)
+                    state, config = case / "state", case / "config.ini"
+                    config.write_text("[agent]\nmodel=gpt-fixture\nreasoning_effort=max\n"
+                                      "read_agents_md=false\nmax_turn_retries=0\n"
+                                      f"[provider fixture]\nbase_url=http://127.0.0.1:{server.server_port}/v1\n"
+                                      'api_key="fixture-secret"\nnative_compaction=true\n'
+                                      f"exact_token_count={'true' if exact else 'false'}\n"
+                                      f"auto_compact_input_tokens={threshold}\n"
+                                      "[model-limit fixture/gpt-fixture]\nmax_input_tokens=10000\n"
+                                      "[ui]\ncolor=never\n")
+                    config.chmod(0o600)
+                    env = {**os.environ, "HOME": str(case), "SNAJPAGENT_DOTDIR": str(state),
+                           "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
+                    env.pop("OPENAI_API_KEY", None)
+                    server.requests.clear()
+                    server.count_requests.clear()
+                    server.input_usage, server.failure = usage, failure
+                    result = subprocess.run([str(binary), "--dotdir", str(state),
+                        "--config", str(config), "-e"], input="Use the completed response usage.",
+                        cwd=case, env=env, capture_output=True, text=True, timeout=20)
+                    assert result.returncode == 0, (case.name, result.stderr)
+                    assert result.stdout.strip() == "HTTPS answer once", result.stdout
+                    journal, = journal_paths(state)
+                    events = read_events(journal)
+                    request, = [e for e in events if e["type"] == "response_started"]
+                    assert request["data"]["input_tokens_bound"] == (1024 if exact else 0)
+                    assert request["data"]["count_method"] == ("exact" if exact else "unknown")
+                    turn, = [e for e in events if e["type"] == "turn_completed"]
+                    started = [e for e in events if e["type"] == "compaction_started"]
+                    completed = [e for e in events if e["type"] == "compaction_completed"]
+                    interrupted = [e for e in events if e["type"] == "compaction_interrupted"]
+                    attempt = bool(threshold and usage >= threshold)
+                    assert len(started) == int(attempt), (case.name, started)
+                    assert len(completed) == int(attempt and not failure), (case.name, completed)
+                    assert len(interrupted) == int(attempt and bool(failure))
+                    if attempt:
+                        assert started[0]["seq"] > turn["seq"]
+                        assert started[0]["data"]["reason"] == "proactive"
+                    assert not any(e["type"] in ("context_rebased", "turn_recovery", "turn_failed")
+                                   for e in events)
+                    assert [path for path, _, _, _ in server.requests] == (
+                        ["/v1/responses"] + ["/v1/responses/compact"] * int(attempt))
+                    expected_counts = 1 + len(started) + len(completed) if exact else 0
+                    assert len(server.count_requests) == expected_counts
+                    print(f"Post-turn usage exact={exact}, input={usage}, threshold={threshold}, "
+                          f"failure={failure}: ok", flush=True)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     binary = Path(sys.argv[1]).resolve()
     check(binary)
@@ -456,3 +523,4 @@ if __name__ == "__main__":
     for mode in ("source", "output"):
         for exact in (False, True):
             check_compact_byte_ratios(binary, mode, exact)
+    check_post_turn_usage(binary)
