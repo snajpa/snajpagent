@@ -1406,6 +1406,140 @@ class ContextMeterTests(unittest.TestCase):
     def test_input_only_display_rejects_changed_credential(self):
         self.check_usage_scope(missing_output=True)
 
+    def check_exact_preview_fallback(self, exact=True, output_known=True, changed=False,
+                                     resumed=False, reported_input=None, outcome='completed'):
+        counts = []
+
+        def count(handler, request):
+            counts.append(request)
+            self.provider.reply(handler, b'{"object":"response.input_tokens","input_tokens":60000}',
+                                content_type='application/json', close_header=True)
+
+        def respond(handler, request, sequence):
+            if outcome == 'cancelled':
+                self.ready.set()
+                self.release.wait(10)
+            elif outcome == 'failed':
+                self.provider.reply(handler, b'{"error":{"code":"permission_denied",'
+                                    b'"message":"exact-fallback-denied"}}',
+                                    content_type='application/json', status=403, close_header=True)
+                return
+            body = self.provider.response_body(sequence, 'exact-fallback-answer').replace(
+                '"input_tokens":1', '"input_tokens":' + json.dumps(reported_input)).replace(
+                '"total_tokens":2', '"total_tokens":null')
+            if not output_known:
+                body = body.replace('"output_tokens":1', '"output_tokens":null')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        config = self.owner.config.read_text()
+        if not exact:
+            config = config.replace('exact_token_count = true', 'exact_token_count = false')
+            self.owner.config.write_text(config)
+            self.configure()
+        self.provider.runtime_count_handler = count
+        self.provider.runtime_handler = respond
+        peer = self.owner.view()
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'exact input with absent provider input usage\r')
+        if outcome == 'cancelled':
+            self.assertTrue(self.ready.wait(5), 'counted response did not start')
+            self.owner.wait_event('response_started')
+            os.write(self.owner.initial.master, b'\x03')
+            self.owner.wait_event('turn_interrupted')
+            self.release.set()
+        elif outcome == 'failed':
+            self.owner.wait_event('turn_failed')
+        else:
+            self.owner.wait_event('turn_completed')
+            self.owner.initial.until_after(b'exact-fallback-answer', b'METER ')
+            if reported_input is not None:
+                self.wait_meter(peer, lambda value: value == '2')
+            elif exact:
+                self.wait_meter(peer, lambda value: value == ('61' if output_known else '~61'))
+            else:
+                self.wait_meter(peer, lambda value: value.startswith('~'))
+        events = read_events(self.owner.journal)
+        completed = [e for e in events if e['type'] == 'response_completed']
+        if outcome == 'completed':
+            self.assertEqual(len(completed), 1)
+            self.assertEqual(completed[0]['data']['usage']['input_tokens'], reported_input)
+            self.assertEqual(completed[0]['data']['usage']['output_tokens'],
+                             1 if output_known else None)
+        else:
+            self.assertEqual(completed, [], 'uncompleted response supplied a display binding')
+        started = [e for e in events if e['type'] == 'response_started'][-1]
+        self.assertEqual(started['data']['count_method'], 'exact' if exact else 'unknown')
+        self.assertEqual(started['data']['input_tokens_bound'], 60000 if exact else 0)
+        # Provider-failure recovery admits one retry before the turn fails.
+        attempts = 2 if outcome == 'failed' else 1
+        self.assertEqual(len([e for e in events if e['type'] == 'response_started']), attempts)
+        if changed:
+            config = config.replace('${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"')
+            self.provider.credential = 'changed-key'
+        self.owner.config.write_text(config)
+        self.owner.config.chmod(0o600)
+        self.command('/configure', 'configuration reloaded:')
+        self.owner.initial.until_after(b'configuration reloaded:', b'METER ')
+        self.assertEqual(len(counts), attempts * int(exact),
+                         'reload preview performed another count request')
+        self.assertEqual(len(self.provider.requests), attempts,
+                         'reload preview submitted another response')
+        if resumed:
+            self.owner.finish(self.owner.initial, b'/exit')
+            self.owner.initial = self.owner.start(['--resume', self.owner.sid])
+            self.owner.initial.until('›'.encode(), 10)
+        peer = self.owner.view()
+        preview = self.wait_meter(peer, lambda value: value.startswith('~'))['values'][5]
+        if exact and not changed and reported_input is None and outcome == 'completed':
+            self.assertGreaterEqual(int(preview[1:]), 60,
+                                    'preview lost the completed exact input count')
+            self.assertLess(int(preview[1:]), 65)
+        else:
+            self.assertLess(int(preview[1:]), 20, 'preview invented a matching input measurement')
+        self.assertEqual(len(counts), attempts * int(exact))
+        self.assertEqual(len(self.provider.requests), attempts)
+        events = read_events(self.owner.journal)
+        self.assertFalse(any(e['type'] in ('compaction_started', 'context_rebased') for e in events))
+        self.assertEqual(len([e for e in events if e['type'] == 'turn_failed']),
+                         int(outcome == 'failed'))
+        self.assertEqual(len([e for e in events if e['type'] == 'turn_interrupted']),
+                         int(outcome == 'cancelled'))
+        self.classic_meter(preview)
+        self.owner.finish(self.owner.initial, b'/exit')
+
+    def test_exact_preview_fallback_retains_input_without_provider_usage(self):
+        self.check_exact_preview_fallback()
+
+    def test_exact_preview_fallback_survives_native_resume(self):
+        self.check_exact_preview_fallback(resumed=True)
+
+    def test_exact_preview_fallback_survives_legacy_resume(self):
+        self.check_exact_preview_fallback(resumed=True)
+
+    def test_exact_preview_fallback_estimates_unreported_output(self):
+        self.check_exact_preview_fallback(output_known=False)
+
+    def test_exact_preview_fallback_rejects_changed_credential(self):
+        self.check_exact_preview_fallback(changed=True)
+
+    def test_exact_preview_fallback_keeps_uncounted_input_unknown(self):
+        self.check_exact_preview_fallback(exact=False)
+
+    def test_exact_preview_fallback_prefers_reported_input_usage(self):
+        self.check_exact_preview_fallback(reported_input=1000)
+
+    def test_exact_preview_fallback_rejects_cancelled_response(self):
+        self.check_exact_preview_fallback(outcome='cancelled', resumed=True)
+
+    def test_exact_preview_fallback_rejects_cancelled_legacy_response(self):
+        self.check_exact_preview_fallback(outcome='cancelled', resumed=True)
+
+    def test_exact_preview_fallback_rejects_failed_response(self):
+        self.check_exact_preview_fallback(outcome='failed', resumed=True)
+
+    def test_exact_preview_fallback_rejects_failed_legacy_response(self):
+        self.check_exact_preview_fallback(outcome='failed', resumed=True)
+
     def test_compaction_exact_preflight_overrides_credential_incompatible_usage(self):
         self.check_usage_scope(exact=True)
 

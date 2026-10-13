@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Retain a completed response's exact input count in the context preview when
+  provider input usage is absent. Reload and resume keep this count under the
+  same continuation binding; provider usage takes precedence when reported.
+
 - Release parent-directory descriptors after native file writes and edits, including
   rejected edits. Long sessions retain descriptor capacity for later files and TLS.
 

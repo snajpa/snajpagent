@@ -50,6 +50,7 @@ struct context_builder {
     bool compact_current;
     bool compact_stopped;
     struct snag_input_observation display_anchor, display_start;
+    bool display_start_exact;
     uint64_t display_tokens;
     size_t display_count;
     size_t base_request_count;
@@ -2471,6 +2472,9 @@ context_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
     if (!strcmp(type, "response_started")) {
         struct snag_input_observation *anchor = &builder->display_start;
         memset(anchor, 0, sizeof(*anchor));
+        builder->display_start_exact =
+            !strcmp(snag_json_string(data, "count_method"), "exact") &&
+            snag_json_integer_u64(data, "input_tokens_bound", &anchor->input_tokens) == 0;
         const char *compact = snag_json_string(data, "compact_id");
         anchor->valid =
             snag_strcpy(anchor->provider, sizeof(anchor->provider),
@@ -2516,12 +2520,14 @@ context_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
         if (rc == 0 && builder->continuation_scope && scope &&
             !strcmp(builder->continuation_scope, scope) &&
             snag_response_usage_from_json(json_object_get(data, "usage"), &usage) == 0 &&
-            usage.input_known) {
+            (usage.input_known || builder->display_start_exact)) {
+            uint64_t input = usage.input_known ? usage.input_tokens
+                                               : builder->display_start.input_tokens;
             uint64_t output = usage.output_known ? usage.output_tokens : 0u;
             builder->display_anchor = builder->display_start;
-            builder->display_tokens = output > UINT64_MAX - usage.input_tokens
+            builder->display_tokens = output > UINT64_MAX - input
                                           ? UINT64_MAX
-                                          : usage.input_tokens + output;
+                                          : input + output;
             /* Unmeasured output remains outside the known input boundary. */
             builder->display_count = usage.output_known
                                          ? json_array_size(builder->request_input)
@@ -3810,6 +3816,7 @@ context_copy_events(
     dest->input_timed = source->input_timed;
     dest->tool_result_bytes = source->tool_result_bytes;
     dest->display_start = source->display_start;
+    dest->display_start_exact = source->display_start_exact;
     dest->display_anchor = source->display_anchor;
     dest->display_tokens = source->display_tokens;
     if (source->display_count >= start &&

@@ -287,7 +287,8 @@ durable measured input observations. Compute its rounded-up percentage against
 the effective hard input budget. A fresh unused session shows zero. Known capacity
 uses the current request count or a marked estimate; unavailable capacity or a
 failed display projection shows unknown. Completed input usage replaces the
-input estimate; known output usage replaces the output estimate. Missing output
+input estimate; an exact preflight remains usable when the completed response
+omits input usage. Known output usage replaces the output estimate. Missing output
 usage leaves a marked visible-output estimate. Before completion, retained SSE text and argument
 bytes estimate output at four bytes per token; unreported hidden reasoning is
 accounted when provider usage arrives.
@@ -299,12 +300,14 @@ changes also rebuild a preview. Resolve its continuation scope from the selected
 provider, upstream model and offline credential snapshot, using the ordinary
 request binding. Successful configuration reload invalidates the old preview;
 previewing never refreshes credentials or contacts the provider.
-Anchor display estimates in completed input usage with matching provider,
+Anchor display estimates in completed input usage, or that response's exact
+preflight when input usage is absent, with matching provider,
 model, effort, source, compaction lineage and recorded continuation binding.
 Known output usage joins the anchor. When output usage is missing, retain the
 known input boundary before that response's output items and estimate their
 visible bytes, excluding encrypted payloads. Reload and resume preserve this
-input-only anchor under the same binding.
+input-only or exact-preflight anchor under the same binding.
+An interrupted or failed response does not supply a new completed display anchor.
 A changed account or API key falls back to the rebuilt request's visible-byte
 estimate. The builder retains compatible usage and
 its item boundary; newly projected conversation items add four bytes per token.
@@ -334,7 +337,7 @@ request identity from the existing retained event seam; a later response with
 unknown input usage keeps the earlier measurement's scope. Input-only usage and
 exact preflight retained through a completed response remain eligible under
 that binding. This check adds no stored fields or credential refresh.
-Display anchors also require known output usage for their combined estimate.
+Display anchors include known output usage or estimate the unmeasured visible output.
 Status may retain a historical observation for diagnostics, but must label it
 ineligible rather than implying current occupancy.
 
