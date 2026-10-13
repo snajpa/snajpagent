@@ -1496,6 +1496,88 @@ class ContextMeterTests(unittest.TestCase):
     def test_compaction_cancellation_retains_previous_context(self):
         self.check_compaction_control_interrupt(cancelled=True)
 
+    def check_post_turn_compaction_interrupt(self, action='reload'):
+        config = self.owner.config.read_text().replace('auto_compact_input_tokens = 0',
+                                                      'auto_compact_input_tokens = 50000')
+        self.owner.config.write_text(config)
+        self.configure()
+        self.addCleanup(self.release.set)
+        compacts = []
+
+        def respond(handler, request, sequence):
+            body = self.provider.response_body(sequence, f'post-turn-answer-{sequence}')
+            if sequence == 1:
+                body = body.replace('"input_tokens":1', '"input_tokens":60000').replace(
+                    '"total_tokens":2', '"total_tokens":60001')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        def compact(handler, request):
+            compacts.append(request)
+            self.ready.set()
+            self.release.wait(10)
+            self.provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
+                {'type': 'compaction', 'encrypted_content': 'post-turn-late-capsule'}]}).encode(),
+                content_type='application/json', close_header=True)
+
+        self.provider.runtime_handler = respond
+        self.provider.runtime_compact_handler = compact
+        before = read_events(self.owner.journal)[-1]['seq']
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'answer before interrupting post-turn compaction\r')
+        self.assertTrue(self.ready.wait(5), 'post-turn compaction did not start')
+        completed = self.owner.wait_event('turn_completed')
+        started = self.owner.wait_event('compaction_started')
+        response = self.owner.wait_event('response_completed')
+        self.assertEqual(response['data']['usage']['input_tokens'], 60000)
+        self.assertGreater(started['seq'], completed['seq'])
+        self.assertEqual(started['data']['reason'], 'proactive')
+        if action == 'cancel':
+            os.write(self.owner.initial.master, b'\x03')
+        else:
+            config = config.replace('auto_compact_input_tokens = 50000',
+                                    'auto_compact_input_tokens = 0')
+            if action == 'credential':
+                config = config.replace('${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"')
+                self.provider.credential = 'changed-key'
+            self.owner.config.write_text(config)
+            self.owner.config.chmod(0o600)
+            self.command('/configure', 'accepted; applying at the next safe request boundary')
+        self.owner.wait_event('compaction_interrupted')
+        self.release.set()
+        if action != 'cancel':
+            self.owner.initial.until(b'configuration reloaded:')
+            self.owner.wait_event('control_finished')
+        self.owner.initial.until('›'.encode())
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'next small exact request after post-turn interruption\r')
+        self.owner.initial.until(b'post-turn-answer-2')
+        self.owner.initial.until('›'.encode())
+        events = [e for e in read_events(self.owner.journal) if e['seq'] > before]
+        names = [e['type'] for e in events]
+        self.assertEqual(names.count('turn_completed'), 2)
+        self.assertEqual(names.count('compaction_started'), 1)
+        self.assertEqual(names.count('compaction_interrupted'), 1)
+        self.assertEqual(names.count('control_finished'), int(action != 'cancel'))
+        self.assertFalse(any(name in ('turn_failed', 'turn_recovery', 'turn_interrupted',
+            'response_interrupted', 'compaction_completed', 'context_rebased') for name in names))
+        self.assertEqual(len(self.provider.requests), 2)
+        self.assertEqual(len(compacts), 1)
+        self.assertIn('post-turn-answer-1', json.dumps(self.provider.requests[-1]['body']))
+        self.assertNotIn('post-turn-late-capsule', json.dumps(self.provider.requests[-1]['body']))
+        self.owner.finish(self.owner.initial, b'/exit')
+
+    def test_post_turn_compaction_reload_retains_completed_answer(self):
+        self.check_post_turn_compaction_interrupt()
+
+    def test_post_turn_compaction_reload_retains_completed_legacy_answer(self):
+        self.check_post_turn_compaction_interrupt()
+
+    def test_post_turn_compaction_credential_reload_retains_completed_answer(self):
+        self.check_post_turn_compaction_interrupt('credential')
+
+    def test_post_turn_compaction_cancel_retains_completed_answer(self):
+        self.check_post_turn_compaction_interrupt('cancel')
+
     def command(self, text, marker):
         self.owner.initial.output.clear()
         os.write(self.owner.initial.master, (text + '\r').encode())
