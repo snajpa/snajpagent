@@ -161,6 +161,10 @@ model-switched paths share this order:
    remeasure. Every successful chunk must advance source coverage. Keep its
    summary even if a later chunk fails. Repeated source/request hashes or absent
    complete prefixes demonstrate no progress; arbitrary event counts do not.
+   Within one compaction, exact-count overflow or a capacity rejection reduces
+   the source budget strictly. Continue while it decreases; a zero or unchanged
+   budget terminates fitting. This is independent of the owning turn's retry
+   policy and preserves smaller prefixes beyond a fixed number of reductions.
 5. Bound consecutive reductions before a provider response using the existing
    attempt budget. If a usable context still cannot fit, try one explicit minimal
    recovery projection. A fitting summary takes precedence over that fallback.

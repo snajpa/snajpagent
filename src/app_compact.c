@@ -233,7 +233,6 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     uint64_t threshold;
     bool use_exact;
     bool reduced = false;
-    bool generated = false;
     char prior_request[SNAG_SHA256_HEX_LEN + 1u] = {0};
     bool started = false;
     bool native;
@@ -289,7 +288,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
     const struct snag_context_control control = {
         .cancelled = snag_app_context_cancelled, .opaque = app};
-    for (unsigned int selection = 0u; selection < 8u; ++selection) {
+    for (;;) {
         if (snag_app_provider_activity(app, true) < 0) goto out;
         /* The oversized-first exception belongs to the first attempt only: once
          * a rejection has forced a smaller budget, an oversized group must be
@@ -305,7 +304,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             goto out;
         }
         if (build_rc == 1) {
-            if (selection != 0u) {
+            if (reduced) {
                 (void)snag_fail(error, error_size, EOVERFLOW,
                     "no complete history prefix fits the hard context budget");
                 goto out;
@@ -444,10 +443,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                               : run_responses_compaction(app, projection.create_request.value,
                                     credential, &output, error, error_size);
             if (snag_app_provider_activity(app, false) < 0) goto out;
-            if (stage_rc == 0) {
-                generated = true;
-                break;
-            }
+            if (stage_rc == 0) break;
             if (stage_rc == SNAG_PROVIDER_UNSUPPORTED ||
                 stage_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW || stage_rc == SNAG_PROVIDER_REJECTED) {
                 if (commit_rendered(app, "compaction_interrupted",
@@ -468,21 +464,23 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
          * The walker preserves complete groups; identical irreducible input stops. */
         memcpy(prior_request, projection.create_request.sha256, sizeof(prior_request));
         reduced = true;
-        source_budget = projection.model_input.bytes / 2u;
+        uint64_t next_budget = projection.model_input.bytes / 2u;
         /* Floor the halving: below this the builder cannot fit any group and
          * reports the source as irreducible instead of cutting it. The floor
          * must never raise the budget above the source that was just rejected:
-         * a source already below the floor still has to shrink, or every retry
-         * repeats the identical request until the loop gives up and the turn
-         * ends without a compaction. */
-        if (source_budget < SNAG_CONTEXT_COMPACT_FLOOR &&
+         * a source already below the floor still has to shrink. */
+        if (next_budget < SNAG_CONTEXT_COMPACT_FLOOR &&
             projection.model_input.bytes > SNAG_CONTEXT_COMPACT_FLOOR)
-            source_budget = SNAG_CONTEXT_COMPACT_FLOOR;
+            next_budget = SNAG_CONTEXT_COMPACT_FLOOR;
+        /* A strictly smaller positive source budget bounds retries without
+         * abandoning a fitting prefix just beyond an arbitrary attempt count. */
+        if (!next_budget || next_budget >= source_budget) {
+            (void)snag_fail(error, error_size, EOVERFLOW,
+                "compaction source cannot shrink further within the provider context");
+            goto out;
+        }
+        source_budget = next_budget;
         snag_context_projection_free(&projection);
-    }
-    if (!generated) {
-        snprintf(error, error_size, "compaction input still exceeds context after eight attempts");
-        goto out;
     }
     output_tokens_bound = 0u;
     if (snag_context_compact_output_count_request_build(output.value,

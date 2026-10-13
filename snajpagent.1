@@ -3974,7 +3974,9 @@ summary text in its stored message format. Native compaction failures report an
 error and retain the original source and previous compacted context. An unavailable
 native endpoint does not switch to ordinary-text summarization. Exact preflight
 counts or explicit provider capacity rejections can select a smaller source.
-Other failures retain the source and previous context. Manual
+Each reduction must lower the source budget; fitting continues until a prefix
+fits or cannot shrink further. Other failures retain the source and previous
+context. Manual
 .B /compact
 is accepted at idle and during active work.  It reports when compaction starts,
 waits for a complete context boundary, finishes, or is interrupted.  An idle

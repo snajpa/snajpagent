@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Fit compaction sources while their byte budget keeps decreasing, including
+  prefixes that need more than eight reductions. Stop on an irreducible source
+  and retain the prior context when fitting fails.
+
 - Reuse display usage only under the completed response's continuation binding.
   After an account or API-key change, estimate the rebuilt request instead of
   applying a measurement of the earlier encrypted context.
