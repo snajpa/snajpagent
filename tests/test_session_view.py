@@ -1375,6 +1375,127 @@ class ContextMeterTests(unittest.TestCase):
     def test_compaction_unmeasured_response_keeps_measurement_binding(self):
         self.check_usage_scope(unmeasured=True)
 
+    def check_compaction_control_interrupt(self, cancelled=False, credential=False, retry=False):
+        compacts, counts = [], []
+        self.addCleanup(self.release.set)
+        config = self.owner.config.read_text().replace('max_input_tokens = 100000',
+                                                      'max_input_tokens = 50000')
+        self.owner.config.write_text(config)
+        self.configure()
+
+        def respond(handler, request, sequence):
+            self.provider.reply(handler, self.provider.response_body(
+                sequence, f'control-answer-{sequence}').encode(), close_header=True)
+
+        def count(handler, request):
+            text = json.dumps(request)
+            over = ('continue after control interruption' in text and
+                    'continue with retained context after cancellation' not in text)
+            tokens = 60000 if over else 1000
+            if any(item.get('type') == 'compaction' for item in request['input']):
+                tokens = 1000
+            counts.append(tokens)
+            self.provider.reply(handler, json.dumps({'object': 'response.input_tokens',
+                'input_tokens': tokens}).encode(), content_type='application/json', close_header=True)
+
+        def compact(handler, request):
+            compacts.append(request)
+            number = len(compacts)
+            if number == 1:
+                self.ready.set()
+                self.release.wait(10)
+            self.provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
+                {'type': 'compaction', 'encrypted_content': f'control-summary-{number}'}]
+                }).encode(), content_type='application/json', close_header=True)
+
+        self.provider.runtime_handler = respond
+        self.provider.runtime_count_handler = count
+        self.provider.runtime_compact_handler = compact
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'keep completed history before control\r')
+        self.owner.initial.until(b'control-answer-1')
+        self.owner.wait_event('turn_completed')
+        self.owner.initial.until('›'.encode())
+        before = read_events(self.owner.journal)[-1]['seq']
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'continue after control interruption\r')
+        self.assertTrue(self.ready.wait(5), 'the over-budget request did not compact')
+        self.owner.wait_event('compaction_started')
+        if cancelled:
+            os.write(self.owner.initial.master, b'\x03')
+        else:
+            if not retry:
+                config = config.replace('max_input_tokens = 50000', 'max_input_tokens = 100000')
+            if credential:
+                config = config.replace('${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"')
+                self.provider.credential = 'changed-key'
+            self.owner.config.write_text(config)
+            self.owner.config.chmod(0o600)
+            self.command('/configure', 'accepted; applying at the next safe request boundary')
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            events = [e for e in read_events(self.owner.journal) if e['seq'] > before]
+            if any(e['type'] in ('turn_completed', 'turn_failed', 'turn_interrupted')
+                   for e in events):
+                break
+            time.sleep(.02)
+        self.release.set()
+        failures = [e['data'] for e in events if e['type'] in ('turn_failed', 'turn_recovery')]
+        self.assertEqual(failures, [], 'control interruption was treated as a context failure')
+        self.assertEqual(len([e for e in events if e['type'] == 'compaction_interrupted']), 1)
+        self.assertEqual(len([e for e in events if e['type'] == 'compaction_completed']), int(retry))
+        self.assertFalse(any(e['type'] == 'context_rebased' for e in events))
+        self.assertEqual(len(compacts), 2 if retry else 1)
+        if cancelled:
+            self.assertEqual(len([e for e in events if e['type'] == 'turn_interrupted']), 1)
+            self.assertFalse(any(e['type'] in ('response_started', 'turn_completed')
+                                 for e in events))
+            self.assertEqual(len(self.provider.requests), 1)
+            self.owner.initial.output.clear()
+            os.write(self.owner.initial.master, b'continue with retained context after cancellation\r')
+            self.owner.initial.until(b'control-answer-2')
+            self.owner.initial.until('›'.encode())
+            self.assertIn('keep completed history before control',
+                          json.dumps(self.provider.requests[-1]['body']))
+            self.assertNotIn('control-summary-1', json.dumps(self.provider.requests[-1]['body']))
+            self.assertEqual(len(compacts), 1)
+        else:
+            self.assertEqual(len([e for e in events if e['type'] == 'turn_completed']), 1)
+            started = [e['data'] for e in events if e['type'] == 'response_started']
+            self.assertEqual(len(started), 1)
+            self.assertEqual(started[0]['input_tokens_bound'], 1000 if retry else 60000)
+            self.assertGreaterEqual(started[0]['hard_input_tokens'], 1000 if retry else 60000)
+            self.assertEqual(started[0]['count_method'], 'exact')
+            self.assertEqual(counts.count(60000), 2)
+            self.assertEqual(len(self.provider.requests), 2)
+            self.assertIn('keep completed history before control',
+                          json.dumps(compacts[-1] if retry else self.provider.requests[-1]['body']))
+            self.assertNotIn('control-summary-1',
+                             json.dumps(self.provider.requests[-1]['body']))
+            if retry:
+                self.assertIn('control-summary-2', json.dumps(self.provider.requests[-1]['body']))
+            self.assertEqual(len([e for e in events if e['type'] == 'control_started']), 1)
+            self.assertEqual(len([e for e in events if e['type'] == 'control_finished']), 1)
+        self.owner.finish(self.owner.initial, b'/exit')
+
+    def test_compaction_configure_interrupt_resumes_current_turn(self):
+        self.check_compaction_control_interrupt()
+
+    def test_compaction_configure_interrupt_resumes_legacy_turn(self):
+        self.check_compaction_control_interrupt()
+
+    def test_compaction_credential_reload_interrupt_resumes_current_turn(self):
+        self.check_compaction_control_interrupt(credential=True)
+
+    def test_compaction_unchanged_reload_retries_interrupted_request(self):
+        self.check_compaction_control_interrupt(retry=True)
+
+    def test_compaction_unchanged_reload_retries_interrupted_legacy_request(self):
+        self.check_compaction_control_interrupt(retry=True)
+
+    def test_compaction_cancellation_retains_previous_context(self):
+        self.check_compaction_control_interrupt(cancelled=True)
+
     def command(self, text, marker):
         self.owner.initial.output.clear()
         os.write(self.owner.initial.master, (text + '\r').encode())

@@ -5990,7 +5990,11 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                     sizeof(over_budget_request_hash));
             compact_rc = snag_app_compact_before_response(app, &credential,
                 projection.input_tokens_bound, count_method, &compacted, error, sizeof(error));
-            if (compact_rc == 1 && app->steering_requested) goto steered_before_response;
+            if (compact_rc == 1 &&
+                (app->steering_requested || app->control_requested ||
+                    app->model_switch_requested)) {
+                goto steered_before_response;
+            }
             if (compact_rc == 2 && app->interrupt_requested) goto user_interrupted;
             if (compact_rc != 0) {
                 /* The consecutive-failure bound is terminal for this turn:

@@ -3042,6 +3042,8 @@ when the configuration file is unchanged. Use
 .B /model cache
 to fetch a new catalog from providers. MCP configuration and catalog replacements
 apply at the next turn; an unfinished turn retains its pinned tool contract.
+During pre-response compaction, the reload interrupts the compact operation,
+retains previous context and resumes request preparation with the reloaded settings.
 Stop local audio before reloading.
 .TP
 .B /config

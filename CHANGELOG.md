@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Resume request preparation when a deferred configuration reload interrupts
+  pre-response compaction. Retain previous context and remeasure with the reloaded
+  settings instead of reporting a compaction failure.
+
 - Align the context and architecture contracts and manual checkpoint reference
   with current native storage, retaining the legacy JSONL recovery rules.
 

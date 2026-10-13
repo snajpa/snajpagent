@@ -178,6 +178,9 @@ model-switched paths share this order:
    commit `response_started` before network I/O. This records an attempt, not
    provider acceptance or success. A rejected or interrupted compact operation
    never records `compaction_completed`.
+   A deferred control interrupting pre-response compaction returns to preparation:
+   apply the control at the safe boundary, retain prior context and remeasure under
+   the resulting settings. User cancellation still ends the turn.
 7. A successful complete response advances history and resets consecutive
    preparation failure/progress guards. Failed responses retain already committed
    public output and completed effects without admitting proposed calls.
