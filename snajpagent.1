@@ -3939,7 +3939,11 @@ new conversation items at four encoded bytes per token. Encrypted continuation
 size does not inflate this estimate. Without compatible usage, visible request
 bytes supply the approximation; opaque context remains uncounted until provider
 usage is available. Streaming growth uses four retained text bytes per token.
-Resume and selection or source changes rebuild the display estimate.
+Resume and selection or source changes rebuild the display estimate using the
+selected provider, upstream model, endpoint and current credential snapshot.
+Successful configuration reload invalidates the previous preview, including after
+an account or API-key change. Previews stay offline and use the same encrypted
+continuation binding as the next request.
 Unknown capacity or an unavailable context projection shows ?.
 These estimates serve presentation. Request admission uses exact counts, compatible
 provider usage and actual capacity rejections, including when a model switch

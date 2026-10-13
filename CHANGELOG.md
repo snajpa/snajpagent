@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Bind idle context previews to the selected provider, model, endpoint and
+  credential snapshot. Refresh the preview after configuration reload so an
+  incompatible encrypted summary cannot make the next-request meter look smaller.
+  Preview construction stays offline.
+
 - Select compaction sources by their wire limit and actual capacity checks.
   Remove byte/token-ratio cuts and the extra ratio-triggered condensation of
   readable summaries; retain exact-count and provider-rejection recovery.

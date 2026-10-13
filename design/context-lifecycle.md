@@ -277,7 +277,11 @@ accounted when provider usage arrives.
 Compaction completion invalidates the prior display binding and measures the
 adopted context through the same builder as a response request, allowing an idle
 preview without request admission or checkpoint writes. Resume and selection/source
-changes also rebuild a preview. Anchor display estimates in completed input/output
+changes also rebuild a preview. Resolve its continuation scope from the selected
+provider, upstream model and offline credential snapshot, using the ordinary
+request binding. Successful configuration reload invalidates the old preview;
+previewing never refreshes credentials or contacts the provider.
+Anchor display estimates in completed input/output
 usage with matching provider,
 model, effort, source and compaction lineage. The builder retains that usage and
 its item boundary; newly projected conversation items add four bytes per token.

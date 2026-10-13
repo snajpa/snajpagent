@@ -732,11 +732,22 @@ context_preview(struct app_state *app, const struct snag_provider_config *provid
         .goal_recovery_rebase = app->history_recovery_rebase,
         .mcp_tools = snag_mcp_tools(app->mcp)};
     struct snag_input_observation input = {0};
+    struct snag_auth_tokens tokens = {0};
     json_t *steering = snag_app_steering_snapshot(&app->session);
+    char continuation_scope[SNAG_SHA256_HEX_LEN + 1u];
     char error[256] = {0};
-    int rc = snag_context_build(&app->session, model, effort, app->session.active_cycle + 1u,
+    int rc = -1;
+
+#ifndef SNAJPAGENT_TEST_FIXTURE
+    if (snag_auth_load(app->store.root_fd, provider, &tokens, error, sizeof(error)) != 0)
+        goto out;
+#endif
+    if (snag_context_continuation_scope(provider, model, &tokens.credential,
+            continuation_scope) < 0)
+        goto out;
+    rc = snag_context_build(&app->session, model, effort, app->session.active_cycle + 1u,
         steering, capacity->max_output_tokens, capacity->max_output_tokens != 0u, app->config,
-        app->session.compact_scope, &app->turn_instructions, NULL, &projection, error,
+        continuation_scope, &app->turn_instructions, NULL, &projection, error,
         sizeof(error), &control);
     if (!rc && snag_strcpy(input.provider, sizeof(input.provider), provider->name) &&
         snag_strcpy(input.model, sizeof(input.model), model) &&
@@ -753,6 +764,8 @@ context_preview(struct app_state *app, const struct snag_provider_config *provid
         app->prompt_context_output_tokens = 0u;
         app->prompt_context_output_known = true;
     } else rc = -1;
+out:
+    snag_auth_clear(&tokens);
     snag_context_projection_free(&projection);
     json_decref(steering);
     return rc;
@@ -2877,6 +2890,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     previous = *app->config;
     *app->config = candidate;
     memset(&candidate, 0, sizeof(candidate));
+    app->prompt_context.valid = false;
     if (cache.providers) {
         snag_model_cache_free(&app->model_cache);
         app->model_cache = cache;

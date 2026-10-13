@@ -1126,6 +1126,96 @@ class ContextMeterTests(unittest.TestCase):
         self.assertEqual(len(self.provider.requests), 1)
         self.owner.finish(resumed, b'/exit')
 
+    def test_compacted_preview_uses_selected_binding(self):
+        self.owner.config.write_text(self.owner.config.read_text().replace(
+            'exact_token_count = true', 'exact_token_count = false').replace(
+            '[ui]\n', '[ui]\nresume_history_turns=0\n'))
+        self.configure()
+        self.provider.runtime_handler = lambda handler, request, sequence: self.provider.reply(
+            handler, self.provider.response_body(sequence, 'archived answer ' + 'x' * 300000).encode(),
+            close_header=True)
+        counts, compacts = [], []
+        self.provider.runtime_count_handler = lambda handler, request: counts.append(request)
+
+        def compact(handler, request):
+            compacts.append(request)
+            self.provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
+                {'type': 'compaction', 'encrypted_content': 'opaque-preview'}]}).encode(),
+                content_type='application/json')
+
+        self.provider.runtime_compact_handler = compact
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.status('stored')
+        result = subprocess.run(self.owner.prefix + ['--resume', self.owner.sid, '-e', '--',
+                                                    'remember the archived answer'],
+                                cwd=self.owner.root, env={**os.environ, **self.owner.env},
+                                text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.owner.initial = self.owner.start(['--resume', self.owner.sid])
+        self.owner.initial.until('›'.encode(), 10)
+        peer = self.owner.view()
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'/compact\r')
+        self.owner.initial.until(b'Compacted')
+        prompt = self.wait_meter(peer, lambda value: value.startswith('~'))
+        self.assertLess(int(prompt['values'][5][1:]), 20)
+        catalogs = self.provider.catalog_paths()
+        self.command('/model fake/two-model/high:100000', 'selected=100000')
+        prompt = peer.until('state', lambda message:
+                            message['state']['prompt']['values'][1] == 'two-model' and
+                            not message['state']['prompt']['active'])['state']['prompt']
+        value = prompt['values'][5]
+        self.assertTrue(value.startswith('~'), value)
+        self.assertGreaterEqual(int(value[1:]), 70, 'preview kept the incompatible opaque summary')
+        self.classic_meter(value)
+        self.command('/model fake/host-model/high:100000', 'selected=100000')
+        prompt = peer.until('state', lambda message:
+                            message['state']['prompt']['values'][1] == 'host-model' and
+                            not message['state']['prompt']['active'])['state']['prompt']
+        self.assertLess(int(prompt['values'][5][1:]), 20)
+        config = self.owner.config.read_text()
+        self.owner.config.write_text(config.replace('${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"'))
+        self.owner.config.chmod(0o600)
+        self.command('/configure', 'configuration reloaded:')
+        self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) >= 70)
+        self.owner.config.write_text(config)
+        self.command('/configure', 'configuration reloaded:')
+        self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) < 20)
+        self.owner.config.write_text(config.replace(
+            f':{self.provider.port}/v1', f':{self.provider.port}/other'))
+        self.command('/configure', 'configuration reloaded:')
+        self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) >= 70)
+        self.owner.config.write_text(config)
+        self.command('/configure', 'configuration reloaded:')
+        self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) < 20)
+        self.owner.config.write_text(config + (
+            f'\n[provider offline]\nbase_url=http://127.0.0.1:{self.provider.port}/v1\n'
+            'api_key=missing-preview-key\n'))
+        self.command('/configure', 'configuration reloaded:')
+        self.command('/model offline/host-model/high:100000', 'selected=100000')
+        self.wait_meter(peer, lambda value: value == '?')
+        self.command('/model fake/host-model/high:100000', 'selected=100000')
+        self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) < 20)
+        self.owner.config.write_text(config)
+        self.command('/configure', 'configuration reloaded:')
+        self.assertEqual(counts, [])
+        self.assertEqual(len(compacts), 1)
+        self.assertEqual(len(self.provider.requests), 1)
+        self.assertEqual(self.provider.catalog_paths(), catalogs)
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.initial = self.owner.start(['--resume', self.owner.sid, '-m',
+                                               'fake/two-model/high:100000'])
+        self.owner.initial.until('›'.encode(), 10)
+        resumed = self.owner.view()
+        self.wait_meter(resumed, lambda value: value.startswith('~') and int(value[1:]) >= 70)
+        self.assertEqual(len(self.provider.requests), 1)
+        self.assertEqual(len(compacts), 1)
+        self.assertEqual(counts, [])
+        self.owner.finish(self.owner.initial, b'/exit')
+
+    def test_compacted_preview_uses_selected_binding_after_legacy_resume(self):
+        self.test_compacted_preview_uses_selected_binding()
+
     def command(self, text, marker):
         self.owner.initial.output.clear()
         os.write(self.owner.initial.master, (text + '\r').encode())
