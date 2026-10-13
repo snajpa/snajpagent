@@ -133,6 +133,8 @@ int snag_response_graph_classify(const struct snag_response_graph *graph,
     struct snag_graph_decision *decision, char *error, size_t error_size);
 json_t *snag_response_graph_json(const struct snag_response_graph *graph);
 int snag_response_usage_valid(const struct snag_response_usage *usage);
+/* Known aggregate output, or its independently reported hidden-reasoning subset. */
+uint64_t snag_response_usage_output_floor(const struct snag_response_usage *usage);
 /* Positive rejection facts, zero for absence; result is positive or unknown. */
 uint64_t snag_capacity_safety_ceiling(uint64_t context_limit_tokens,
     uint64_t requested_input_tokens, uint64_t requested_output_tokens);

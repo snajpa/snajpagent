@@ -3931,8 +3931,10 @@ against the effective input budget. An exact outgoing count refreshes it before
 provider output. Streamed text and tool arguments increase a display estimate.
 Completed input usage replaces the input estimate. When a completed response
 omits input usage, its exact preflight remains usable. Known output usage replaces
-the output estimate. Missing output usage leaves a marked visible-output estimate,
-even when no visible output was generated. A reported zero is known output usage.
+the output estimate and already includes reasoning tokens. When aggregate output
+usage is missing, add any reported reasoning tokens to the visible-output estimate.
+The meter stays marked as estimated, even with no visible output. A reported zero
+is known output usage.
 Encrypted continuation bytes are excluded from
 streaming estimates because their encoded size does not measure generated tokens.
 A leading ~ marks an estimate, including while an exact input count is combined
@@ -3942,7 +3944,8 @@ Compaction refreshes the meter immediately from the adopted context, including i
 summary, retained history and request overhead. Known-capacity models show an
 estimate while an exact count is unavailable. The estimate starts from compatible
 completed input usage, or that response's exact preflight when input usage is
-absent. Known output usage joins that anchor; unmeasured output
+absent. Known output usage joins that anchor; if only reasoning usage is known,
+retain it while estimating visible output. Unmeasured output
 and new conversation items add four encoded bytes per token. Encrypted continuation
 size does not inflate this estimate. Without compatible usage, visible request
 bytes supply the approximation; opaque context remains uncounted until provider

@@ -2523,7 +2523,7 @@ context_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
             (usage.input_known || builder->display_start_exact)) {
             uint64_t input = usage.input_known ? usage.input_tokens
                                                : builder->display_start.input_tokens;
-            uint64_t output = usage.output_known ? usage.output_tokens : 0u;
+            uint64_t output = snag_response_usage_output_floor(&usage);
             builder->display_anchor = builder->display_start;
             builder->display_tokens = output > UINT64_MAX - input
                                           ? UINT64_MAX

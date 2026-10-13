@@ -288,10 +288,12 @@ the effective hard input budget. A fresh unused session shows zero. Known capaci
 uses the current request count or a marked estimate; unavailable capacity or a
 failed display projection shows unknown. Completed input usage replaces the
 input estimate; an exact preflight remains usable when the completed response
-omits input usage. Known output usage replaces the output estimate. Missing output
-usage leaves a marked visible-output estimate, including when no visible output
-was generated. A reported zero is known output usage. Before completion, retained
-SSE text and argument bytes estimate output at four bytes per token; unreported hidden reasoning is
+omits input usage. Known aggregate output usage replaces the output estimate and
+already includes reasoning tokens. Without an aggregate output measurement,
+retain known reasoning usage and estimate visible output; keep the meter marked
+as estimated even with no visible output. A reported zero is known output usage.
+Before completion, retained SSE text and argument bytes estimate output at four
+bytes per token; unreported hidden reasoning is
 accounted when provider usage arrives.
 
 Compaction completion invalidates the prior display binding and measures the
@@ -306,7 +308,10 @@ preflight when input usage is absent, with matching provider,
 model, effort, source, compaction lineage and recorded continuation binding.
 Known output usage joins the anchor. When output usage is missing, retain the
 known input boundary before that response's output items and estimate their
-visible bytes, excluding encrypted payloads. Reload and resume preserve this
+visible bytes, excluding encrypted payloads, alongside any known reasoning usage.
+The live meter and idle builder share the same measured-output floor: use the
+reported aggregate, otherwise its known reasoning component, otherwise zero.
+Reload and resume preserve this
 input-only or exact-preflight anchor under the same binding.
 An interrupted or failed response does not supply a new completed display anchor.
 A changed account or API key falls back to the rebuilt request's visible-byte

@@ -455,6 +455,25 @@ main(void)
         usage.total_tokens = 99u;
         assert(snag_response_usage_valid(&usage) < 0);
     }
+    {
+        struct snag_response_usage usage = {.reasoning_tokens = 5000u};
+        assert(snag_response_usage_output_floor(&usage) == 0u);
+        usage.reasoning_known = true;
+        assert(snag_response_usage_valid(&usage) == 0);
+        assert(snag_response_usage_output_floor(&usage) == 5000u);
+        usage.output_tokens = 6000u;
+        usage.output_known = true;
+        assert(snag_response_usage_valid(&usage) == 0);
+        assert(snag_response_usage_output_floor(&usage) == 6000u);
+        usage.output_tokens = 4999u;
+        assert(snag_response_usage_valid(&usage) < 0);
+        usage.reasoning_tokens = 0u;
+        usage.output_tokens = 0u;
+        assert(snag_response_usage_valid(&usage) == 0);
+        assert(snag_response_usage_output_floor(&usage) == 0u);
+        usage.output_known = false;
+        assert(snag_response_usage_output_floor(&usage) == 0u);
+    }
 
     /* A response may carry any number of calls and items. */
     {

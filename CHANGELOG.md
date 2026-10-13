@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep reported reasoning tokens in live and rebuilt context meters when aggregate
+  output usage is absent. Estimate the visible remainder; a reported output total
+  takes precedence and is not counted twice.
+
 - Mark completed context meters as estimated when output usage is absent, even
   with no visible output. Keep provider-reported zero output as known usage.
 

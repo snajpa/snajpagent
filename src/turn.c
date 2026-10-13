@@ -189,6 +189,13 @@ snag_response_usage_valid(const struct snag_response_usage *usage)
     return 0;
 }
 
+uint64_t
+snag_response_usage_output_floor(const struct snag_response_usage *usage)
+{
+    if (usage->output_known) return usage->output_tokens;
+    return usage->reasoning_known ? usage->reasoning_tokens : 0u;
+}
+
 json_t *
 snag_response_usage_json(const struct snag_response_usage *usage)
 {

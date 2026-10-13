@@ -738,7 +738,7 @@ context_observe(struct app_state *app, const char *type, const json_t *data)
         }
         if (!usage.output_known) app->prompt_context_estimated = true;
         app->prompt_context_output_known = usage.output_known;
-        app->prompt_context_output_tokens = usage.output_tokens;
+        app->prompt_context_output_tokens = snag_response_usage_output_floor(&usage);
     }
 }
 
@@ -834,10 +834,12 @@ format_context_meter(struct app_state *app, bool active, char meter[32u])
         return 0;
     }
     used = app->prompt_context.input_tokens;
-    uint64_t output = app->prompt_context_output_known
-                          ? app->prompt_context_output_tokens
-                          : app->prompt_context_output_bytes / 4u +
-                                (app->prompt_context_output_bytes % 4u != 0u);
+    uint64_t output = app->prompt_context_output_tokens;
+    if (!app->prompt_context_output_known) {
+        uint64_t visible = app->prompt_context_output_bytes / 4u +
+                           (app->prompt_context_output_bytes % 4u != 0u);
+        output = visible > UINT64_MAX - output ? UINT64_MAX : output + visible;
+    }
     used = output > UINT64_MAX - used ? UINT64_MAX : used + output;
     hard = capacity->hard_input_tokens;
     if (used >= hard) {

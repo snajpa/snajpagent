@@ -1540,7 +1540,8 @@ class ContextMeterTests(unittest.TestCase):
     def test_exact_preview_fallback_rejects_failed_legacy_response(self):
         self.check_exact_preview_fallback(outcome='failed', resumed=True)
 
-    def check_quiet_completion_meter(self, input_known=True, output_known=False):
+    def check_output_usage_meter(self, input_known=True, output_known=False,
+                                 output_tokens=0, reasoning_tokens=None, text='', preview_only=False):
         self.owner.config.write_text(self.owner.config.read_text() +
             f'[irc]\nlisten = 127.0.0.1:{harness.free_loopback_port()}\n')
         self.configure()
@@ -1554,10 +1555,12 @@ class ContextMeterTests(unittest.TestCase):
         def respond(handler, request, sequence):
             self.ready.set()
             self.release.wait(10)
-            body = self.provider.response_body(sequence, '').replace(
+            body = self.provider.response_body(sequence, text).replace(
                 '"input_tokens":1', '"input_tokens":60000' if input_known else '"input_tokens":null')
             body = body.replace('"output_tokens":1',
-                                '"output_tokens":0' if output_known else '"output_tokens":null')
+                                '"output_tokens":' + json.dumps(output_tokens if output_known else None) +
+                                ',"output_tokens_details":{"reasoning_tokens":' +
+                                json.dumps(reasoning_tokens) + '}')
             body = body.replace('"total_tokens":2', '"total_tokens":null')
             self.provider.reply(handler, body.encode(), close_header=True)
 
@@ -1569,54 +1572,102 @@ class ContextMeterTests(unittest.TestCase):
         self.owner.wait_event('response_started')
         self.wait_meter(peer, lambda value: value == '60')
         self.release.set()
-        self.owner.wait_event('turn_completed_silent')
+        self.owner.wait_event('turn_completed' if text else 'turn_completed_silent')
         peer = self.owner.view()
-        completed_meter = self.wait_meter(peer, lambda value: value in ('60', '~60'))['values'][5]
+        completed_meter = self.wait_meter(peer, lambda value:
+            value.lstrip('~').isdigit() and int(value.lstrip('~')) >= 60)['values'][5]
         events = read_events(self.owner.journal)
         completed = [e for e in events if e['type'] == 'response_completed']
         self.assertEqual(len(completed), 1)
-        self.assertEqual(completed[0]['data']['items'], [])
+        self.assertEqual(bool(completed[0]['data']['items']), bool(text))
         self.assertEqual(completed[0]['data']['usage']['input_tokens'], 60000 if input_known else None)
-        self.assertEqual(completed[0]['data']['usage']['output_tokens'], 0 if output_known else None)
-        self.assertEqual(completed_meter, '60' if output_known else '~60',
-                         'completion confused unknown output usage with measured zero')
-        self.classic_meter(completed_meter)
+        self.assertEqual(completed[0]['data']['usage']['output_tokens'],
+                         output_tokens if output_known else None)
+        self.assertEqual(completed[0]['data']['usage']['reasoning_tokens'], reasoning_tokens)
+        output = output_tokens if output_known else (
+            (reasoning_tokens or 0) + (len(text.encode()) + 3) // 4)
+        percent = (60000 + output + 999) // 1000
+        if not preview_only:
+            expected = str(percent) if output_known else '~' + str(percent)
+            self.assertEqual(completed_meter, expected,
+                             'completion discarded known output usage or counted it twice')
+            self.classic_meter(completed_meter)
         self.command('/configure', 'configuration reloaded:')
         self.owner.initial.until_after(b'configuration reloaded:', b'METER ')
         peer = self.owner.view()
         preview = self.wait_meter(peer, lambda value: value.startswith('~'))['values'][5]
-        self.assertGreaterEqual(int(preview[1:]), 60)
-        self.assertLess(int(preview[1:]), 65)
+        self.assertGreaterEqual(int(preview[1:]), percent, 'preview discarded known output usage')
+        self.assertLess(int(preview[1:]), percent + 5, 'preview counted output usage twice')
         self.assertEqual(len(counts), 1, 'preview performed another count request')
         self.assertEqual(len(self.provider.requests), 1, 'preview submitted another response')
-        self.assertFalse(any(e['type'] in ('response_output', 'tool_started', 'compaction_started',
+        self.assertEqual(any(e['type'] == 'response_output' for e in read_events(self.owner.journal)),
+                         bool(text))
+        self.assertFalse(any(e['type'] in ('tool_started', 'compaction_started',
                                           'turn_failed', 'turn_recovery')
                              for e in read_events(self.owner.journal)))
         self.owner.finish(self.owner.initial, b'/exit')
 
     def test_quiet_meter_marks_missing_output_usage(self):
-        self.check_quiet_completion_meter()
+        self.check_output_usage_meter()
 
     def test_quiet_meter_marks_missing_output_usage_legacy(self):
-        self.check_quiet_completion_meter()
+        self.check_output_usage_meter()
 
     def test_quiet_meter_marks_missing_output_usage_with_exact_input(self):
-        self.check_quiet_completion_meter(input_known=False)
+        self.check_output_usage_meter(input_known=False)
 
     def test_quiet_meter_marks_missing_output_usage_with_exact_input_legacy(self):
-        self.check_quiet_completion_meter(input_known=False)
+        self.check_output_usage_meter(input_known=False)
 
     def test_quiet_meter_keeps_reported_zero_output_measured(self):
-        self.check_quiet_completion_meter(output_known=True)
+        self.check_output_usage_meter(output_known=True)
 
     def test_quiet_meter_keeps_reported_zero_output_measured_legacy(self):
-        self.check_quiet_completion_meter(output_known=True)
+        self.check_output_usage_meter(output_known=True)
 
     def test_quiet_meter_keeps_reported_zero_output_with_exact_input_measured(self):
-        self.check_quiet_completion_meter(input_known=False, output_known=True)
+        self.check_output_usage_meter(input_known=False, output_known=True)
 
     def test_quiet_meter_keeps_reported_zero_output_with_exact_input_measured_legacy(self):
-        self.check_quiet_completion_meter(input_known=False, output_known=True)
+        self.check_output_usage_meter(input_known=False, output_known=True)
+
+    def test_reasoning_usage_survives_missing_output_total(self):
+        self.check_output_usage_meter(reasoning_tokens=5000)
+
+    def test_reasoning_usage_survives_missing_output_total_legacy(self):
+        self.check_output_usage_meter(reasoning_tokens=5000)
+
+    def test_reasoning_usage_combines_with_exact_input(self):
+        self.check_output_usage_meter(input_known=False, reasoning_tokens=5000)
+
+    def test_reasoning_usage_combines_with_exact_input_legacy(self):
+        self.check_output_usage_meter(input_known=False, reasoning_tokens=5000)
+
+    def test_reasoning_usage_survives_reload_without_output_total(self):
+        self.check_output_usage_meter(reasoning_tokens=5000, preview_only=True)
+
+    def test_reasoning_usage_survives_legacy_reload_without_output_total(self):
+        self.check_output_usage_meter(reasoning_tokens=5000, preview_only=True)
+
+    def test_reasoning_usage_survives_exact_input_reload(self):
+        self.check_output_usage_meter(input_known=False, reasoning_tokens=5000, preview_only=True)
+
+    def test_reasoning_usage_survives_exact_input_legacy_reload(self):
+        self.check_output_usage_meter(input_known=False, reasoning_tokens=5000, preview_only=True)
+
+    def test_reasoning_usage_combines_with_visible_output_estimate(self):
+        self.check_output_usage_meter(reasoning_tokens=5000, text='visible')
+
+    def test_reasoning_usage_combines_with_visible_output_estimate_legacy(self):
+        self.check_output_usage_meter(reasoning_tokens=5000, text='visible')
+
+    def test_reasoning_usage_is_not_added_to_reported_output_total(self):
+        self.check_output_usage_meter(output_known=True, output_tokens=6000,
+                                      reasoning_tokens=5000, text='visible')
+
+    def test_reasoning_usage_is_not_added_to_reported_output_total_legacy(self):
+        self.check_output_usage_meter(output_known=True, output_tokens=6000,
+                                      reasoning_tokens=5000, text='visible')
 
     def test_compaction_exact_preflight_overrides_credential_incompatible_usage(self):
         self.check_usage_scope(exact=True)
