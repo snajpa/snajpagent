@@ -700,6 +700,12 @@ snag_app_measured_input(struct app_state *app, uint64_t *tokens)
     return true;
 }
 
+static uint64_t
+context_bytes_to_tokens(size_t bytes)
+{
+    return (uint64_t)(bytes / 4u) + (bytes % 4u != 0u);
+}
+
 uint64_t
 snag_app_context_estimate(const struct app_state *app,
     const struct snag_provider_config *provider, const char *model, const char *effort,
@@ -709,8 +715,8 @@ snag_app_context_estimate(const struct app_state *app,
     provider_capacity_source_sha256(provider, model, source);
     bool anchored = snag_input_observation_matches(&projection->display_anchor,
         provider->name, model, effort, source, app->session.compact_id);
-    uint64_t bytes = anchored ? projection->display_bytes : projection->display_plain_bytes;
-    uint64_t tokens = bytes / 4u + (bytes % 4u != 0u);
+    size_t bytes = anchored ? projection->display_bytes : projection->display_plain_bytes;
+    uint64_t tokens = context_bytes_to_tokens(bytes);
     if (!anchored) return tokens;
     return tokens > UINT64_MAX - projection->display_tokens
                ? UINT64_MAX
@@ -836,8 +842,7 @@ format_context_meter(struct app_state *app, bool active, char meter[32u])
     used = app->prompt_context.input_tokens;
     uint64_t output = app->prompt_context_output_tokens;
     if (!app->prompt_context_output_known) {
-        uint64_t visible = app->prompt_context_output_bytes / 4u +
-                           (app->prompt_context_output_bytes % 4u != 0u);
+        uint64_t visible = context_bytes_to_tokens(app->prompt_context_output_bytes);
         output = visible > UINT64_MAX - output ? UINT64_MAX : output + visible;
     }
     used = output > UINT64_MAX - used ? UINT64_MAX : used + output;
