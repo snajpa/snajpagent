@@ -3094,8 +3094,9 @@ selection overrides a configured model-limit context for the session, is
 recorded in the session log, and is restored on resume.  The output
 reservation, client percentage and proactive compaction stay derived from the
 selected window. Compatible measured usage above the hard input budget or at
-an enabled automatic-compaction threshold prompts advice that the next request
-compacts first. During
+an enabled automatic-compaction threshold prompts a notice about the last
+measurement. Compaction depends on the next request's accounting: an exact
+preflight count that fits can supersede that prior usage and skip compaction. During
 active work the command ends the current response and rebuilds the turn under
 the new window, retaining conversation and completed tool results.
 Independent advertised input ceilings apply to each selection. A ceiling above

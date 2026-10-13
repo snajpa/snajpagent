@@ -53,7 +53,10 @@ routine reopen reads that boundary and its suffix, not the lifetime prefix.
    policy path; context reduction must not reclassify a policy rejection.
 8. Present consistent context information while working and at idle. The prompt
    and `/status` use the same observation validity and selected-capacity rules;
-   issuing a command must not be necessary to refresh them.
+   issuing a command must not be necessary to refresh them. `/context` reports
+   when a compatible prior input measurement reaches an active limit. Its advice
+   leaves the next request's accounting authoritative, including an exact count
+   that fits and requires no compaction.
 9. Preserve active goals across every error. Recovery must perform a real paced,
    interruptible attempt, rather than repeatedly reporting a permanently latched
    failure. Error budgets govern attempts, not goal lifecycle decisions.

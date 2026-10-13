@@ -277,14 +277,15 @@ def check_context_limits(binary):
                     child.output.clear()
                     os.write(child.master, b"/context\r")
                     child.until_after(b"context for next turn:", "›".encode(), timeout=10)
-                    assert b"the next request compacts first" not in child.output, child.output
+                    advice = b"last measured input has reached an active limit" in child.output
+                    assert not advice, child.output
                 if not threshold:
                     # Disabling the soft policy still leaves the hard budget guard active.
                     for window, needs_compact in ((333334, False), (272000, True)):
                         child.output.clear()
                         os.write(child.master, f"/context {window}\r".encode())
                         child.until_after(b"context for next turn:", "›".encode(), timeout=10)
-                        advice = b"the next request compacts first" in child.output
+                        advice = b"last measured input has reached an active limit" in child.output
                         assert advice == needs_compact, (window, child.output)
                 os.write(child.master, b"/exit\r")
                 child.wait(0)

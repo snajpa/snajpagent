@@ -3113,9 +3113,11 @@ report_context(struct app_state *app, const struct snag_provider_config *provide
                           app->session.context_meter.input_tokens >= compact_threshold));
     if (over_budget &&
         snag_buf_append(&text,
-            "\nthe next request compacts first: measured input has reached an active limit",
+            "\nlast measured input has reached an active limit; "
+            "compaction depends on the next request's accounting",
             strlen(
-                "\nthe next request compacts first: measured input has reached an active limit")) <
+                "\nlast measured input has reached an active limit; "
+                "compaction depends on the next request's accounting")) <
             0)
         goto out;
     if (snag_buf_terminate(&text) < 0) goto out;

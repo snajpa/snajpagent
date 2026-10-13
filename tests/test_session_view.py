@@ -1331,7 +1331,7 @@ class ContextMeterTests(unittest.TestCase):
         self.owner.initial.output.clear()
         os.write(self.owner.initial.master, b'/context\r')
         self.owner.initial.until_after(b'compact=50000 (fixed)', b'METER ')
-        self.assertEqual(b'the next request compacts first' in self.owner.initial.output, not changed)
+        advice = bytes(self.owner.initial.output)
         started_at = read_events(self.owner.journal)[-1]['seq']
         self.owner.initial.output.clear()
         os.write(self.owner.initial.master, b'next response under selected credentials\r')
@@ -1346,9 +1346,18 @@ class ContextMeterTests(unittest.TestCase):
                              for e in events))
         self.assertEqual(len(self.provider.requests), 4 if unmeasured else 3)
         self.assertEqual(bool(counts), exact)
+        if exact:
+            starts = [e for e in events if e['type'] == 'response_started']
+            self.assertEqual(len(counts), 1)
+            self.assertEqual(starts[-1]['data']['count_method'], 'exact')
+            self.assertEqual(starts[-1]['data']['input_tokens_bound'], 1000)
         encrypted = any(item.get('encrypted_content')
                         for item in self.provider.requests[-1]['body']['input'])
         self.assertEqual(encrypted, not changed)
+        self.assertNotIn(b'the next request compacts first', advice)
+        self.assertEqual(b'last measured input has reached an active limit' in advice, not changed)
+        self.assertEqual(b"compaction depends on the next request's accounting" in advice,
+                         not changed)
         self.owner.finish(self.owner.initial, b'/exit')
 
     def test_compaction_rejects_credential_incompatible_usage(self):
@@ -1371,6 +1380,12 @@ class ContextMeterTests(unittest.TestCase):
 
     def test_compaction_exact_preflight_overrides_credential_incompatible_usage(self):
         self.check_usage_scope(exact=True)
+
+    def test_context_advice_allows_exact_preflight_to_override_compatible_usage(self):
+        self.check_usage_scope(changed=False, exact=True)
+
+    def test_context_advice_allows_exact_override_after_legacy_resume(self):
+        self.check_usage_scope(changed=False, exact=True, resumed=True)
 
     def test_compaction_unmeasured_response_keeps_measurement_binding(self):
         self.check_usage_scope(unmeasured=True)

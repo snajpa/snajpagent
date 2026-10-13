@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Report `/context` advice as a prior measurement reaching an active limit.
+  Keep the next request's accounting authoritative, including an exact count
+  that fits and skips compaction.
+
 - Resume request preparation when a deferred configuration reload interrupts
   pre-response compaction. Retain previous context and remeasure with the reloaded
   settings instead of reporting a compaction failure.
