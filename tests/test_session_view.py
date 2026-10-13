@@ -1235,6 +1235,146 @@ class ContextMeterTests(unittest.TestCase):
     def test_compacted_preview_rejects_incompatible_usage_after_legacy_resume(self):
         self.check_compacted_preview(measured=True)
 
+    def check_usage_scope(self, changed=True, exact=False, resumed=False, missing_output=False,
+                          unmeasured=False):
+        config = self.owner.config.read_text().replace(
+            'exact_token_count = true', 'exact_token_count = false')
+        self.owner.config.write_text(config)
+        self.configure()
+        compacts, counts = [], []
+
+        def respond(handler, request, sequence):
+            if sequence == 1:
+                events = [self.provider.event('response.output_item.done', {'output_index': 0,
+                    'item': {'type': 'reasoning', 'id': 'scoped_reasoning', 'summary': [],
+                             'encrypted_content': 'A' * 80000}}),
+                    self.provider.event('response.output_item.done', {'output_index': 1,
+                    'item': {'type': 'message', 'id': 'scoped_answer', 'role': 'assistant',
+                             'status': 'completed', 'content': [{'type': 'output_text',
+                             'text': 'first public answer', 'annotations': []}]}})]
+                body = self.provider.response_envelope(sequence, events).replace(
+                    '"input_tokens":1', '"input_tokens":1000').replace(
+                    '"output_tokens":1', '"output_tokens":59000').replace(
+                    '"total_tokens":2', '"total_tokens":60000')
+            else:
+                body = self.provider.response_body(sequence, 'small public answer')
+                if sequence == 2:
+                    body = body.replace('"input_tokens":1', '"input_tokens":60000').replace(
+                        '"total_tokens":2', '"total_tokens":60001')
+                    if missing_output:
+                        body = body.replace('"output_tokens":1', '"output_tokens":null').replace(
+                            '"total_tokens":60001', '"total_tokens":null')
+                elif unmeasured and sequence == 3:
+                    body = body.replace('"input_tokens":1', '"input_tokens":null').replace(
+                        '"total_tokens":2', '"total_tokens":null')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        def compact(handler, request):
+            compacts.append(request)
+            self.provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
+                {'type': 'compaction', 'encrypted_content': 'scope-summary'}]}).encode(),
+                content_type='application/json')
+
+        def count(handler, request):
+            counts.append(request)
+            self.provider.reply(handler, b'{"object":"response.input_tokens","input_tokens":1000}',
+                                content_type='application/json')
+
+        self.provider.runtime_handler = respond
+        self.provider.runtime_compact_handler = compact
+        self.provider.runtime_count_handler = count
+        peer = self.owner.view()
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'first measured response\r')
+        self.wait_meter(peer, lambda value: value == '60')
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'second measured response\r')
+        self.wait_meter(peer, lambda value: value == ('~61' if missing_output else '61'))
+        measured = [e for e in read_events(self.owner.journal) if e['type'] == 'response_completed']
+        self.assertEqual(measured[-1]['data']['usage']['input_tokens'], 60000)
+        self.assertTrue(any(item.get('encrypted_content')
+                            for item in self.provider.requests[-1]['body']['input']))
+        if changed:
+            config = config.replace('${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"')
+            self.provider.credential = 'changed-key'
+        if unmeasured:
+            self.owner.config.write_text(config)
+            self.owner.config.chmod(0o600)
+            self.command('/configure', 'configuration reloaded:')
+            self.wait_meter(peer, lambda value: value.startswith('~'))
+            self.owner.initial.output.clear()
+            os.write(self.owner.initial.master, b'response with no measured input\r')
+            peer.until('state', lambda message: not message['state']['prompt']['active'])
+            completed = [e for e in read_events(self.owner.journal)
+                         if e['type'] == 'response_completed']
+            self.assertIsNone(completed[-1]['data']['usage']['input_tokens'])
+        config = config.replace('auto_compact_input_tokens = 0',
+                                'auto_compact_input_tokens = 50000')
+        if exact:
+            config = config.replace('exact_token_count = false', 'exact_token_count = true')
+        self.owner.config.write_text(config)
+        self.owner.config.chmod(0o600)
+        self.command('/configure', 'configuration reloaded:')
+        prompt = self.wait_meter(peer, lambda value: value.startswith('~') and
+                                 ((int(value[1:]) < 20) == (changed or missing_output)))
+        self.assertEqual(int(prompt['values'][5][1:]) < 20, changed or missing_output)
+        if resumed:
+            self.owner.finish(self.owner.initial, b'/exit')
+            self.owner.status('stored')
+            self.owner.initial = self.owner.start(['--resume', self.owner.sid])
+            self.owner.initial.until('›'.encode(), 10)
+            peer = self.owner.view()
+            self.wait_meter(peer, lambda value: value.startswith('~'))
+        status = self.command('/status', 'session usage:')
+        self.assertIn(b'input=60000 tokens', status)
+        self.assertIn(b'historical;' if changed else b'matching selection and compaction', status)
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'/context\r')
+        self.owner.initial.until_after(b'compact=50000 (fixed)', b'METER ')
+        self.assertEqual(b'the next request compacts first' in self.owner.initial.output, not changed)
+        started_at = read_events(self.owner.journal)[-1]['seq']
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'next response under selected credentials\r')
+        peer.until('state', lambda message: not message['state']['prompt']['active'] and
+                   message['state']['prompt']['values'][5] == '1')
+        events = [e for e in read_events(self.owner.journal) if e['seq'] > started_at]
+        expected = int(not changed and not exact)
+        self.assertEqual(len(compacts), expected, 'incompatible input usage triggered compaction')
+        self.assertEqual(len([e for e in events if e['type'] == 'compaction_started']), expected)
+        self.assertEqual(len([e for e in events if e['type'] == 'compaction_completed']), expected)
+        self.assertFalse(any(e['type'] in ('turn_failed', 'turn_recovery', 'context_rebased')
+                             for e in events))
+        self.assertEqual(len(self.provider.requests), 4 if unmeasured else 3)
+        self.assertEqual(bool(counts), exact)
+        encrypted = any(item.get('encrypted_content')
+                        for item in self.provider.requests[-1]['body']['input'])
+        self.assertEqual(encrypted, not changed)
+        self.owner.finish(self.owner.initial, b'/exit')
+
+    def test_compaction_rejects_credential_incompatible_usage(self):
+        self.check_usage_scope()
+
+    def test_compaction_rejects_credential_incompatible_usage_after_legacy_resume(self):
+        self.check_usage_scope(resumed=True)
+
+    def test_compaction_rejects_credential_incompatible_usage_after_native_resume(self):
+        self.check_usage_scope(resumed=True)
+
+    def test_compaction_retains_credential_compatible_usage(self):
+        self.check_usage_scope(changed=False)
+
+    def test_compaction_retains_credential_compatible_usage_after_legacy_resume(self):
+        self.check_usage_scope(changed=False, resumed=True)
+
+    def test_compaction_retains_input_usage_without_output_usage(self):
+        self.check_usage_scope(changed=False, missing_output=True)
+
+    def test_compaction_exact_preflight_overrides_credential_incompatible_usage(self):
+        self.check_usage_scope(exact=True)
+
+    def test_compaction_unmeasured_response_keeps_measurement_binding(self):
+        self.check_usage_scope(unmeasured=True)
+
     def command(self, text, marker):
         self.owner.initial.output.clear()
         os.write(self.owner.initial.master, (text + '\r').encode())

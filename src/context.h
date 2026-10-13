@@ -121,6 +121,8 @@ void snag_context_projection_free(struct snag_context_projection *projection);
 /* Start the live view after creating a new session; resumed sessions derive it
  * from the journal once on their first projection. */
 void snag_context_start_new(struct snag_session *session);
+/* Verify the meter observation against its completed response continuation binding. */
+bool snag_context_input_scope_matches(struct snag_session *session, const char *scope);
 /* E2BIG means the projected request exceeds the wire bound; callers may compact. */
 int snag_context_build(struct snag_session *session, const char *model, const char *effort,
     unsigned int cycle, const json_t *steering, uint64_t max_output_tokens, bool max_output_known,

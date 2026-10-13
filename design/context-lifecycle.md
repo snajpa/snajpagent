@@ -313,9 +313,16 @@ may replace it at `response_completed`. Post-turn compaction reads this committe
 measurement directly after the completed response's usage has been applied.
 There is no `input_token_count` journal transition. Refresh at those real
 transitions and at completed compaction/rebase.
-Use the same binding/compaction matcher for the meter, status annotation and
-context-selection budget advice. Status may retain a historical observation for
-diagnostics, but must label it ineligible rather than implying current occupancy.
+Use the same binding/compaction matcher for measured admission, status annotation
+and context-selection budget advice. Match the measurement's completed response
+continuation scope to the selected provider credential binding. Resolve its
+request identity from the existing retained event seam; a later response with
+unknown input usage keeps the earlier measurement's scope. Input-only usage and
+exact preflight retained through a completed response remain eligible under
+that binding. This check adds no stored fields or credential refresh.
+Display anchors also require known output usage for their combined estimate.
+Status may retain a historical observation for diagnostics, but must label it
+ineligible rather than implying current occupancy.
 
 Refresh presentation after committed observation, coverage or selected-identity
 changes and when entering idle. Preserve the user's draft, terminal ownership,

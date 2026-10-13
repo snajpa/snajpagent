@@ -782,6 +782,45 @@ snag_context_start_new(struct snag_session *session)
     session->on_checkpoint = context_cache_checkpoint;
 }
 
+bool
+snag_context_input_scope_matches(struct snag_session *session, const char *scope)
+{
+    struct snag_context_capture *cache = NULL;
+    const json_t *completed = NULL;
+    char error[256] = {0};
+
+    if (!session || !scope || !session->context_meter.valid ||
+        context_cache_get(session, &cache, error, sizeof(error), NULL) < 0)
+        return false;
+    /* Scope belongs to the response that supplied the measurement. Later
+     * responses with unknown input usage leave that observation unchanged. */
+    for (size_t i = json_array_size(cache->recent); i > 0u; --i) {
+        const json_t *entry = json_array_get(cache->recent, i - 1u);
+        const char *type = snag_json_string(entry, "type");
+        const json_t *data = json_object_get(entry, "data");
+
+        if (!strcmp(type, "response_completed")) {
+            completed = data;
+        } else if (!strcmp(type, "response_started")) {
+            const char *id = snag_json_string(data, "response_id");
+            const char *completed_id = snag_json_string(completed, "response_id");
+            bool paired = id && completed_id && !strcmp(id, completed_id);
+            struct snag_response_usage usage;
+            bool measured = !strcmp(snag_json_string(data, "count_method"), "exact") ||
+                (paired && snag_response_usage_from_json(
+                    json_object_get(completed, "usage"), &usage) == 0 && usage.input_known);
+            const char *request = snag_json_string(data, "request_sha256");
+
+            if (measured && request && !strcmp(request, session->context_meter.request_sha256)) {
+                const char *observed_scope = snag_json_string(completed, "continuation_scope");
+                return paired && observed_scope && !strcmp(scope, observed_scope);
+            }
+            completed = NULL;
+        }
+    }
+    return false;
+}
+
 void
 snag_context_projection_free(struct snag_context_projection *projection)
 {

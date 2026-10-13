@@ -69,6 +69,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                     f'"input_tokens": {self.server.input_usage}'.encode())
                 body = body.replace(b'"total_tokens": 4',
                                     f'"total_tokens": {self.server.input_usage + 3}'.encode())
+            if getattr(self.server, "omit_input_usage", False):
+                body = body.replace(b'"input_tokens": 1', b'"input_tokens": null').replace(
+                    b'"total_tokens": 4', b'"total_tokens": null')
             self.reply(200, body)
             return
         assert self.path == "/v1/responses/compact", self.path
@@ -461,7 +464,7 @@ def check_post_turn_usage(binary):
             for exact in (False, True):
                 for usage, threshold, failure in ((4999, 5000, 0), (5000, 5000, 0),
                                                   (5001, 5000, 0), (9000, 0, 0),
-                                                  (5000, 5000, 404)):
+                                                  (5000, 5000, 404), (None, 1000, 0)):
                     case = root / f"{exact}-{usage}-{threshold}-{failure}"
                     case.mkdir(mode=0o700)
                     state, config = case / "state", case / "config.ini"
@@ -480,6 +483,7 @@ def check_post_turn_usage(binary):
                     server.requests.clear()
                     server.count_requests.clear()
                     server.input_usage, server.failure = usage, failure
+                    server.omit_input_usage = usage is None
                     result = subprocess.run([str(binary), "--dotdir", str(state),
                         "--config", str(config), "-e"], input="Use the completed response usage.",
                         cwd=case, env=env, capture_output=True, text=True, timeout=20)
@@ -490,11 +494,14 @@ def check_post_turn_usage(binary):
                     request, = [e for e in events if e["type"] == "response_started"]
                     assert request["data"]["input_tokens_bound"] == (1024 if exact else 0)
                     assert request["data"]["count_method"] == ("exact" if exact else "unknown")
+                    reply, = [e for e in events if e["type"] == "response_completed"]
+                    assert reply["data"]["usage"]["input_tokens"] == usage
                     turn, = [e for e in events if e["type"] == "turn_completed"]
                     started = [e for e in events if e["type"] == "compaction_started"]
                     completed = [e for e in events if e["type"] == "compaction_completed"]
                     interrupted = [e for e in events if e["type"] == "compaction_interrupted"]
-                    attempt = bool(threshold and usage >= threshold)
+                    measured = usage if usage is not None else (1024 if exact else 0)
+                    attempt = bool(threshold and measured >= threshold)
                     assert len(started) == int(attempt), (case.name, started)
                     assert len(completed) == int(attempt and not failure), (case.name, completed)
                     assert len(interrupted) == int(attempt and bool(failure))

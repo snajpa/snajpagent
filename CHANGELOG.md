@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Validate the measured input request's continuation binding for automatic
+  compaction, status and context-selection advice. Account or API-key changes
+  leave incompatible usage historical while exact preflight remains authoritative.
+
 - Keep hard-budget preparation state to one successful checkpoint per response
   cycle, then use the measured recovery projection.
 

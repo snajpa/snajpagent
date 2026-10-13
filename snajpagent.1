@@ -4533,7 +4533,11 @@ that endpoint continue using measured response usage and bounded overflow recove
 no local tokenizer or byte-to-token conversion is substituted.
 .PP
 Proactive compaction uses exact preflight or the last compatible measured input
-usage. Compaction covers complete older event prefixes; each completed summary
+usage. Compatibility includes the measured request's provider, model, effort,
+compaction and credential continuation binding. After an account or API-key
+change, earlier usage remains historical until the current binding is measured.
+Exact preflight counts the current request directly.
+Compaction covers complete older event prefixes; each completed summary
 records its covered boundary and later compactions start at that boundary, not
 at the beginning of the journal. Previously presented image payloads are omitted
 from summary requests. Native compaction output can retain user messages together

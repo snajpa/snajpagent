@@ -668,8 +668,27 @@ context_meter_matches(struct app_state *app, const struct snag_provider_config *
     char hash[SNAG_SHA256_HEX_LEN + 1u];
     if (!provider || !model || !effort) return false;
     provider_capacity_source_sha256(provider, model, hash);
-    return snag_input_observation_matches(
-        &app->session.context_meter, provider->name, model, effort, hash, app->session.compact_id);
+    if (!snag_input_observation_matches(
+            &app->session.context_meter, provider->name, model, effort, hash,
+            app->session.compact_id))
+        return false;
+    struct snag_auth_tokens tokens = {0};
+    char scope[SNAG_SHA256_HEX_LEN + 1u];
+    char error[256] = {0};
+    bool matches = false;
+
+#ifndef SNAJPAGENT_TEST_FIXTURE
+    if (snag_auth_load(app->store.root_fd, provider, &tokens, error, sizeof(error)) < 0) goto out;
+#else
+    (void)error;
+#endif
+    if (snag_context_continuation_scope(provider, model, &tokens.credential, scope) == 0)
+        matches = snag_context_input_scope_matches(&app->session, scope);
+#ifndef SNAJPAGENT_TEST_FIXTURE
+out:
+#endif
+    snag_auth_clear(&tokens);
+    return matches;
 }
 
 bool
@@ -1575,7 +1594,8 @@ render_status(struct app_state *app)
                 app->session.context_meter.provider, app->session.context_meter.model,
                 app->session.context_meter.effort,
                 matches ? "last measurement; matching selection and compaction"
-                        : "historical; different selection or compaction") < 0)
+                        : "historical; different selection or compaction, or unverified "
+                          "continuation binding") < 0)
             goto out;
     } else if (snag_buf_append(
                    &text, "\nobserved usage: unknown", strlen("\nobserved usage: unknown")) < 0) {
