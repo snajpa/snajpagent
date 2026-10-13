@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Release parent-directory descriptors after native file writes and edits, including
+  rejected edits. Long sessions retain descriptor capacity for later files and TLS.
+
 - Accept advertised input ceilings above a model's default working window when
   they fit its published maximum. Keep `/context max` and resumed model caches
   usable while applying genuine input ceilings and output reservations to the

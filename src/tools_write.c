@@ -131,16 +131,6 @@ install_bytes(int parent_fd, const char *leaf, const char *path, const struct sn
     return 0;
 }
 
-/* Returns 0 with *create set, or -1 after filling *error. */
-static int
-prepare(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u], char *error,
-    size_t error_size)
-{
-    if (snag_file_path_valid(path, error, error_size) < 0) return -1;
-    if (snag_file_parent(root_fd, path, leaf, error, error_size) < 0) return -1;
-    return 0;
-}
-
 int
 snag_tools_write_file(const struct snag_response_item *call, const char *session_cwd,
     json_t **result, char *error, size_t error_size)
@@ -168,7 +158,7 @@ snag_tools_write_file(const struct snag_response_item *call, const char *session
         goto out;
     }
     root_fd = snag_file_root_open(session_cwd, path, error, error_size);
-    if (root_fd < 0 || prepare(root_fd, path, leaf, error, error_size) < 0) {
+    if (root_fd < 0 || snag_file_path_valid(path, error, error_size) < 0) {
         *result = failed(*error ? error : "file root cannot be opened");
         goto out;
     }
@@ -251,7 +241,7 @@ snag_tools_edit_file(const struct snag_response_item *call, const char *session_
     }
     old_len = strlen(old);
     root_fd = snag_file_root_open(session_cwd, path, error, error_size);
-    if (root_fd < 0 || prepare(root_fd, path, leaf, error, error_size) < 0) {
+    if (root_fd < 0 || snag_file_path_valid(path, error, error_size) < 0) {
         *result = failed(*error ? error : "file root cannot be opened");
         goto out;
     }
