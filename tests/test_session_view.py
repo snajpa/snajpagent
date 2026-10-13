@@ -1540,6 +1540,143 @@ class ContextMeterTests(unittest.TestCase):
     def test_exact_preview_fallback_rejects_failed_legacy_response(self):
         self.check_exact_preview_fallback(outcome='failed', resumed=True)
 
+    def check_output_only_preview(self, output_known=False, opaque=False, changed=False,
+                                  unreported=False, summary=False, cancelled=False):
+        config = self.owner.config.read_text().replace(
+            'exact_token_count = true', 'exact_token_count = false')
+        self.owner.config.write_text(config +
+            f'[irc]\nlisten = 127.0.0.1:{harness.free_loopback_port()}\n')
+        self.configure()
+        counts = []
+
+        def count(handler, request):
+            counts.append(request)
+            self.provider.reply(handler, b'{"object":"response.input_tokens","input_tokens":1}',
+                                content_type='application/json', close_header=True)
+
+        def respond(handler, request, sequence):
+            self.ready.set()
+            self.release.wait(10)
+            rid = 'output_only_response'
+            output = [{'type': 'reasoning', 'id': 'output_only_reasoning',
+                       'summary': [{'type': 'summary_text', 'text': 'private' * 20000}]
+                                  if summary else [],
+                       'encrypted_content': 'opaque' * 40000}] if opaque or summary else []
+            usage = {'input_tokens': None, 'output_tokens': 60000 if output_known else None,
+                     'output_tokens_details': {'reasoning_tokens': None if unreported else 50000},
+                     'total_tokens': None}
+            events = [
+                ('response.created', {'response': {'id': rid, 'status': 'in_progress',
+                                                   'output': []}}),
+                ('response.completed', {'response': {'id': rid, 'status': 'completed',
+                                                    'output': output, 'usage': usage}}),
+            ]
+            body = ''.join('event: ' + kind + '\ndata: ' +
+                           json.dumps({'type': kind, **data}) + '\n\n' for kind, data in events)
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_count_handler = count
+        self.provider.runtime_handler = respond
+        peer = self.owner.view()
+        os.write(self.owner.initial.master, b'output-only preview without measured input\r')
+        self.assertTrue(self.ready.wait(5))
+        self.owner.wait_event('response_started')
+        before = self.wait_meter(peer, lambda value: value.startswith('~'))['values'][5]
+        self.assertLess(int(before[1:]), 20)
+        if cancelled:
+            os.write(self.owner.initial.master, b'\x03')
+            self.owner.wait_event('turn_interrupted')
+        self.release.set()
+        if not cancelled:
+            self.owner.wait_event('turn_completed_silent')
+        events = read_events(self.owner.journal)
+        completed_events = [e for e in events if e['type'] == 'response_completed']
+        if cancelled:
+            self.assertEqual(completed_events, [], 'cancelled output supplied a display observation')
+        else:
+            usage = completed_events[-1]['data']['usage']
+            self.assertIsNone(usage['input_tokens'])
+            self.assertEqual(usage['output_tokens'], 60000 if output_known else None)
+            self.assertEqual(usage['reasoning_tokens'], None if unreported else 50000)
+        floor = 0 if cancelled or unreported else (60 if output_known else 50)
+        peer = self.owner.view()
+        completed = self.wait_meter(peer, lambda value: value.startswith('~'))['values'][5]
+        self.assertGreaterEqual(int(completed[1:]), floor)
+        self.assertLess(int(completed[1:]), floor + 20)
+        if changed:
+            self.owner.config.write_text(self.owner.config.read_text().replace(
+                '${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"'))
+            self.owner.config.chmod(0o600)
+            self.provider.credential = 'changed-key'
+        self.command('/configure', 'configuration reloaded:')
+        self.owner.initial.until_after(b'configuration reloaded:', b'METER ')
+        peer = self.owner.view()
+        preview = self.wait_meter(peer, lambda value: value.startswith('~'))['values'][5]
+        if changed:
+            self.assertLess(int(preview[1:]), 20, 'changed credential reused an output observation')
+        else:
+            self.assertGreaterEqual(int(preview[1:]), int(before[1:]) + floor - 1,
+                                    'reload discarded known output-only usage')
+            self.assertLess(int(preview[1:]), floor + 20,
+                            'preview counted aggregate output twice or included ciphertext')
+        self.classic_meter(preview)
+        self.assertEqual(counts, [], 'unmeasured preview performed an exact count')
+        self.assertEqual(len(self.provider.requests), 1)
+        self.assertFalse(any(e['type'] in ('compaction_started', 'tool_started',
+                                          'turn_failed', 'turn_recovery') for e in events))
+        self.owner.finish(self.owner.initial, b'/exit')
+        resumed = self.owner.start(['--resume', self.owner.sid])
+        resumed.until(b'METER ~')
+        peer = self.owner.view()
+        restored = self.wait_meter(peer, lambda value: value.startswith('~'))['values'][5]
+        self.assertGreaterEqual(int(restored[1:]), int(preview[1:]) - 1)
+        self.assertLess(int(restored[1:]), int(preview[1:]) + 3)
+        self.assertEqual(counts, [], 'resume performed an exact count')
+        self.assertEqual(len(self.provider.requests), 1, 'resume submitted another response')
+        self.owner.finish(resumed, b'/exit')
+
+    def test_output_only_reasoning_survives_unmeasured_input_reload_and_resume(self):
+        self.check_output_only_preview()
+
+    def test_output_only_reasoning_survives_unmeasured_input_reload_and_resume_legacy(self):
+        self.check_output_only_preview()
+
+    def test_output_only_aggregate_survives_unmeasured_input_reload_and_resume(self):
+        self.check_output_only_preview(output_known=True)
+
+    def test_output_only_aggregate_survives_unmeasured_input_reload_and_resume_legacy(self):
+        self.check_output_only_preview(output_known=True)
+
+    def test_output_only_reasoning_excludes_encrypted_bytes_without_measured_input(self):
+        self.check_output_only_preview(opaque=True)
+
+    def test_output_only_reasoning_excludes_encrypted_bytes_without_measured_input_legacy(self):
+        self.check_output_only_preview(opaque=True)
+
+    def test_output_only_observation_rejects_changed_credential(self):
+        self.check_output_only_preview(changed=True)
+
+    def test_output_only_observation_rejects_changed_credential_legacy(self):
+        self.check_output_only_preview(changed=True)
+
+    def test_output_only_preview_keeps_unreported_output_unknown(self):
+        self.check_output_only_preview(unreported=True)
+
+    def test_output_only_preview_keeps_unreported_output_unknown_legacy(self):
+        self.check_output_only_preview(unreported=True)
+
+    def test_output_only_aggregate_covers_visible_reasoning_and_ciphertext(self):
+        self.check_output_only_preview(output_known=True, summary=True)
+
+    def test_output_only_aggregate_covers_visible_reasoning_and_ciphertext_legacy(self):
+        self.check_output_only_preview(output_known=True, summary=True)
+
+    def test_output_only_preview_rejects_uncompleted_response(self):
+        self.check_output_only_preview(cancelled=True)
+
+    def test_output_only_preview_rejects_uncompleted_response_legacy(self):
+        self.check_output_only_preview(cancelled=True)
+
     def check_partial_usage_tool(self, repeated=False, valid=False):
         counts = []
 

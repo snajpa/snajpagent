@@ -3934,7 +3934,10 @@ omits input usage, its exact preflight remains usable. Known output usage replac
 the output estimate and already includes reasoning tokens. When aggregate output
 usage is missing, add any reported reasoning tokens to the visible-output estimate.
 The meter stays marked as estimated, even with no visible output. A reported zero
-is known output usage.
+is known output usage. When both input usage and exact preflight are unavailable,
+completed output or reasoning usage can still improve the estimated meter after
+reload; it never becomes an exact input count. The request prefix is estimated
+separately from visible output, and encrypted reasoning bytes remain excluded.
 Encrypted continuation bytes are excluded from
 streaming estimates because their encoded size does not measure generated tokens.
 A leading ~ marks an estimate, including while an exact input count is combined

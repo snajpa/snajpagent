@@ -306,9 +306,13 @@ previewing never refreshes credentials or contacts the provider.
 Anchor display estimates in completed input usage, or that response's exact
 preflight when input usage is absent, with matching provider,
 model, effort, source, compaction lineage and recorded continuation binding.
-Known output usage joins the anchor. When output usage is missing, retain the
-known input boundary before that response's output items and estimate their
-visible bytes, excluding encrypted payloads, alongside any known reasoning usage.
+Known output usage joins the anchor. When input usage and exact preflight are
+both absent, a completed response may still contribute known output or reasoning
+usage to an estimated display; it does not become an exact input measurement.
+For missing aggregate output, retain the known input boundary before that
+response's output items and estimate their visible bytes, excluding encrypted
+payloads, alongside any known reasoning usage. With output-only usage, estimate
+the request prefix separately and apply the same encrypted-byte exclusion.
 The live meter and idle builder share the same measured-output floor: use the
 reported aggregate, otherwise its known reasoning component, otherwise zero.
 Reload and resume preserve this

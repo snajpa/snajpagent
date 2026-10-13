@@ -51,6 +51,8 @@ struct context_builder {
     bool compact_stopped;
     struct snag_input_observation display_anchor, display_start;
     bool display_start_exact;
+    bool display_input_measured;
+    bool display_output_measured;
     uint64_t display_tokens;
     size_t display_count;
     size_t base_request_count;
@@ -2520,15 +2522,19 @@ context_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
         if (rc == 0 && builder->continuation_scope && scope &&
             !strcmp(builder->continuation_scope, scope) &&
             snag_response_usage_from_json(json_object_get(data, "usage"), &usage) == 0 &&
-            (usage.input_known || builder->display_start_exact)) {
+            (usage.input_known || builder->display_start_exact || usage.output_known ||
+                usage.reasoning_known)) {
             uint64_t input = usage.input_known ? usage.input_tokens
                                                : builder->display_start.input_tokens;
             uint64_t output = snag_response_usage_output_floor(&usage);
             builder->display_anchor = builder->display_start;
+            builder->display_anchor.request_input_count = input_count;
+            builder->display_input_measured = usage.input_known || builder->display_start_exact;
+            builder->display_output_measured = usage.output_known;
             builder->display_tokens = output > UINT64_MAX - input
                                           ? UINT64_MAX
                                           : input + output;
-            /* Unmeasured output remains outside the known input boundary. */
+            /* Known output covers its items; missing input remains a byte estimate. */
             builder->display_count = usage.output_known
                                          ? json_array_size(builder->request_input)
                                          : input_count;
@@ -3817,11 +3823,21 @@ context_copy_events(
     dest->tool_result_bytes = source->tool_result_bytes;
     dest->display_start = source->display_start;
     dest->display_start_exact = source->display_start_exact;
+    dest->display_input_measured = source->display_input_measured;
+    dest->display_output_measured = source->display_output_measured;
     dest->display_anchor = source->display_anchor;
     dest->display_tokens = source->display_tokens;
     if (source->display_count >= start &&
         source->display_count <= json_array_size(source->request_input)) {
         dest->display_count = offset + source->display_count - start;
+        if (!source->display_input_measured) {
+            if (source->display_anchor.request_input_count < start) {
+                dest->display_anchor.valid = false;
+            } else {
+                dest->display_anchor.request_input_count =
+                    offset + source->display_anchor.request_input_count - start;
+            }
+        }
     } else dest->display_anchor.valid = false;
     memcpy(dest->active_turn_id, source->active_turn_id, sizeof(dest->active_turn_id));
     if (source->call_ids && !(dest->call_ids = json_deep_copy(source->call_ids))) return -1;
@@ -4310,7 +4326,11 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             goto out;
     }
     if (builder.display_anchor.valid) {
-        for (size_t i = builder.display_count; i < json_array_size(builder.request_input); ++i) {
+        size_t first = builder.display_input_measured
+                           ? builder.display_count
+                           : builder.display_anchor.request_input_count;
+        size_t last = json_array_size(builder.request_input);
+        for (size_t i = first; i < last; ++i) {
             const json_t *item = json_array_get(builder.request_input, i);
             size_t bytes;
             if (snag_json_digest_bounded(item, SNAG_CONTEXT_MAX_REQUEST, NULL, &bytes) < 0) {
@@ -4402,6 +4422,12 @@ snag_context_build(struct snag_session *session, const char *model, const char *
                 goto out;
             projection->display_plain_bytes -= bytes - 2u;
         }
+    }
+    if (builder.display_anchor.valid && !builder.display_input_measured) {
+        /* Aggregate output replaces its visible span; otherwise estimate it. */
+        if (builder.display_output_measured)
+            projection->display_bytes = projection->display_plain_bytes - projection->display_bytes;
+        else projection->display_bytes = projection->display_plain_bytes;
     }
     projection->input_tokens_bound = 0u; /* Unknown until counted by the provider. */
     /* Reconstructed state-only views have no journal writer. A live legacy
