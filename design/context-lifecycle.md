@@ -285,9 +285,10 @@ changes also rebuild a preview. Resolve its continuation scope from the selected
 provider, upstream model and offline credential snapshot, using the ordinary
 request binding. Successful configuration reload invalidates the old preview;
 previewing never refreshes credentials or contacts the provider.
-Anchor display estimates in completed input/output
-usage with matching provider,
-model, effort, source and compaction lineage. The builder retains that usage and
+Anchor display estimates in completed input/output usage with matching provider,
+model, effort, source, compaction lineage and recorded continuation binding.
+A changed account or API key falls back to the rebuilt request's visible-byte
+estimate. The builder retains compatible usage and
 its item boundary; newly projected conversation items add four bytes per token.
 Replay the retained seam once after checkpoint restore to recover these derived
 facts without changing stored formats. With no compatible usage, estimate visible

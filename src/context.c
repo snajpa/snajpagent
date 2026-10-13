@@ -2471,8 +2471,10 @@ context_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
     if (!strcmp(type, "response_completed")) {
         if (builder->tool_feedback) (void)json_array_clear(builder->tool_feedback);
         int rc = append_response_items(builder, json_object_get(data, "items"), data);
+        const char *scope = snag_json_string(data, "continuation_scope");
         struct snag_response_usage usage;
-        if (rc == 0 &&
+        if (rc == 0 && builder->continuation_scope && scope &&
+            !strcmp(builder->continuation_scope, scope) &&
             snag_response_usage_from_json(json_object_get(data, "usage"), &usage) == 0 &&
             usage.input_known && usage.output_known) {
             builder->display_anchor = builder->display_start;

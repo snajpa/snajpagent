@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Reuse display usage only under the completed response's continuation binding.
+  After an account or API-key change, estimate the rebuilt request instead of
+  applying a measurement of the earlier encrypted context.
+
 - Label original-history restoration when a selected provider binding cannot
   reuse encrypted compaction. Preserve the restored facts and completed tool
   results under the existing exact-count and request-body limits.

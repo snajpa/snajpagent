@@ -3943,7 +3943,9 @@ Resume and selection or source changes rebuild the display estimate using the
 selected provider, upstream model, endpoint and current credential snapshot.
 Successful configuration reload invalidates the previous preview, including after
 an account or API-key change. Previews stay offline and use the same encrypted
-continuation binding as the next request.
+continuation binding as the next request. A usage anchor also requires that binding
+to match its completed response; after an account or API-key change the rebuilt
+visible content supplies the estimate.
 Unknown capacity or an unavailable context projection shows ?.
 These estimates serve presentation. Request admission uses exact counts, compatible
 provider usage and actual capacity rejections, including when a model switch

@@ -1126,7 +1126,7 @@ class ContextMeterTests(unittest.TestCase):
         self.assertEqual(len(self.provider.requests), 1)
         self.owner.finish(resumed, b'/exit')
 
-    def test_compacted_preview_uses_selected_binding(self):
+    def check_compacted_preview(self, measured=False):
         self.owner.config.write_text(self.owner.config.read_text().replace(
             'exact_token_count = true', 'exact_token_count = false').replace(
             '[ui]\n', '[ui]\nresume_history_turns=0\n'))
@@ -1159,6 +1159,16 @@ class ContextMeterTests(unittest.TestCase):
         self.owner.initial.until(b'Compacted')
         prompt = self.wait_meter(peer, lambda value: value.startswith('~'))
         self.assertLess(int(prompt['values'][5][1:]), 20)
+        if measured:
+            self.command('/model fake/host-model/high:100000', 'selected=100000')
+            self.provider.runtime_handler = lambda handler, request, sequence: self.provider.reply(
+                handler, self.provider.response_body(sequence, 'post-compact answer').encode(),
+                close_header=True)
+            self.owner.initial.output.clear()
+            os.write(self.owner.initial.master, b'continue after compaction\r')
+            peer.until('state', lambda message: not message['state']['prompt']['active'] and
+                       message['state']['prompt']['values'][5] == '1')
+        requests = 2 if measured else 1
         catalogs = self.provider.catalog_paths()
         self.command('/model fake/two-model/high:100000', 'selected=100000')
         prompt = peer.until('state', lambda message:
@@ -1200,7 +1210,7 @@ class ContextMeterTests(unittest.TestCase):
         self.command('/configure', 'configuration reloaded:')
         self.assertEqual(counts, [])
         self.assertEqual(len(compacts), 1)
-        self.assertEqual(len(self.provider.requests), 1)
+        self.assertEqual(len(self.provider.requests), requests)
         self.assertEqual(self.provider.catalog_paths(), catalogs)
         self.owner.finish(self.owner.initial, b'/exit')
         self.owner.initial = self.owner.start(['--resume', self.owner.sid, '-m',
@@ -1208,13 +1218,22 @@ class ContextMeterTests(unittest.TestCase):
         self.owner.initial.until('›'.encode(), 10)
         resumed = self.owner.view()
         self.wait_meter(resumed, lambda value: value.startswith('~') and int(value[1:]) >= 70)
-        self.assertEqual(len(self.provider.requests), 1)
+        self.assertEqual(len(self.provider.requests), requests)
         self.assertEqual(len(compacts), 1)
         self.assertEqual(counts, [])
         self.owner.finish(self.owner.initial, b'/exit')
 
+    def test_compacted_preview_uses_selected_binding(self):
+        self.check_compacted_preview()
+
     def test_compacted_preview_uses_selected_binding_after_legacy_resume(self):
-        self.test_compacted_preview_uses_selected_binding()
+        self.check_compacted_preview()
+
+    def test_compacted_preview_rejects_incompatible_usage(self):
+        self.check_compacted_preview(measured=True)
+
+    def test_compacted_preview_rejects_incompatible_usage_after_legacy_resume(self):
+        self.check_compacted_preview(measured=True)
 
     def command(self, text, marker):
         self.owner.initial.output.clear()
