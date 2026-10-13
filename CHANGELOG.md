@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Mark completed context meters as estimated when output usage is absent, even
+  with no visible output. Keep provider-reported zero output as known usage.
+
 - Retain a completed response's exact input count in the context preview when
   provider input usage is absent. Reload and resume keep this count under the
   same continuation binding; provider usage takes precedence when reported.

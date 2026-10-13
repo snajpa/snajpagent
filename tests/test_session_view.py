@@ -1540,6 +1540,84 @@ class ContextMeterTests(unittest.TestCase):
     def test_exact_preview_fallback_rejects_failed_legacy_response(self):
         self.check_exact_preview_fallback(outcome='failed', resumed=True)
 
+    def check_quiet_completion_meter(self, input_known=True, output_known=False):
+        self.owner.config.write_text(self.owner.config.read_text() +
+            f'[irc]\nlisten = 127.0.0.1:{harness.free_loopback_port()}\n')
+        self.configure()
+        counts = []
+
+        def count(handler, request):
+            counts.append(request)
+            self.provider.reply(handler, b'{"object":"response.input_tokens","input_tokens":60000}',
+                                content_type='application/json', close_header=True)
+
+        def respond(handler, request, sequence):
+            self.ready.set()
+            self.release.wait(10)
+            body = self.provider.response_body(sequence, '').replace(
+                '"input_tokens":1', '"input_tokens":60000' if input_known else '"input_tokens":null')
+            body = body.replace('"output_tokens":1',
+                                '"output_tokens":0' if output_known else '"output_tokens":null')
+            body = body.replace('"total_tokens":2', '"total_tokens":null')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_count_handler = count
+        self.provider.runtime_handler = respond
+        peer = self.owner.view()
+        os.write(self.owner.initial.master, b'quiet completed output accounting\r')
+        self.assertTrue(self.ready.wait(5), 'exactly counted response did not start')
+        self.owner.wait_event('response_started')
+        self.wait_meter(peer, lambda value: value == '60')
+        self.release.set()
+        self.owner.wait_event('turn_completed_silent')
+        peer = self.owner.view()
+        completed_meter = self.wait_meter(peer, lambda value: value in ('60', '~60'))['values'][5]
+        events = read_events(self.owner.journal)
+        completed = [e for e in events if e['type'] == 'response_completed']
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]['data']['items'], [])
+        self.assertEqual(completed[0]['data']['usage']['input_tokens'], 60000 if input_known else None)
+        self.assertEqual(completed[0]['data']['usage']['output_tokens'], 0 if output_known else None)
+        self.assertEqual(completed_meter, '60' if output_known else '~60',
+                         'completion confused unknown output usage with measured zero')
+        self.classic_meter(completed_meter)
+        self.command('/configure', 'configuration reloaded:')
+        self.owner.initial.until_after(b'configuration reloaded:', b'METER ')
+        peer = self.owner.view()
+        preview = self.wait_meter(peer, lambda value: value.startswith('~'))['values'][5]
+        self.assertGreaterEqual(int(preview[1:]), 60)
+        self.assertLess(int(preview[1:]), 65)
+        self.assertEqual(len(counts), 1, 'preview performed another count request')
+        self.assertEqual(len(self.provider.requests), 1, 'preview submitted another response')
+        self.assertFalse(any(e['type'] in ('response_output', 'tool_started', 'compaction_started',
+                                          'turn_failed', 'turn_recovery')
+                             for e in read_events(self.owner.journal)))
+        self.owner.finish(self.owner.initial, b'/exit')
+
+    def test_quiet_meter_marks_missing_output_usage(self):
+        self.check_quiet_completion_meter()
+
+    def test_quiet_meter_marks_missing_output_usage_legacy(self):
+        self.check_quiet_completion_meter()
+
+    def test_quiet_meter_marks_missing_output_usage_with_exact_input(self):
+        self.check_quiet_completion_meter(input_known=False)
+
+    def test_quiet_meter_marks_missing_output_usage_with_exact_input_legacy(self):
+        self.check_quiet_completion_meter(input_known=False)
+
+    def test_quiet_meter_keeps_reported_zero_output_measured(self):
+        self.check_quiet_completion_meter(output_known=True)
+
+    def test_quiet_meter_keeps_reported_zero_output_measured_legacy(self):
+        self.check_quiet_completion_meter(output_known=True)
+
+    def test_quiet_meter_keeps_reported_zero_output_with_exact_input_measured(self):
+        self.check_quiet_completion_meter(input_known=False, output_known=True)
+
+    def test_quiet_meter_keeps_reported_zero_output_with_exact_input_measured_legacy(self):
+        self.check_quiet_completion_meter(input_known=False, output_known=True)
+
     def test_compaction_exact_preflight_overrides_credential_incompatible_usage(self):
         self.check_usage_scope(exact=True)
 

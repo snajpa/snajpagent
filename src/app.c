@@ -736,6 +736,7 @@ context_observe(struct app_state *app, const char *type, const json_t *data)
             app->prompt_context.input_tokens = usage.input_tokens;
             app->prompt_context_estimated = false;
         }
+        if (!usage.output_known) app->prompt_context_estimated = true;
         app->prompt_context_output_known = usage.output_known;
         app->prompt_context_output_tokens = usage.output_tokens;
     }

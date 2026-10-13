@@ -289,8 +289,9 @@ uses the current request count or a marked estimate; unavailable capacity or a
 failed display projection shows unknown. Completed input usage replaces the
 input estimate; an exact preflight remains usable when the completed response
 omits input usage. Known output usage replaces the output estimate. Missing output
-usage leaves a marked visible-output estimate. Before completion, retained SSE text and argument
-bytes estimate output at four bytes per token; unreported hidden reasoning is
+usage leaves a marked visible-output estimate, including when no visible output
+was generated. A reported zero is known output usage. Before completion, retained
+SSE text and argument bytes estimate output at four bytes per token; unreported hidden reasoning is
 accounted when provider usage arrives.
 
 Compaction completion invalidates the prior display binding and measures the

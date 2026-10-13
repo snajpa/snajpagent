@@ -3931,7 +3931,8 @@ against the effective input budget. An exact outgoing count refreshes it before
 provider output. Streamed text and tool arguments increase a display estimate.
 Completed input usage replaces the input estimate. When a completed response
 omits input usage, its exact preflight remains usable. Known output usage replaces
-the output estimate. Missing output usage leaves a marked visible-output estimate.
+the output estimate. Missing output usage leaves a marked visible-output estimate,
+even when no visible output was generated. A reported zero is known output usage.
 Encrypted continuation bytes are excluded from
 streaming estimates because their encoded size does not measure generated tokens.
 A leading ~ marks an estimate, including while an exact input count is combined
