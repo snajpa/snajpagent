@@ -4155,7 +4155,6 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             if (install_rc == 1) {
                 builder.compact_seq = 0u;
                 builder.compact_walk_seq = 0u;
-                projection->restored_compacted_history = true;
             }
         }
         /* Summary and rebase prefixes are installed on every build. Cache

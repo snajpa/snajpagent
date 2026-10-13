@@ -681,23 +681,6 @@ snag_app_measured_input(struct app_state *app, uint64_t *tokens)
     return true;
 }
 
-static uint64_t
-context_estimate(const struct app_state *app, const struct snag_provider_config *provider,
-    const char *model, const char *effort, uint64_t bytes)
-{
-    const struct snag_input_observation *anchor = &app->session.usage_anchor;
-    char source[SNAG_SHA256_HEX_LEN + 1u];
-    provider_capacity_source_sha256(provider, model, source);
-    long double estimate = (long double)bytes / 4.0L;
-    if (anchor->input_tokens && anchor->model_input_bytes &&
-        snag_input_observation_matches(anchor, provider->name, model, effort,
-            source, anchor->compact_id))
-        estimate = (long double)bytes * anchor->input_tokens / anchor->model_input_bytes;
-    if (estimate >= (long double)UINT64_MAX) return UINT64_MAX;
-    uint64_t rounded = (uint64_t)estimate;
-    return rounded + (estimate > (long double)rounded);
-}
-
 uint64_t
 snag_app_context_estimate(const struct app_state *app,
     const struct snag_provider_config *provider, const char *model, const char *effort,
@@ -3044,6 +3027,7 @@ report_context(struct app_state *app, const struct snag_provider_config *provide
     struct snag_buf text = {.max = 4096u};
     char error[256] = {0};
     uint64_t selected;
+    uint64_t compact_threshold;
     bool over_budget;
     int rc = -1;
 
@@ -3071,6 +3055,15 @@ report_context(struct app_state *app, const struct snag_provider_config *provide
             &text, "input-budget", capacity.hard_input_known, capacity.hard_input_tokens) < 0 ||
         append_compact_threshold(&text, provider, &capacity) < 0)
         goto out;
+    compact_threshold = snag_model_compact_threshold(provider, &capacity);
+    if (capacity.input_context_window_tokens &&
+        capacity.input_context_window_tokens == capacity.hard_input_tokens &&
+        capacity.hard_input_tokens < selected &&
+        snag_buf_printf(&text,
+            "\ninput ceiling: input_context_window_tokens=%llu from the saved catalog; "
+            "/model cache refreshes advertised limits",
+            (unsigned long long)capacity.input_context_window_tokens) < 0)
+        goto out;
     if (choice->mode != SNAG_CONTEXT_MODE_DEFAULT &&
         snag_config_resolve_limits(
             app->config, provider->name, app->session.default_model, &rule, rule_sources) &&
@@ -3078,15 +3071,17 @@ report_context(struct app_state *app, const struct snag_provider_config *provide
         snag_buf_append(&text, "\nconfigured context rule is ignored by the session selection",
             strlen("\nconfigured context rule is ignored by the session selection")) < 0)
         goto out;
-    over_budget = capacity.hard_input_known &&
-                  context_meter_matches(app, provider, app->session.default_model,
+    over_budget = context_meter_matches(app, provider, app->session.default_model,
                       snag_app_resolve_effort(app->session.default_effort)) &&
-                  app->session.context_meter.input_tokens >=
-                      snag_model_compact_threshold(provider, &capacity);
+                  ((capacity.hard_input_known &&
+                       app->session.context_meter.input_tokens > capacity.hard_input_tokens) ||
+                      (compact_threshold &&
+                          app->session.context_meter.input_tokens >= compact_threshold));
     if (over_budget &&
         snag_buf_append(&text,
-            "\nthe next request compacts first: the measured input is over this budget",
-            strlen("\nthe next request compacts first: the measured input is over this budget")) <
+            "\nthe next request compacts first: measured input has reached an active limit",
+            strlen(
+                "\nthe next request compacts first: measured input has reached an active limit")) <
             0)
         goto out;
     if (snag_buf_terminate(&text) < 0) goto out;
@@ -5606,7 +5601,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
     char rejected_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     unsigned int hard_compaction_attempts = 0u, cyber_clarifications = 0u;
-    bool request_size_recovery = false;
     bool continuing = app->session.active_turn;
     bool fallback_started = false;
     unsigned int next_cycle = continuing ? app->session.active_cycle + 1u : 1u;
@@ -5849,20 +5843,9 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 app->history_recovery_rebase);
         int build_rc = snag_app_request_build(app, steering, cycle, &credential, &projection,
             &count_method, &request_body, error, sizeof(error));
-        bool request_oversized = build_rc < 0 && errno == E2BIG;
-        if (build_rc == 0 && projection.restored_compacted_history) request_size_recovery = true;
-
-        /* Reconstructed archives can exceed the selected window while fitting
-         * the wire cap. Prepare them before either provider endpoint sees them.
-         * The estimate selects recovery; it never rejects a minimal request. */
-        if (build_rc == 0 && request_size_recovery && !pure_history_recovery &&
-            app->turn_capacity.hard_input_known &&
-            context_estimate(app, app->turn_provider, app->turn_model, app->turn_effort,
-                projection.model_input.bytes) > app->turn_capacity.hard_input_tokens)
-            request_oversized = true;
-        if (build_rc < 0 || request_oversized) {
-            bool image_boundary =
-                build_rc < 0 && errno == EFBIG &&
+        if (build_rc < 0) {
+            bool request_oversized = errno == E2BIG;
+            bool image_boundary = errno == EFBIG &&
                 strstr(error, "Image request exceeds 12 MiB") != NULL;
             if (app->interrupt_requested) goto user_interrupted;
             if (image_boundary && !pure_history_recovery) {
@@ -5874,7 +5857,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 /* One bounded compact gets a chance to preserve the archive.
                  * Recheck its rebuilt size before choosing history recovery. */
                 bool compacted = false;
-                request_size_recovery = true;
                 int compact_rc = hard_compaction_attempts ? 0 :
                     snag_app_compact_oversized_request(app, &credential,
                         &compacted, error, sizeof(error));
@@ -6329,7 +6311,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
          * provider response is genuine progress; its new tool/assistant group
          * may need another checkpoint later instead of a summary-less rebase. */
         hard_compaction_attempts = 0u;
-        request_size_recovery = false;
         over_budget_request_hash[0] = '\0';
         {
             struct snag_usage_totals *totals = &app->program_usage;

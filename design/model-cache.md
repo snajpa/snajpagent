@@ -360,6 +360,12 @@ window; the resolver supplies the usable request budget. A catalog's default
 working window belongs in `context_window`; an independent input ceiling requires
 its own provider declaration.
 
+When `input_context_window_tokens` is the limiting saved catalog declaration,
+`/context` identifies its value and points to `/model cache`. Selection remains
+local and uses the saved metadata; explicit refresh adopts changed provider
+declarations without changing the semantic context choice. Both `/context max`
+and the model selector's `:max` suffix retain that choice on resume.
+
 `/context default|max|N s|save` also writes `context_window_tokens`
 in the exact `[model-limit PROVIDER/MODEL]` section through the atomic config
 writer. Every choice uses the capacity resolver's selected total window,

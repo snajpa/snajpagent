@@ -51,9 +51,18 @@ def expand_history(journal, turns):
                 previous = event
 
 
-def check(binary, native, turns=20, context=12000000):
+def check(binary, native, turns=20, context=12000000, exact=False):
     provider = FakeResponses()
     summaries = []
+    counts = []
+
+    def count(handler, request):
+        counts.append(request)
+        provider.reply(handler, json.dumps({
+            'object': 'response.input_tokens', 'input_tokens': 42000,
+        }).encode(), 'application/json')
+
+    provider.runtime_count_handler = count
     def compact(handler, request):
         summaries.append(request)
         provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
@@ -71,6 +80,9 @@ def check(binary, native, turns=20, context=12000000):
                 'native_compaction = true').replace(
                 '[agent]\n', '[agent]\nmax_turn_retries=0\n').replace(
                 '[ui]\n', '[ui]\nresume_history_turns=0\n'))
+            if exact:
+                config.write_text(config.read_text().replace(
+                    'exact_token_count = false', 'exact_token_count = true'))
             env = {**os.environ, 'HOME': str(root), 'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'}
             prefix = [str(binary), '--config', str(config), '--dotdir', str(state)]
             journal = create_legacy(state, root, 'fake', 'host-model')
@@ -104,8 +116,8 @@ def check(binary, native, turns=20, context=12000000):
             finally:
                 child.close()
             assert len(summaries) == old_compacts, len(summaries)
-            # Under the old binding the capsule plus tail fits. A different
-            # binding must rebuild the archive and compact before its first POST.
+            # A different binding restores ordinary archive text. Only a real
+            # wire overflow or token measurement can require its reduction.
             run('-e', '--', 'same model continuation')
             assert any(i.get('encrypted_content') == 'opaque-host-model'
                        for i in provider.requests[-1]['body']['input']), (
@@ -117,11 +129,13 @@ def check(binary, native, turns=20, context=12000000):
                          'new model continuation')
             request = provider.requests[-1]['body']
             if turns in (3, 14):
+                assert len(summaries) == old_compacts, (
+                    'byte estimate forced token-budget compaction', len(summaries), exact)
                 request_bytes = len(json.dumps(request).encode())
-                assert request_bytes < context * 4, (
-                    'restored archive was sent before context recovery', request_bytes, context)
-            if turns == 3:
-                assert len(summaries) == old_compacts
+                if turns == 14 or context == 100000:
+                    assert request_bytes > context * 4, (request_bytes, context)
+                if exact:
+                    assert any(r['input'] == request['input'] for r in counts)
             else:
                 assert b'Compacted' in result.stderr + result.stdout
                 assert len(summaries) >= 2
@@ -130,7 +144,7 @@ def check(binary, native, turns=20, context=12000000):
             assert 'new model continuation' in json.dumps(request['input'])
             assert 'opaque-host-model' not in json.dumps(request['input'])
             events = read_events(journal)
-            if turns == 3:
+            if turns in (3, 14):
                 assert not any(e['type'] == 'context_rebased' for e in events)
             elif turns == 20:
                 assert 'opaque-two-model' in json.dumps(request['input'])
@@ -141,7 +155,8 @@ def check(binary, native, turns=20, context=12000000):
             assert not any(e['type'] in ('turn_failed', 'turn_recovery') for e in events)
             assert events[-1]['type'] != 'turn_failed'
             assert provider.failure is None, provider.failure
-            print('projection recovery', 'native' if native else 'legacy', turns, 'PASS', flush=True)
+            print('projection recovery', 'native' if native else 'legacy', turns,
+                  'exact' if exact else 'unknown', 'PASS', flush=True)
     finally:
         provider.close()
 
@@ -153,3 +168,6 @@ if __name__ == '__main__':
     check(binary, True, 26)
     check(binary, True, 14, 872000)
     check(binary, True, 3, 872000)
+    for native in (False, True):
+        for exact in (False, True):
+            check(binary, native, 3, 100000, exact)

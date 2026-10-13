@@ -232,6 +232,7 @@ def check_context_limits(binary):
         ({"input_context_window": 600000}, 600000, 540000, 0),
         ({"input_context_window": 600000, "max_input_tokens": 800000}, 600000, 540000, 0),
         ({"max_input_tokens": 800000, "max_output_tokens": 128000}, 744000, 669600, 0),
+        ({}, 784800, 0, 0),
     )
     for declared, budget, threshold, compacts in cases:
         with tempfile.TemporaryDirectory(prefix="snag-native-limits-") as directory:
@@ -249,6 +250,7 @@ def check_context_limits(binary):
                               "read_agents_md=false\nmax_turn_retries=0\n"
                               f"[provider fixture]\nbase_url=http://127.0.0.1:{server.server_port}/v1\n"
                               'api_key="fixture-secret"\nexact_token_count=false\nnative_compaction=true\n'
+                              f"auto_compact_input_tokens={'auto' if threshold else '0'}\n"
                               "connect_timeout_ms=2000\nrequest_timeout_ms=5000\nidle_timeout_ms=3000\n"
                               "[ui]\ncolor=never\n")
             config.chmod(0o600)
@@ -266,6 +268,19 @@ def check_context_limits(binary):
                 child.until(expected, timeout=10)
                 os.write(child.master, b"Exercise the selected native input budget.\r")
                 child.until_after(b"once", "›".encode(), timeout=10)
+                if not compacts:
+                    child.output.clear()
+                    os.write(child.master, b"/context\r")
+                    child.until_after(b"context for next turn:", "›".encode(), timeout=10)
+                    assert b"the next request compacts first" not in child.output, child.output
+                if not threshold:
+                    # Disabling the soft policy still leaves the hard budget guard active.
+                    for window, needs_compact in ((333334, False), (272000, True)):
+                        child.output.clear()
+                        os.write(child.master, f"/context {window}\r".encode())
+                        child.until_after(b"context for next turn:", "›".encode(), timeout=10)
+                        advice = b"the next request compacts first" in child.output
+                        assert advice == needs_compact, (window, child.output)
                 os.write(child.master, b"/exit\r")
                 child.wait(0)
                 journal, = journal_paths(state)
@@ -286,7 +301,78 @@ def check_context_limits(binary):
     print("Native context limits: default, maximum, independent ceilings and automatic compaction: ok")
 
 
+def check_catalog_refresh(binary):
+    with tempfile.TemporaryDirectory(prefix="snag-context-refresh-") as directory:
+        root = Path(directory).resolve()
+        state, config = root / "state", root / "config.ini"
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.requests, server.count_requests = [], []
+        server.v2, server.failure, server.catalog_status = True, 0, 200
+        server.catalog_delay, server.invalid_output, server.input_usage = False, None, 300000
+        server.catalog_metadata = {"context_window": 272000, "max_context_window": 872000,
+                                   "input_context_window": 272000}
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        config.write_text("[agent]\nmodel=gpt-fixture\nreasoning_effort=max\n"
+                          "read_agents_md=false\nmax_turn_retries=0\n"
+                          f"[provider fixture]\nbase_url=http://127.0.0.1:{server.server_port}/v1\n"
+                          'api_key="fixture-secret"\nexact_token_count=false\nnative_compaction=true\n'
+                          "[ui]\ncolor=never\n")
+        config.chmod(0o600)
+        env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+               "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1", "OPENAI_API_KEY": None}
+        prefix = [str(binary), "--dotdir", str(state), "--config", str(config)]
+        child = RemoteProcess(root, prefix, wrapped=None, extra_env=env, winsize=(24, 180))
+
+        def command(text, expected):
+            child.output.clear()
+            os.write(child.master, text.encode() + b"\r")
+            initial = child.until(expected.encode(), timeout=10)
+            return initial + child.until_after(expected.encode(), "›".encode(), timeout=10)
+
+        try:
+            child.until("›".encode(), timeout=10)
+            command("/model cache", "cache updated:")
+            server.catalog_metadata.pop("input_context_window")
+            # Selection uses the saved catalog until an explicit refresh.
+            for selector in ("/model fixture/gpt-fixture/max:max", "/context max"):
+                shown = command(selector, "input-budget=272000")
+                assert b"input_context_window_tokens=272000" in shown, shown
+                assert b"/model cache" in shown, shown
+                assert not server.requests
+            command("/model cache", "cache updated:")
+            for selector in ("/context max", "/model fixture/gpt-fixture/max:max"):
+                shown = command(selector, "input-budget=784800")
+                assert b"compact=706320" in shown, shown
+                assert b"input_context_window_tokens=272000" not in shown
+            command("Exercise refreshed maximum context", "once")
+            os.write(child.master, b"/exit\r")
+            child.wait(0)
+            journal, = journal_paths(state)
+            events = read_events(journal)
+            assert not any(e["type"] == "compaction_started" for e in events)
+            starts = [e["data"] for e in events if e["type"] == "response_started"]
+            assert len(starts) == 1 and starts[0]["hard_input_tokens"] == 784800
+            assert starts[0]["effort"] == "max"
+            child.close()
+            child = RemoteProcess(root, [*prefix, "--resume", journal.parent.name], wrapped=None,
+                                  extra_env=env, winsize=(24, 180))
+            child.until("›".encode(), timeout=10)
+            shown = command("/context", "input-budget=784800")
+            assert b"max (advertised maximum)" in shown, shown
+            os.write(child.master, b"/exit\r")
+            child.wait(0)
+            assert len(server.requests) == 1
+        finally:
+            child.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+    print("Context maximum: stale ceiling diagnostic, explicit refresh, model suffix and resume: ok")
+
+
 if __name__ == "__main__":
     binary = Path(sys.argv[1]).resolve()
     check(binary)
     check_context_limits(binary)
+    check_catalog_refresh(binary)

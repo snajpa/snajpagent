@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Keep request-byte estimates out of token-budget compaction after a model
+  switch restores archived history. Exact counts, compatible provider usage,
+  provider capacity rejections and request-body limits retain their checks.
+  Explain a limiting saved catalog input window in `/context`, with an explicit
+  `/model cache` refresh action. Suppress automatic-compaction advice when that
+  policy is off.
+
 - Accept advertised input ceilings above a model's default working window when
   they fit its published maximum. Keep `/context max` and resumed model caches
   usable while applying genuine input ceilings and output reservations to the

@@ -286,6 +286,9 @@ the compact output count alone cannot represent the next full request. Display
 estimates never update durable observations, counting capabilities, ceilings or
 automatic-compaction decisions. Streaming callbacks update a byte counter and
 repaint only changed percentages; they never rebuild context or make count requests.
+The same separation applies when a binding change restores an archived prefix:
+its byte size cannot establish token overflow before exact counting or a provider
+capacity rejection. Wire-size overflow keeps its independent recovery path.
 Summary completion and recovery rebases retain their existing invalidation of
 measured anchors. Failed compaction preserves the current binding and measurements.
 

@@ -3091,13 +3091,22 @@ advertised maximum or when the output reservation leaves no input.  The
 selection overrides a configured model-limit context for the session, is
 recorded in the session log, and is restored on resume.  The output
 reservation, client percentage and proactive compaction stay derived from the
-selected window, so shrinking it compacts before the next request.  During
+selected window. Compatible measured usage above the hard input budget or at
+an enabled automatic-compaction threshold prompts advice that the next request
+compacts first. During
 active work the command ends the current response and rebuilds the turn under
 the new window, retaining conversation and completed tool results.
 Independent advertised input ceilings apply to each selection. A ceiling above
 the default working window is usable with a larger selection within the advertised
 maximum. The input budget combines those ceilings with the selected window's output
 reservation and client percentage.
+When the saved catalog's input window limits that budget, the report identifies
+.B input_context_window_tokens
+and offers
+.BR "/model cache" .
+Refresh explicitly after the provider changes its advertised limits; selections
+use the saved catalog until it is refreshed. Genuine input ceilings continue to
+apply after refresh.
 .IP
 Append
 .B s
@@ -3932,8 +3941,10 @@ bytes supply the approximation; opaque context remains uncounted until provider
 usage is available. Streaming growth uses four retained text bytes per token.
 Resume and selection or source changes rebuild the display estimate.
 Unknown capacity or an unavailable context projection shows ?.
-These estimates serve presentation; capacity checks and automatic compaction retain
-their existing measured accounting. /status labels historical input observations
+These estimates serve presentation. Request admission uses exact counts, compatible
+provider usage and actual capacity rejections, including when a model switch
+restores archived history. Request-body byte limits apply independently.
+/status labels historical input observations
 when provider source, model, effort or compaction no longer matches, and
 context-selection advice uses that compatibility check.
 The percentage can fall after a completed
