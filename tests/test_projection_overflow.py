@@ -119,6 +119,9 @@ def check(binary, native, turns=20, context=12000000, exact=False):
             # A different binding restores ordinary archive text. Only a real
             # wire overflow or token measurement can require its reduction.
             run('-e', '--', 'same model continuation')
+            restoration = ('Earlier compacted context is unavailable under the selected '
+                           'provider binding.')
+            assert restoration not in json.dumps(provider.requests[-1]['body']['input'])
             assert any(i.get('encrypted_content') == 'opaque-host-model'
                        for i in provider.requests[-1]['body']['input']), (
                 [(e['type'], e['data'].get('source_seq'), e['data'].get('reason'))
@@ -129,6 +132,8 @@ def check(binary, native, turns=20, context=12000000, exact=False):
                          'new model continuation')
             request = provider.requests[-1]['body']
             if turns in (3, 14):
+                assert json.dumps(request['input']).count(restoration) == 1, (
+                    'archive restoration lacks one explicit binding notice', turns, native)
                 assert len(summaries) == old_compacts, (
                     'byte estimate forced token-budget compaction', len(summaries), exact)
                 request_bytes = len(json.dumps(request).encode())

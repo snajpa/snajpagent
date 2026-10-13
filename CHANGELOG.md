@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Label original-history restoration when a selected provider binding cannot
+  reuse encrypted compaction. Preserve the restored facts and completed tool
+  results under the existing exact-count and request-body limits.
+
 - Bind idle context previews to the selected provider, model, endpoint and
   credential snapshot. Refresh the preview after configuration reload so an
   incompatible encrypted summary cannot make the next-request meter look smaller.

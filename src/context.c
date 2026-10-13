@@ -1430,9 +1430,6 @@ out:
     return rc;
 }
 
-/* A summary from another binding cannot be replayed as items, but its text is
- * portable: lead the new source with it so a switch costs the uncovered tail
- * instead of the whole archive. Returns 1 when the output carries no text. */
 /* A seam re-read can start between a function_call and its output, which the
  * provider rejects ("No tool output found for function call ..."). Drop any call
  * or output whose counterpart is not in the request. */
@@ -4087,6 +4084,13 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             if (install_rc == 1) {
                 builder.compact_seq = 0u;
                 builder.compact_walk_seq = 0u;
+                if (append_host_input(builder.request_input,
+                        "Earlier compacted context is unavailable under the selected provider "
+                        "binding. Original archived conversation is restored in this request; "
+                        "its input can be larger than the previous compacted context. Completed "
+                        "tools remain recorded results; do not re-execute them to reconstruct "
+                        "history.") < 0)
+                    goto out;
             }
         }
         /* Summary and rebase prefixes are installed on every build. Cache

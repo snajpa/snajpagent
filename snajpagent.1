@@ -3962,7 +3962,9 @@ carries recent complete user messages, up to 256,000 encoded bytes. Older or ove
 messages are represented by the encrypted summary; their original text remains in
 session history. This bounds verbatim context carried between compactions, including
 IRC updates and host context. A model, endpoint or account change rebuilds earlier
-history when the encrypted result cannot be reused. API providers use the separate
+history when the encrypted result cannot be reused. The request explicitly labels
+that restoration, which can increase its input size. Completed tool results remain
+history rather than instructions to execute again. API providers use the separate
 Responses compact endpoint. Set
 .B native_compaction=false
 to summarize through ordinary Responses; the application wraps the returned

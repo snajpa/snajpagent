@@ -186,11 +186,15 @@ rules remain intact.
 Ordinary conversation and local call/result pairing are portable. Private
 reasoning, upstream IDs and native encrypted compact items are replayable only
 under their recorded compatible binding. Portable summary text retains its
-coverage on a binding change. When a summary is opaque-only and incompatible,
-the new request must explicitly orient to available history; it must neither send
-foreign opaque state nor silently replay the entire covered archive. The target
-binding owns any new summarization/counting. Switching never returns to an old
-provider merely to reconstruct context.
+coverage on a binding change. When a summary requires incompatible encrypted
+state, restore the original archived conversation and explicitly identify that
+restoration in the request. Retained user messages beside ciphertext are not a
+complete portable summary. Original history preserves the covered facts; ordinary
+exact-count and request-body checks govern its potentially larger projection.
+Foreign encrypted items stay out of the request. The target binding owns any new
+summarization/counting; switching never returns to an old provider to reconstruct
+context. A new summary with an earlier coverage boundary retains all newly
+uncovered groups, including across checkpoint restore.
 
 ### Automatic input and repetition
 
