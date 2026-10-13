@@ -353,10 +353,11 @@ class SessionViewTests(unittest.TestCase):
     def events(self):
         return read_events(self.journal)
 
-    def wait_event(self, kind):
+    def wait_event(self, kind, after_seq=0):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            events = [event for event in self.events() if event['type'] == kind]
+            events = [event for event in self.events()
+                      if event['type'] == kind and event['seq'] > after_seq]
             if events:
                 return events[-1]
             time.sleep(.02)
@@ -1259,6 +1260,15 @@ class ContextMeterTests(unittest.TestCase):
             else:
                 body = self.provider.response_body(sequence, 'small public answer')
                 if sequence == 2:
+                    if missing_output:
+                        events = [self.provider.event('response.output_item.done', {'output_index': 0,
+                            'item': {'type': 'reasoning', 'id': 'unmeasured_output', 'summary': [],
+                                     'encrypted_content': 'B' * 80000}}),
+                            self.provider.event('response.output_item.done', {'output_index': 1,
+                            'item': {'type': 'message', 'id': 'input_only_answer', 'role': 'assistant',
+                                     'status': 'completed', 'content': [{'type': 'output_text',
+                                     'text': 'small public answer', 'annotations': []}]}})]
+                        body = self.provider.response_envelope(sequence, events)
                     body = body.replace('"input_tokens":1', '"input_tokens":60000').replace(
                         '"total_tokens":2', '"total_tokens":60001')
                     if missing_output:
@@ -1287,8 +1297,10 @@ class ContextMeterTests(unittest.TestCase):
         self.owner.initial.output.clear()
         os.write(self.owner.initial.master, b'first measured response\r')
         self.wait_meter(peer, lambda value: value == '60')
+        first_completed = self.owner.wait_event('response_completed')['seq']
         self.owner.initial.output.clear()
         os.write(self.owner.initial.master, b'second measured response\r')
+        self.owner.wait_event('response_completed', after_seq=first_completed)
         self.wait_meter(peer, lambda value: value == ('~61' if missing_output else '61'))
         measured = [e for e in read_events(self.owner.journal) if e['type'] == 'response_completed']
         self.assertEqual(measured[-1]['data']['usage']['input_tokens'], 60000)
@@ -1315,16 +1327,23 @@ class ContextMeterTests(unittest.TestCase):
         self.owner.config.write_text(config)
         self.owner.config.chmod(0o600)
         self.command('/configure', 'configuration reloaded:')
-        prompt = self.wait_meter(peer, lambda value: value.startswith('~') and
-                                 ((int(value[1:]) < 20) == (changed or missing_output)))
-        self.assertEqual(int(prompt['values'][5][1:]) < 20, changed or missing_output)
+        self.owner.initial.until_after(b'configuration reloaded:', b'METER ')
+        peer = self.owner.view()
+        prompt = self.wait_meter(peer, lambda value: value.startswith('~'))
+        preview = int(prompt['values'][5][1:])
+        if changed:
+            self.assertLess(preview, 20)
+        else:
+            self.assertGreaterEqual(preview, 60, 'preview lost compatible measured input usage')
+            self.assertLess(preview, 65, 'preview counted opaque encrypted output bytes')
         if resumed:
             self.owner.finish(self.owner.initial, b'/exit')
             self.owner.status('stored')
             self.owner.initial = self.owner.start(['--resume', self.owner.sid])
             self.owner.initial.until('›'.encode(), 10)
             peer = self.owner.view()
-            self.wait_meter(peer, lambda value: value.startswith('~'))
+            prompt = self.wait_meter(peer, lambda value: value.startswith('~'))
+            self.assertEqual(int(prompt['values'][5][1:]) < 20, changed)
         status = self.command('/status', 'session usage:')
         self.assertIn(b'input=60000 tokens', status)
         self.assertIn(b'historical;' if changed else b'matching selection and compaction', status)
@@ -1377,6 +1396,15 @@ class ContextMeterTests(unittest.TestCase):
 
     def test_compaction_retains_input_usage_without_output_usage(self):
         self.check_usage_scope(changed=False, missing_output=True)
+
+    def test_input_only_display_survives_legacy_reload_and_resume(self):
+        self.check_usage_scope(changed=False, missing_output=True, resumed=True)
+
+    def test_input_only_display_survives_native_reload_and_resume(self):
+        self.check_usage_scope(changed=False, missing_output=True, resumed=True)
+
+    def test_input_only_display_rejects_changed_credential(self):
+        self.check_usage_scope(missing_output=True)
 
     def test_compaction_exact_preflight_overrides_credential_incompatible_usage(self):
         self.check_usage_scope(exact=True)

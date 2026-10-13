@@ -286,8 +286,9 @@ The prompt has a process-local display projection, separate from `/status`'s
 durable measured input observations. Compute its rounded-up percentage against
 the effective hard input budget. A fresh unused session shows zero. Known capacity
 uses the current request count or a marked estimate; unavailable capacity or a
-failed display projection shows unknown. Completed usage supplies input plus
-output tokens. Before completion, retained SSE text and argument
+failed display projection shows unknown. Completed input usage replaces the
+input estimate; known output usage replaces the output estimate. Missing output
+usage leaves a marked visible-output estimate. Before completion, retained SSE text and argument
 bytes estimate output at four bytes per token; unreported hidden reasoning is
 accounted when provider usage arrives.
 
@@ -298,8 +299,12 @@ changes also rebuild a preview. Resolve its continuation scope from the selected
 provider, upstream model and offline credential snapshot, using the ordinary
 request binding. Successful configuration reload invalidates the old preview;
 previewing never refreshes credentials or contacts the provider.
-Anchor display estimates in completed input/output usage with matching provider,
+Anchor display estimates in completed input usage with matching provider,
 model, effort, source, compaction lineage and recorded continuation binding.
+Known output usage joins the anchor. When output usage is missing, retain the
+known input boundary before that response's output items and estimate their
+visible bytes, excluding encrypted payloads. Reload and resume preserve this
+input-only anchor under the same binding.
 A changed account or API key falls back to the rebuilt request's visible-byte
 estimate. The builder retains compatible usage and
 its item boundary; newly projected conversation items add four bytes per token.

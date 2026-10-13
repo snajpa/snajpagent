@@ -2509,18 +2509,23 @@ context_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
         return append_interrupted_prefix(builder, data, error, error_size);
     if (!strcmp(type, "response_completed")) {
         if (builder->tool_feedback) (void)json_array_clear(builder->tool_feedback);
+        size_t input_count = json_array_size(builder->request_input);
         int rc = append_response_items(builder, json_object_get(data, "items"), data);
         const char *scope = snag_json_string(data, "continuation_scope");
         struct snag_response_usage usage;
         if (rc == 0 && builder->continuation_scope && scope &&
             !strcmp(builder->continuation_scope, scope) &&
             snag_response_usage_from_json(json_object_get(data, "usage"), &usage) == 0 &&
-            usage.input_known && usage.output_known) {
+            usage.input_known) {
+            uint64_t output = usage.output_known ? usage.output_tokens : 0u;
             builder->display_anchor = builder->display_start;
-            builder->display_tokens = usage.output_tokens > UINT64_MAX - usage.input_tokens
+            builder->display_tokens = output > UINT64_MAX - usage.input_tokens
                                           ? UINT64_MAX
-                                          : usage.input_tokens + usage.output_tokens;
-            builder->display_count = json_array_size(builder->request_input);
+                                          : usage.input_tokens + output;
+            /* Unmeasured output remains outside the known input boundary. */
+            builder->display_count = usage.output_known
+                                         ? json_array_size(builder->request_input)
+                                         : input_count;
         } else builder->display_anchor.valid = false;
         return rc;
     }
@@ -4299,9 +4304,20 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     }
     if (builder.display_anchor.valid) {
         for (size_t i = builder.display_count; i < json_array_size(builder.request_input); ++i) {
+            const json_t *item = json_array_get(builder.request_input, i);
             size_t bytes;
-            if (snag_json_digest_bounded(json_array_get(builder.request_input, i),
-                    SNAG_CONTEXT_MAX_REQUEST, NULL, &bytes) < 0) goto out;
+            if (snag_json_digest_bounded(item, SNAG_CONTEXT_MAX_REQUEST, NULL, &bytes) < 0) {
+                goto out;
+            }
+            const json_t *encrypted = json_object_get(item, "encrypted_content");
+            if (json_is_string(encrypted)) {
+                size_t opaque_bytes;
+                if (snag_json_digest_bounded(encrypted, SNAG_CONTEXT_MAX_REQUEST,
+                        NULL, &opaque_bytes) < 0) {
+                    goto out;
+                }
+                bytes -= opaque_bytes - 2u;
+            }
             projection->display_bytes += bytes + 1u;
         }
     }

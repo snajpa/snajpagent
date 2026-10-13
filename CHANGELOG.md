@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Preserve compatible input-only usage in the context preview after reload and
+  resume. Estimate unmeasured visible output while excluding encrypted payloads;
+  keep the meter marked as an estimate.
+
 - Report `/context` advice as a prior measurement reaching an active limit.
   Keep the next request's accounting authoritative, including an exact count
   that fits and skips compaction.
