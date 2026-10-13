@@ -3094,6 +3094,10 @@ reservation, client percentage and proactive compaction stay derived from the
 selected window, so shrinking it compacts before the next request.  During
 active work the command ends the current response and rebuilds the turn under
 the new window, retaining conversation and completed tool results.
+Independent advertised input ceilings apply to each selection. A ceiling above
+the default working window is usable with a larger selection within the advertised
+maximum. The input budget combines those ceilings with the selected window's output
+reservation and client percentage.
 .IP
 Append
 .B s

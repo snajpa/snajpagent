@@ -351,6 +351,15 @@ and a number selects an explicit token count that must fit the advertised
 maximum. Reserve, client percentage and
 proactive compaction stay derived from the selection.
 
+Independent `input_context_window` and `max_input_tokens` declarations are
+validated against the advertised maximum when available. They can exceed the
+default working window. Capacity resolution intersects each input ceiling with
+the selected window after output reservation and client percentage. The catalog
+can publish independent input and output maxima whose sum exceeds the selected
+window; the resolver supplies the usable request budget. A catalog's default
+working window belongs in `context_window`; an independent input ceiling requires
+its own provider declaration.
+
 `/context default|max|N s|save` also writes `context_window_tokens`
 in the exact `[model-limit PROVIDER/MODEL]` section through the atomic config
 writer. Every choice uses the capacity resolver's selected total window,

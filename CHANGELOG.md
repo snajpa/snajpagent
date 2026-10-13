@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Accept advertised input ceilings above a model's default working window when
+  they fit its published maximum. Keep `/context max` and resumed model caches
+  usable while applying genuine input ceilings and output reservations to the
+  selected request budget.
+
 - Continue eligible saved work after an initial interactive-resume prompt is
   submitted. An unmentioned startup message in IRC chat view preserves its
   conversation route while the restored active goal resumes automatically.

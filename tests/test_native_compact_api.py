@@ -36,7 +36,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.server.catalog_status != 200:
             self.reply(self.server.catalog_status, b'{}')
             return
-        metadata = {"context_window": 1000000}
+        metadata = dict(getattr(self.server, "catalog_metadata", {"context_window": 1000000}))
         if self.server.v2:
             metadata["native_compaction_protocol"] = "responses_v2"
         body = {"data": [{"id": "gpt-fixture", "metadata": metadata},
@@ -60,7 +60,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.reply(400, json.dumps({"error": {"code": "context_length_exceeded",
                             "type": "invalid_request_error", "message": "fixture capacity rejection"}}).encode())
                 return
-            self.reply(200, response())
+            body = response()
+            if getattr(self.server, "input_usage", None) is not None:
+                assert b'"input_tokens": 1' in body and b'"total_tokens": 4' in body
+                body = body.replace(b'"input_tokens": 1',
+                                    f'"input_tokens": {self.server.input_usage}'.encode())
+                body = body.replace(b'"total_tokens": 4',
+                                    f'"total_tokens": {self.server.input_usage + 3}'.encode())
+            self.reply(200, body)
             return
         assert self.path == "/v1/responses/compact", self.path
         if self.server.failure:
@@ -218,5 +225,68 @@ def check(binary):
     print("Native compact API: capability-scoped parameters, standard API, native output and retained failures: ok")
 
 
+def check_context_limits(binary):
+    cases = (
+        ({}, 784800, 706320, 0),
+        ({"input_context_window": 272000}, 272000, 244800, 1),
+        ({"input_context_window": 600000}, 600000, 540000, 0),
+        ({"input_context_window": 600000, "max_input_tokens": 800000}, 600000, 540000, 0),
+        ({"max_input_tokens": 800000, "max_output_tokens": 128000}, 744000, 669600, 0),
+    )
+    for declared, budget, threshold, compacts in cases:
+        with tempfile.TemporaryDirectory(prefix="snag-native-limits-") as directory:
+            root = Path(directory).resolve()
+            state, config = root / "state", root / "config.ini"
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            server.requests, server.count_requests = [], []
+            server.v2, server.failure, server.catalog_status = True, 0, 200
+            server.catalog_delay, server.invalid_output, server.input_usage = False, None, 300000
+            server.catalog_metadata = {"context_window": 272000, "max_context_window": 872000,
+                                       **declared}
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            config.write_text("[agent]\nmodel=gpt-fixture\nreasoning_effort=xhigh\n"
+                              "read_agents_md=false\nmax_turn_retries=0\n"
+                              f"[provider fixture]\nbase_url=http://127.0.0.1:{server.server_port}/v1\n"
+                              'api_key="fixture-secret"\nexact_token_count=false\nnative_compaction=true\n'
+                              "connect_timeout_ms=2000\nrequest_timeout_ms=5000\nidle_timeout_ms=3000\n"
+                              "[ui]\ncolor=never\n")
+            config.chmod(0o600)
+            env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+                   "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1", "OPENAI_API_KEY": None}
+            prefix = [str(binary), "--dotdir", str(state), "--config", str(config),
+                      "-m", "fixture/gpt-fixture"]
+            child = RemoteProcess(root, prefix, wrapped=None, extra_env=env, winsize=(24, 180))
+            try:
+                child.until("›".encode(), timeout=10)
+                os.write(child.master, b"/model cache\r")
+                child.until(b"cache updated:", timeout=10)
+                os.write(child.master, b"/context max\r")
+                expected = f"input-budget={budget} · compact={threshold}".encode()
+                child.until(expected, timeout=10)
+                os.write(child.master, b"Exercise the selected native input budget.\r")
+                child.until_after(b"once", "›".encode(), timeout=10)
+                os.write(child.master, b"/exit\r")
+                child.wait(0)
+                journal, = journal_paths(state)
+                events = read_events(journal)
+                starts = [e for e in events if e["type"] == "response_started"]
+                assert len(starts) == 1 and starts[0]["data"]["hard_input_tokens"] == budget
+                responses = [e for e in events if e["type"] == "response_completed"]
+                assert len(responses) == 1 and responses[0]["data"]["usage"]["input_tokens"] == 300000
+                completed = [e for e in events if e["type"] == "compaction_completed"]
+                assert len(completed) == compacts, (declared, completed)
+                assert len([r for r in server.requests if r[0] == "/v1/responses/compact"]) == compacts
+                assert b"fixture-secret" not in child.output
+            finally:
+                child.close()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+    print("Native context limits: default, maximum, independent ceilings and automatic compaction: ok")
+
+
 if __name__ == "__main__":
-    check(Path(sys.argv[1]).resolve())
+    binary = Path(sys.argv[1]).resolve()
+    check(binary)
+    check_context_limits(binary)

@@ -535,6 +535,71 @@ main(void)
                    "openai", &reserve_choice, &chosen, choice_error, sizeof(choice_error)) < 0);
     }
     {
+        json_t *model = json_array_get(
+            json_object_get(json_array_get(providers, 1u), "models"), 0u);
+        json_t *limits = json_object_get(model, "limits");
+        json_t *original = json_deep_copy(limits);
+        const char *fields[] = {"input_context_window_tokens", "max_input_tokens"};
+        const uint64_t input_limits[] = {600000u, 800000u};
+        const struct snag_context_choice max_choice = {SNAG_CONTEXT_MODE_MAX, 0u};
+
+        assert(original);
+        for (size_t field = 0u; field < sizeof(fields) / sizeof(fields[0]); ++field) {
+            for (size_t input = 0u;
+                 input < sizeof(input_limits) / sizeof(input_limits[0]); ++input) {
+                for (unsigned int reserve = 0u; reserve < 2u; ++reserve) {
+                    uint64_t output = reserve ? 128000u : 0u;
+                    assert(json_object_set_new(limits, fields[field],
+                               json_integer((json_int_t)input_limits[input])) == 0);
+                    assert(json_object_set_new(limits, "max_output_tokens",
+                               output ? json_integer((json_int_t)output) : json_null()) == 0);
+                    /* A published maximum distinguishes the default working
+                     * window from an independent input ceiling. */
+                    assert(snag_model_cache_replace(
+                               &store, providers, 123456u, &cache, error, sizeof(error)) == 0);
+                    snag_model_cache_free(&cache);
+                    assert(snag_model_cache_load(&store, &cache, error, sizeof(error)) == 0);
+                    capacity = resolve_capacity(&cache, &config, 1u, "codex-context-only", "codex");
+                    assert(capacity.hard_input_tokens == (reserve ? 144000u : 258400u));
+                    capacity = resolve_capacity_choice(
+                        &cache, &config, 1u, "codex-context-only", "codex", &max_choice);
+                    uint64_t expected = input_limits[input];
+                    if (reserve && expected > 744000u) expected = 744000u;
+                    assert(capacity.hard_input_tokens == expected);
+                    assert(snag_model_compact_threshold(&config.providers[1], &capacity) ==
+                           expected * 9u / 10u);
+                }
+            }
+            assert(json_object_set_new(limits, fields[field], json_integer(872001u)) == 0);
+            assert(snag_model_cache_replace(
+                       &store, providers, 123456u, &cache, error, sizeof(error)) < 0);
+            assert(json_object_set_new(limits, "context_window_tokens", json_null()) == 0);
+            assert(snag_model_cache_replace(
+                       &store, providers, 123456u, &cache, error, sizeof(error)) < 0);
+            assert(json_object_set_new(limits, fields[field], json_integer(600000u)) == 0);
+            assert(snag_model_cache_replace(
+                       &store, providers, 123456u, &cache, error, sizeof(error)) == 0);
+            capacity = resolve_capacity(&cache, &config, 1u, "codex-context-only", "codex");
+            assert(capacity.hard_input_tokens == 600000u);
+            assert(json_object_set_new(
+                       limits, "context_window_tokens", json_integer(272000u)) == 0);
+            assert(json_object_set_new(limits, fields[field], json_null()) == 0);
+        }
+        assert(json_object_set_new(
+                   limits, "input_context_window_tokens", json_integer(600000u)) == 0);
+        assert(json_object_set_new(
+                   limits, "max_input_tokens", json_integer(800000u)) == 0);
+        assert(snag_model_cache_replace(
+                   &store, providers, 123456u, &cache, error, sizeof(error)) == 0);
+        capacity = resolve_capacity_choice(
+            &cache, &config, 1u, "codex-context-only", "codex", &max_choice);
+        assert(capacity.hard_input_tokens == 600000u);
+        assert(json_object_set(model, "limits", original) == 0);
+        json_decref(original);
+        assert(snag_model_cache_replace(
+                   &store, providers, 123456u, &cache, error, sizeof(error)) == 0);
+    }
+    {
         struct snag_model_capacity bigger;
         struct snag_model_limit_config *limit = &config.model_limits[0];
 

@@ -28,14 +28,15 @@ snag_model_cache_free(struct snag_model_cache *cache)
 static bool
 capacity_limits_valid(const struct snag_model_capacity *c)
 {
-    return !c->context_window_tokens ||
-           ((!c->max_context_window_tokens ||
-                c->context_window_tokens <= c->max_context_window_tokens) &&
-               c->input_context_window_tokens <= c->context_window_tokens &&
-               c->max_input_tokens <= c->context_window_tokens &&
-               c->max_output_tokens <= c->context_window_tokens &&
-               c->max_input_tokens <= c->context_window_tokens - c->max_output_tokens &&
-               c->auto_compact_input_tokens <= c->context_window_tokens);
+    uint64_t maximum = c->max_context_window_tokens ? c->max_context_window_tokens
+                                                   : c->context_window_tokens;
+
+    return (!maximum || (c->context_window_tokens <= maximum &&
+                            c->input_context_window_tokens <= maximum &&
+                            c->max_input_tokens <= maximum)) &&
+           (!c->context_window_tokens ||
+               (c->max_output_tokens <= c->context_window_tokens &&
+                   c->auto_compact_input_tokens <= c->context_window_tokens));
 }
 
 static bool
@@ -1014,7 +1015,6 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache, const struct s
     if (configured.context_window_tokens)
         capacity->context_window_tokens = configured.context_window_tokens;
     if (configured.max_input_tokens) capacity->max_input_tokens = configured.max_input_tokens;
-    if (capacity->max_input_tokens) capacity->input_context_window_tokens = 0u;
     if (configured.max_output_tokens) capacity->max_output_tokens = configured.max_output_tokens;
     if (override) capacity->source = SNAG_CAPACITY_CONFIG;
     /* The provider's normal working window is the default budget. An advertised
