@@ -782,6 +782,45 @@ snag_context_start_new(struct snag_session *session)
     session->on_checkpoint = context_cache_checkpoint;
 }
 
+bool
+snag_context_input_scope_matches(struct snag_session *session, const char *scope)
+{
+    struct snag_context_capture *cache = NULL;
+    const json_t *completed = NULL;
+    char error[256] = {0};
+
+    if (!session || !scope || !session->context_meter.valid ||
+        context_cache_get(session, &cache, error, sizeof(error), NULL) < 0)
+        return false;
+    /* Scope belongs to the response that supplied the measurement. Later
+     * responses with unknown input usage leave that observation unchanged. */
+    for (size_t i = json_array_size(cache->recent); i > 0u; --i) {
+        const json_t *entry = json_array_get(cache->recent, i - 1u);
+        const char *type = snag_json_string(entry, "type");
+        const json_t *data = json_object_get(entry, "data");
+
+        if (!strcmp(type, "response_completed")) {
+            completed = data;
+        } else if (!strcmp(type, "response_started")) {
+            const char *id = snag_json_string(data, "response_id");
+            const char *completed_id = snag_json_string(completed, "response_id");
+            bool paired = id && completed_id && !strcmp(id, completed_id);
+            struct snag_response_usage usage;
+            bool measured = !strcmp(snag_json_string(data, "count_method"), "exact") ||
+                (paired && snag_response_usage_from_json(
+                    json_object_get(completed, "usage"), &usage) == 0 && usage.input_known);
+            const char *request = snag_json_string(data, "request_sha256");
+
+            if (measured && request && !strcmp(request, session->context_meter.request_sha256)) {
+                const char *observed_scope = snag_json_string(completed, "continuation_scope");
+                return paired && observed_scope && !strcmp(scope, observed_scope);
+            }
+            completed = NULL;
+        }
+    }
+    return false;
+}
+
 void
 snag_context_projection_free(struct snag_context_projection *projection)
 {
@@ -1430,9 +1469,6 @@ out:
     return rc;
 }
 
-/* A summary from another binding cannot be replayed as items, but its text is
- * portable: lead the new source with it so a switch costs the uncovered tail
- * instead of the whole archive. Returns 1 when the output carries no text. */
 /* A seam re-read can start between a function_call and its output, which the
  * provider rejects ("No tool output found for function call ..."). Drop any call
  * or output whose counterpart is not in the request. */
@@ -2473,16 +2509,23 @@ context_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
         return append_interrupted_prefix(builder, data, error, error_size);
     if (!strcmp(type, "response_completed")) {
         if (builder->tool_feedback) (void)json_array_clear(builder->tool_feedback);
+        size_t input_count = json_array_size(builder->request_input);
         int rc = append_response_items(builder, json_object_get(data, "items"), data);
+        const char *scope = snag_json_string(data, "continuation_scope");
         struct snag_response_usage usage;
-        if (rc == 0 &&
+        if (rc == 0 && builder->continuation_scope && scope &&
+            !strcmp(builder->continuation_scope, scope) &&
             snag_response_usage_from_json(json_object_get(data, "usage"), &usage) == 0 &&
-            usage.input_known && usage.output_known) {
+            usage.input_known) {
+            uint64_t output = usage.output_known ? usage.output_tokens : 0u;
             builder->display_anchor = builder->display_start;
-            builder->display_tokens = usage.output_tokens > UINT64_MAX - usage.input_tokens
+            builder->display_tokens = output > UINT64_MAX - usage.input_tokens
                                           ? UINT64_MAX
-                                          : usage.input_tokens + usage.output_tokens;
-            builder->display_count = json_array_size(builder->request_input);
+                                          : usage.input_tokens + output;
+            /* Unmeasured output remains outside the known input boundary. */
+            builder->display_count = usage.output_known
+                                         ? json_array_size(builder->request_input)
+                                         : input_count;
         } else builder->display_anchor.valid = false;
         return rc;
     }
@@ -3571,74 +3614,6 @@ snag_context_compact_output_set(
 }
 
 int
-snag_context_compact_reduce_request_build(struct snag_session *session,
-    const struct snag_provider_config *provider, const char *model, const char *effort,
-    const json_t *output, const char *instruction, struct snag_json_document *create_request,
-    char *error, size_t error_size)
-{
-    struct snag_buf text = {0};
-    json_t *input = NULL;
-    json_t *request = NULL;
-    char cache_key[SNAG_CACHE_KEY_LEN + 1u];
-    const char *upstream_model = snag_config_model_upstream(provider, model);
-    size_t count = output ? json_array_size(output) : 0u;
-    int rc = -1;
-
-    if (compact_output_encrypted(output))
-        return snag_fail(error, error_size, EINVAL,
-            "encrypted compaction requires its complete provider window");
-    snag_buf_init(&text, SNAG_CONTEXT_MAX_COMPACT);
-    if (snag_buf_printf(&text, "%s\n\n", instruction) < 0) goto out;
-    size_t header_bytes = text.len;
-    for (size_t i = 0u; i < count; ++i) {
-        json_t *item = json_array_get(output, i);
-        json_t *parts = json_object_get(item, "content");
-        const char *plain = snag_json_string(item, "text");
-        const char *inline_text = snag_json_string(item, "content");
-        if (plain && plain[0]) {
-            if (snag_buf_printf(&text, "%s\n", plain) < 0) goto out;
-        } else if (inline_text && inline_text[0]) {
-            if (snag_buf_printf(&text, "%s\n", inline_text) < 0) goto out;
-        } else {
-            for (size_t p = 0u; p < json_array_size(parts); ++p) {
-                const char *part = snag_json_string(json_array_get(parts, p), "text");
-                if (part && part[0] && snag_buf_printf(&text, "%s\n", part) < 0) goto out;
-            }
-        }
-    }
-    if (snag_buf_terminate(&text) < 0) goto out;
-    if (text.len == header_bytes) {
-        snag_errorf(error, error_size, "compaction reduce has no text to condense");
-        goto out;
-    }
-    input = json_pack("[{s:s,s:s}]", "role", "user", "content", (const char *)text.data);
-    if (!input) goto out;
-    snag_context_cache_key(session, provider ? provider->name : NULL, upstream_model, cache_key);
-    if (!cache_key[0]) goto out;
-    request = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:s}", "input", input, "model",
-        upstream_model, "parallel_tool_calls", session->parallel_tool_calls, "reasoning", "effort",
-        effort, "store", 0, "stream", 1, "tool_choice", "auto", "truncation", "disabled");
-    if (!request) goto out;
-    if (snag_json_set_new(request, "prompt_cache_key", json_string(cache_key)) < 0 ||
-        snag_json_set_new(request, "include", json_pack("[s]", "reasoning.encrypted_content")) <
-            0 ||
-        (provider && snag_auth_uses_codex(provider->auth) &&
-            snag_context_codex_request(request) < 0))
-        goto out;
-    if (snag_json_document_set(create_request, request, SNAG_CONTEXT_MAX_REQUEST) < 0) {
-        snag_errorf(error, error_size, "compaction reduce request exceeds 32 MiB");
-        goto out;
-    }
-    request = NULL;
-    rc = 0;
-out:
-    json_decref(input);
-    json_decref(request);
-    snag_buf_free(&text);
-    return rc;
-}
-
-int
 snag_context_compact_request_build(struct snag_session *session, const char *model,
     const char *effort, bool active_prefix, uint64_t source_budget, bool allow_oversized_first,
     const char *continuation_scope, struct snag_context_projection *projection, char *error,
@@ -4155,7 +4130,13 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             if (install_rc == 1) {
                 builder.compact_seq = 0u;
                 builder.compact_walk_seq = 0u;
-                projection->restored_compacted_history = true;
+                if (append_host_input(builder.request_input,
+                        "Earlier compacted context is unavailable under the selected provider "
+                        "binding. Original archived conversation is restored in this request; "
+                        "its input can be larger than the previous compacted context. Completed "
+                        "tools remain recorded results; do not re-execute them to reconstruct "
+                        "history.") < 0)
+                    goto out;
             }
         }
         /* Summary and rebase prefixes are installed on every build. Cache
@@ -4323,9 +4304,20 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     }
     if (builder.display_anchor.valid) {
         for (size_t i = builder.display_count; i < json_array_size(builder.request_input); ++i) {
+            const json_t *item = json_array_get(builder.request_input, i);
             size_t bytes;
-            if (snag_json_digest_bounded(json_array_get(builder.request_input, i),
-                    SNAG_CONTEXT_MAX_REQUEST, NULL, &bytes) < 0) goto out;
+            if (snag_json_digest_bounded(item, SNAG_CONTEXT_MAX_REQUEST, NULL, &bytes) < 0) {
+                goto out;
+            }
+            const json_t *encrypted = json_object_get(item, "encrypted_content");
+            if (json_is_string(encrypted)) {
+                size_t opaque_bytes;
+                if (snag_json_digest_bounded(encrypted, SNAG_CONTEXT_MAX_REQUEST,
+                        NULL, &opaque_bytes) < 0) {
+                    goto out;
+                }
+                bytes -= opaque_bytes - 2u;
+            }
             projection->display_bytes += bytes + 1u;
         }
     }

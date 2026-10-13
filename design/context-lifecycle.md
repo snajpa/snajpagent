@@ -8,9 +8,9 @@ component ownership; `goals.md` owns goal lifecycle; `interactive-io.md` owns
 terminal interaction. Those surfaces must use the transitions defined here.
 Implementation and test reconciliation is in progress; this design is not a
 claim that every existing path already satisfies it. [Binary session storage](session-storage.md)
-defines the next-format layout, replacement checkpoints, index and grouped I/O.
-Its explicit layout decisions supersede the one-file restrictions below for that
-future format; the descriptions below still apply to the current JSONL store.
+defines the native layout, paired replacement checkpoints, indexes and grouped I/O.
+Current source creates native sessions. Embedded checkpoints and JSONL record
+navigation described here apply to retained legacy sessions.
 
 ## Requirements
 
@@ -53,7 +53,10 @@ routine reopen reads that boundary and its suffix, not the lifetime prefix.
    policy path; context reduction must not reclassify a policy rejection.
 8. Present consistent context information while working and at idle. The prompt
    and `/status` use the same observation validity and selected-capacity rules;
-   issuing a command must not be necessary to refresh them.
+   issuing a command must not be necessary to refresh them. `/context` reports
+   when a compatible prior input measurement reaches an active limit. Its advice
+   leaves the next request's accounting authoritative, including an exact count
+   that fits and requires no compaction.
 9. Preserve active goals across every error. Recovery must perform a real paced,
    interruptible attempt, rather than repeatedly reporting a permanently latched
    failure. Error budgets govern attempts, not goal lifecycle decisions.
@@ -72,11 +75,13 @@ routine reopen reads that boundary and its suffix, not the lifetime prefix.
 
 ## One state and its derived views
 
-The session journal is authoritative. Its indexed `session_checkpoint` record
-contains the reducer state and materialized provider view at the same sequence,
-plus deferred input, call pairing and the bounded event seam needed to extend
-that view. The journal suffix advances that state through the same interpreter
-used live. Checkpoint creation changes no conversation meaning or goal state.
+The session journal is authoritative. A checkpoint captures reducer state and
+provider-view state at the same verified journal boundary, including deferred
+input, call pairing and the bounded event seam needed to extend that view. Native
+storage pairs core and provider checkpoint images; legacy JSONL embeds an indexed
+`session_checkpoint` record. The journal suffix advances that state through the
+same interpreter used live. Checkpoint creation preserves conversation meaning
+and goal state.
 The cache, checkpoint encoding and request projection are representations of
 that state, not competing owners of it.
 
@@ -109,8 +114,9 @@ There are two explicit ways to change coverage in that state:
 
 A goal turn's final answer is a continuation boundary, not a storage checkpoint
 or compaction. Describe it as a *goal continuation boundary* when distinguishing
-these operations. No separate checkpoint files, history database, process
-controller or session-wide quota is needed.
+these operations. Native storage publishes paired replacement checkpoint images
+and journal indexes under the binary storage contract. Legacy JSONL retains its
+embedded checkpoint layout.
 
 ### Durable transaction
 
@@ -161,8 +167,12 @@ model-switched paths share this order:
    remeasure. Every successful chunk must advance source coverage. Keep its
    summary even if a later chunk fails. Repeated source/request hashes or absent
    complete prefixes demonstrate no progress; arbitrary event counts do not.
-5. Bound consecutive reductions before a provider response using the existing
-   attempt budget. If a usable context still cannot fit, try one explicit minimal
+   Within one compaction, exact-count overflow or a capacity rejection reduces
+   the source budget strictly. Continue while it decreases; a zero or unchanged
+   budget terminates fitting. This is independent of the owning turn's retry
+   policy and preserves smaller prefixes beyond a fixed number of reductions.
+5. Allow one bounded hard-budget compact before a provider response. Remeasure
+   the rebuilt request; if it remains over the window, try one explicit minimal
    recovery projection. A fitting summary takes precedence over that fallback.
    An unchanged minimal request that still cannot fit fails this attempt; it
    must not oscillate between old full context and empty rebases. Fresh durable
@@ -171,6 +181,9 @@ model-switched paths share this order:
    commit `response_started` before network I/O. This records an attempt, not
    provider acceptance or success. A rejected or interrupted compact operation
    never records `compaction_completed`.
+   A deferred control interrupting pre-response compaction returns to preparation:
+   apply the control at the safe boundary, retain prior context and remeasure under
+   the resulting settings. User cancellation still ends the turn.
 7. A successful complete response advances history and resets consecutive
    preparation failure/progress guards. Failed responses retain already committed
    public output and completed effects without admitting proposed calls.
@@ -186,11 +199,15 @@ rules remain intact.
 Ordinary conversation and local call/result pairing are portable. Private
 reasoning, upstream IDs and native encrypted compact items are replayable only
 under their recorded compatible binding. Portable summary text retains its
-coverage on a binding change. When a summary is opaque-only and incompatible,
-the new request must explicitly orient to available history; it must neither send
-foreign opaque state nor silently replay the entire covered archive. The target
-binding owns any new summarization/counting. Switching never returns to an old
-provider merely to reconstruct context.
+coverage on a binding change. When a summary requires incompatible encrypted
+state, restore the original archived conversation and explicitly identify that
+restoration in the request. Retained user messages beside ciphertext are not a
+complete portable summary. Original history preserves the covered facts; ordinary
+exact-count and request-body checks govern its potentially larger projection.
+Foreign encrypted items stay out of the request. The target binding owns any new
+summarization/counting; switching never returns to an old provider to reconstruct
+context. A new summary with an earlier coverage boundary retains all newly
+uncovered groups, including across checkpoint restore.
 
 ### Automatic input and repetition
 
@@ -244,8 +261,11 @@ and unconsumed referenced room events remain outside coverage until admitted.
 Native compact and Responses-summary adapters produce the same validated
 completion transition. Native output is opaque continuation, not parseable prose.
 A fallback summary is explicitly summary data, not a newly authoritative user
-instruction. Summary reduction operates on the retained summary, not on a second
-copy of all already covered events.
+instruction. Source selection starts from the compact request's wire bound;
+an exact count or provider capacity rejection can require smaller complete groups.
+Byte/token ratios neither shorten that source nor schedule an additional summary
+request. Adopt the validated output and apply measured capacity checks when
+building the next response request.
 
 Manual controls remain pending when no safe prefix exists and are revisited at
 a safe boundary. Cancel/failure clears only the current attempt and leaves the
@@ -266,17 +286,27 @@ The prompt has a process-local display projection, separate from `/status`'s
 durable measured input observations. Compute its rounded-up percentage against
 the effective hard input budget. A fresh unused session shows zero. Known capacity
 uses the current request count or a marked estimate; unavailable capacity or a
-failed display projection shows unknown. Completed usage supplies input plus
-output tokens. Before completion, retained SSE text and argument
+failed display projection shows unknown. Completed input usage replaces the
+input estimate; known output usage replaces the output estimate. Missing output
+usage leaves a marked visible-output estimate. Before completion, retained SSE text and argument
 bytes estimate output at four bytes per token; unreported hidden reasoning is
 accounted when provider usage arrives.
 
 Compaction completion invalidates the prior display binding and measures the
 adopted context through the same builder as a response request, allowing an idle
 preview without request admission or checkpoint writes. Resume and selection/source
-changes also rebuild a preview. Anchor display estimates in completed input/output
-usage with matching provider,
-model, effort, source and compaction lineage. The builder retains that usage and
+changes also rebuild a preview. Resolve its continuation scope from the selected
+provider, upstream model and offline credential snapshot, using the ordinary
+request binding. Successful configuration reload invalidates the old preview;
+previewing never refreshes credentials or contacts the provider.
+Anchor display estimates in completed input usage with matching provider,
+model, effort, source, compaction lineage and recorded continuation binding.
+Known output usage joins the anchor. When output usage is missing, retain the
+known input boundary before that response's output items and estimate their
+visible bytes, excluding encrypted payloads. Reload and resume preserve this
+input-only anchor under the same binding.
+A changed account or API key falls back to the rebuilt request's visible-byte
+estimate. The builder retains compatible usage and
 its item boundary; newly projected conversation items add four bytes per token.
 Replay the retained seam once after checkpoint restore to recover these derived
 facts without changing stored formats. With no compatible usage, estimate visible
@@ -286,15 +316,27 @@ the compact output count alone cannot represent the next full request. Display
 estimates never update durable observations, counting capabilities, ceilings or
 automatic-compaction decisions. Streaming callbacks update a byte counter and
 repaint only changed percentages; they never rebuild context or make count requests.
+The same separation applies when a binding change restores an archived prefix:
+its byte size cannot establish token overflow before exact counting or a provider
+capacity rejection. Wire-size overflow keeps its independent recovery path.
 Summary completion and recovery rebases retain their existing invalidation of
 measured anchors. Failed compaction preserves the current binding and measurements.
 
 An exact outgoing count becomes durable at `response_started`; provider usage
-may replace it at `response_completed`. There is no `input_token_count` journal
-transition. Refresh at those real transitions and at completed compaction/rebase.
-Use the same binding/compaction matcher for the meter, status annotation and
-context-selection budget advice. Status may retain a historical observation for
-diagnostics, but must label it ineligible rather than implying current occupancy.
+may replace it at `response_completed`. Post-turn compaction reads this committed
+measurement directly after the completed response's usage has been applied.
+There is no `input_token_count` journal transition. Refresh at those real
+transitions and at completed compaction/rebase.
+Use the same binding/compaction matcher for measured admission, status annotation
+and context-selection budget advice. Match the measurement's completed response
+continuation scope to the selected provider credential binding. Resolve its
+request identity from the existing retained event seam; a later response with
+unknown input usage keeps the earlier measurement's scope. Input-only usage and
+exact preflight retained through a completed response remain eligible under
+that binding. This check adds no stored fields or credential refresh.
+Display anchors also require known output usage for their combined estimate.
+Status may retain a historical observation for diagnostics, but must label it
+ineligible rather than implying current occupancy.
 
 Refresh presentation after committed observation, coverage or selected-identity
 changes and when entering idle. Preserve the user's draft, terminal ownership,
@@ -340,9 +382,11 @@ outside the window. They remain recoverable from the original journal. Display
 restoration is separate from authoritative IRC recovery: deduplication cursors,
 pending admissions and reply obligations cannot be dropped to bound a preview.
 
-Each record uses the existing envelope/digest validator and links to the previous
-record. One derived in-memory position per session avoids rediscovering the last
-page boundary; it is discarded on reopen and is not another durable index.
+Native history readers use verified commit batches and sequence indexes under
+the binary storage contract. Legacy JSONL records use the existing envelope/digest
+validator and link to the previous record. One derived in-memory position per
+session avoids rediscovering the last page boundary; it is discarded on reopen
+and is not another durable index.
 An arbitrary older sequence is located by searching complete JSONL records by
 their monotonic sequence, validating the inspected records. Unread older records
 are not represented as checked. Malformed records or broken links remain errors;

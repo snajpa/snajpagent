@@ -7,6 +7,56 @@
 - Release parent-directory descriptors after native file writes and edits, including
   rejected edits. Long sessions retain descriptor capacity for later files and TLS.
 
+- Preserve compatible input-only usage in the context preview after reload and
+  resume. Estimate unmeasured visible output while excluding encrypted payloads;
+  keep the meter marked as an estimate.
+
+- Report `/context` advice as a prior measurement reaching an active limit.
+  Keep the next request's accounting authoritative, including an exact count
+  that fits and skips compaction.
+
+- Resume request preparation when a deferred configuration reload interrupts
+  pre-response compaction. Retain previous context and remeasure with the reloaded
+  settings instead of reporting a compaction failure.
+
+- Align the context and architecture contracts and manual checkpoint reference
+  with current native storage, retaining the legacy JSONL recovery rules.
+
+- Validate the measured input request's continuation binding for automatic
+  compaction, status and context-selection advice. Account or API-key changes
+  leave incompatible usage historical while exact preflight remains authoritative.
+
+- Keep hard-budget preparation state to one successful checkpoint per response
+  cycle, then use the measured recovery projection.
+
+- Fit compaction sources while their byte budget keeps decreasing, including
+  prefixes that need more than eight reductions. Stop on an irreducible source
+  and retain the prior context when fitting fails.
+
+- Reuse display usage only under the completed response's continuation binding.
+  After an account or API-key change, estimate the rebuilt request instead of
+  applying a measurement of the earlier encrypted context.
+
+- Label original-history restoration when a selected provider binding cannot
+  reuse encrypted compaction. Preserve the restored facts and completed tool
+  results under the existing exact-count and request-body limits.
+
+- Bind idle context previews to the selected provider, model, endpoint and
+  credential snapshot. Refresh the preview after configuration reload so an
+  incompatible encrypted summary cannot make the next-request meter look smaller.
+  Preview construction stays offline.
+
+- Select compaction sources by their wire limit and actual capacity checks.
+  Remove byte/token-ratio cuts and the extra ratio-triggered condensation of
+  readable summaries; retain exact-count and provider-rejection recovery.
+
+- Keep request-byte estimates out of token-budget compaction after a model
+  switch restores archived history. Exact counts, compatible provider usage,
+  provider capacity rejections and request-body limits retain their checks.
+  Explain a limiting saved catalog input window in `/context`, with an explicit
+  `/model cache` refresh action. Suppress automatic-compaction advice when that
+  policy is off.
+
 - Accept advertised input ceilings above a model's default working window when
   they fit its published maximum. Keep `/context max` and resumed model caches
   usable while applying genuine input ceilings and output reservations to the

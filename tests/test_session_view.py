@@ -353,10 +353,11 @@ class SessionViewTests(unittest.TestCase):
     def events(self):
         return read_events(self.journal)
 
-    def wait_event(self, kind):
+    def wait_event(self, kind, after_seq=0):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            events = [event for event in self.events() if event['type'] == kind]
+            events = [event for event in self.events()
+                      if event['type'] == kind and event['seq'] > after_seq]
             if events:
                 return events[-1]
             time.sleep(.02)
@@ -1125,6 +1126,500 @@ class ContextMeterTests(unittest.TestCase):
         self.assertEqual(self.owner.journal.read_bytes(), current)
         self.assertEqual(len(self.provider.requests), 1)
         self.owner.finish(resumed, b'/exit')
+
+    def check_compacted_preview(self, measured=False):
+        self.owner.config.write_text(self.owner.config.read_text().replace(
+            'exact_token_count = true', 'exact_token_count = false').replace(
+            '[ui]\n', '[ui]\nresume_history_turns=0\n'))
+        self.configure()
+        self.provider.runtime_handler = lambda handler, request, sequence: self.provider.reply(
+            handler, self.provider.response_body(sequence, 'archived answer ' + 'x' * 300000).encode(),
+            close_header=True)
+        counts, compacts = [], []
+        self.provider.runtime_count_handler = lambda handler, request: counts.append(request)
+
+        def compact(handler, request):
+            compacts.append(request)
+            self.provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
+                {'type': 'compaction', 'encrypted_content': 'opaque-preview'}]}).encode(),
+                content_type='application/json')
+
+        self.provider.runtime_compact_handler = compact
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.status('stored')
+        result = subprocess.run(self.owner.prefix + ['--resume', self.owner.sid, '-e', '--',
+                                                    'remember the archived answer'],
+                                cwd=self.owner.root, env={**os.environ, **self.owner.env},
+                                text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.owner.initial = self.owner.start(['--resume', self.owner.sid])
+        self.owner.initial.until('›'.encode(), 10)
+        peer = self.owner.view()
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'/compact\r')
+        self.owner.initial.until(b'Compacted')
+        prompt = self.wait_meter(peer, lambda value: value.startswith('~'))
+        self.assertLess(int(prompt['values'][5][1:]), 20)
+        if measured:
+            self.command('/model fake/host-model/high:100000', 'selected=100000')
+            self.provider.runtime_handler = lambda handler, request, sequence: self.provider.reply(
+                handler, self.provider.response_body(sequence, 'post-compact answer').encode(),
+                close_header=True)
+            self.owner.initial.output.clear()
+            os.write(self.owner.initial.master, b'continue after compaction\r')
+            peer.until('state', lambda message: not message['state']['prompt']['active'] and
+                       message['state']['prompt']['values'][5] == '1')
+        requests = 2 if measured else 1
+        catalogs = self.provider.catalog_paths()
+        self.command('/model fake/two-model/high:100000', 'selected=100000')
+        prompt = peer.until('state', lambda message:
+                            message['state']['prompt']['values'][1] == 'two-model' and
+                            not message['state']['prompt']['active'])['state']['prompt']
+        value = prompt['values'][5]
+        self.assertTrue(value.startswith('~'), value)
+        self.assertGreaterEqual(int(value[1:]), 70, 'preview kept the incompatible opaque summary')
+        self.classic_meter(value)
+        self.command('/model fake/host-model/high:100000', 'selected=100000')
+        prompt = peer.until('state', lambda message:
+                            message['state']['prompt']['values'][1] == 'host-model' and
+                            not message['state']['prompt']['active'])['state']['prompt']
+        self.assertLess(int(prompt['values'][5][1:]), 20)
+        config = self.owner.config.read_text()
+        self.owner.config.write_text(config.replace('${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"'))
+        self.owner.config.chmod(0o600)
+        self.command('/configure', 'configuration reloaded:')
+        self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) >= 70)
+        self.owner.config.write_text(config)
+        self.command('/configure', 'configuration reloaded:')
+        self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) < 20)
+        self.owner.config.write_text(config.replace(
+            f':{self.provider.port}/v1', f':{self.provider.port}/other'))
+        self.command('/configure', 'configuration reloaded:')
+        self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) >= 70)
+        self.owner.config.write_text(config)
+        self.command('/configure', 'configuration reloaded:')
+        self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) < 20)
+        self.owner.config.write_text(config + (
+            f'\n[provider offline]\nbase_url=http://127.0.0.1:{self.provider.port}/v1\n'
+            'api_key=missing-preview-key\n'))
+        self.command('/configure', 'configuration reloaded:')
+        self.command('/model offline/host-model/high:100000', 'selected=100000')
+        self.wait_meter(peer, lambda value: value == '?')
+        self.command('/model fake/host-model/high:100000', 'selected=100000')
+        self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) < 20)
+        self.owner.config.write_text(config)
+        self.command('/configure', 'configuration reloaded:')
+        self.assertEqual(counts, [])
+        self.assertEqual(len(compacts), 1)
+        self.assertEqual(len(self.provider.requests), requests)
+        self.assertEqual(self.provider.catalog_paths(), catalogs)
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.initial = self.owner.start(['--resume', self.owner.sid, '-m',
+                                               'fake/two-model/high:100000'])
+        self.owner.initial.until('›'.encode(), 10)
+        resumed = self.owner.view()
+        self.wait_meter(resumed, lambda value: value.startswith('~') and int(value[1:]) >= 70)
+        self.assertEqual(len(self.provider.requests), requests)
+        self.assertEqual(len(compacts), 1)
+        self.assertEqual(counts, [])
+        self.owner.finish(self.owner.initial, b'/exit')
+
+    def test_compacted_preview_uses_selected_binding(self):
+        self.check_compacted_preview()
+
+    def test_compacted_preview_uses_selected_binding_after_legacy_resume(self):
+        self.check_compacted_preview()
+
+    def test_compacted_preview_rejects_incompatible_usage(self):
+        self.check_compacted_preview(measured=True)
+
+    def test_compacted_preview_rejects_incompatible_usage_after_legacy_resume(self):
+        self.check_compacted_preview(measured=True)
+
+    def check_usage_scope(self, changed=True, exact=False, resumed=False, missing_output=False,
+                          unmeasured=False):
+        config = self.owner.config.read_text().replace(
+            'exact_token_count = true', 'exact_token_count = false')
+        self.owner.config.write_text(config)
+        self.configure()
+        compacts, counts = [], []
+
+        def respond(handler, request, sequence):
+            if sequence == 1:
+                events = [self.provider.event('response.output_item.done', {'output_index': 0,
+                    'item': {'type': 'reasoning', 'id': 'scoped_reasoning', 'summary': [],
+                             'encrypted_content': 'A' * 80000}}),
+                    self.provider.event('response.output_item.done', {'output_index': 1,
+                    'item': {'type': 'message', 'id': 'scoped_answer', 'role': 'assistant',
+                             'status': 'completed', 'content': [{'type': 'output_text',
+                             'text': 'first public answer', 'annotations': []}]}})]
+                body = self.provider.response_envelope(sequence, events).replace(
+                    '"input_tokens":1', '"input_tokens":1000').replace(
+                    '"output_tokens":1', '"output_tokens":59000').replace(
+                    '"total_tokens":2', '"total_tokens":60000')
+            else:
+                body = self.provider.response_body(sequence, 'small public answer')
+                if sequence == 2:
+                    if missing_output:
+                        events = [self.provider.event('response.output_item.done', {'output_index': 0,
+                            'item': {'type': 'reasoning', 'id': 'unmeasured_output', 'summary': [],
+                                     'encrypted_content': 'B' * 80000}}),
+                            self.provider.event('response.output_item.done', {'output_index': 1,
+                            'item': {'type': 'message', 'id': 'input_only_answer', 'role': 'assistant',
+                                     'status': 'completed', 'content': [{'type': 'output_text',
+                                     'text': 'small public answer', 'annotations': []}]}})]
+                        body = self.provider.response_envelope(sequence, events)
+                    body = body.replace('"input_tokens":1', '"input_tokens":60000').replace(
+                        '"total_tokens":2', '"total_tokens":60001')
+                    if missing_output:
+                        body = body.replace('"output_tokens":1', '"output_tokens":null').replace(
+                            '"total_tokens":60001', '"total_tokens":null')
+                elif unmeasured and sequence == 3:
+                    body = body.replace('"input_tokens":1', '"input_tokens":null').replace(
+                        '"total_tokens":2', '"total_tokens":null')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        def compact(handler, request):
+            compacts.append(request)
+            self.provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
+                {'type': 'compaction', 'encrypted_content': 'scope-summary'}]}).encode(),
+                content_type='application/json')
+
+        def count(handler, request):
+            counts.append(request)
+            self.provider.reply(handler, b'{"object":"response.input_tokens","input_tokens":1000}',
+                                content_type='application/json')
+
+        self.provider.runtime_handler = respond
+        self.provider.runtime_compact_handler = compact
+        self.provider.runtime_count_handler = count
+        peer = self.owner.view()
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'first measured response\r')
+        self.wait_meter(peer, lambda value: value == '60')
+        first_completed = self.owner.wait_event('response_completed')['seq']
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'second measured response\r')
+        self.owner.wait_event('response_completed', after_seq=first_completed)
+        self.wait_meter(peer, lambda value: value == ('~61' if missing_output else '61'))
+        measured = [e for e in read_events(self.owner.journal) if e['type'] == 'response_completed']
+        self.assertEqual(measured[-1]['data']['usage']['input_tokens'], 60000)
+        self.assertTrue(any(item.get('encrypted_content')
+                            for item in self.provider.requests[-1]['body']['input']))
+        if changed:
+            config = config.replace('${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"')
+            self.provider.credential = 'changed-key'
+        if unmeasured:
+            self.owner.config.write_text(config)
+            self.owner.config.chmod(0o600)
+            self.command('/configure', 'configuration reloaded:')
+            self.wait_meter(peer, lambda value: value.startswith('~'))
+            self.owner.initial.output.clear()
+            os.write(self.owner.initial.master, b'response with no measured input\r')
+            peer.until('state', lambda message: not message['state']['prompt']['active'])
+            completed = [e for e in read_events(self.owner.journal)
+                         if e['type'] == 'response_completed']
+            self.assertIsNone(completed[-1]['data']['usage']['input_tokens'])
+        config = config.replace('auto_compact_input_tokens = 0',
+                                'auto_compact_input_tokens = 50000')
+        if exact:
+            config = config.replace('exact_token_count = false', 'exact_token_count = true')
+        self.owner.config.write_text(config)
+        self.owner.config.chmod(0o600)
+        self.command('/configure', 'configuration reloaded:')
+        self.owner.initial.until_after(b'configuration reloaded:', b'METER ')
+        peer = self.owner.view()
+        prompt = self.wait_meter(peer, lambda value: value.startswith('~'))
+        preview = int(prompt['values'][5][1:])
+        if changed:
+            self.assertLess(preview, 20)
+        else:
+            self.assertGreaterEqual(preview, 60, 'preview lost compatible measured input usage')
+            self.assertLess(preview, 65, 'preview counted opaque encrypted output bytes')
+        if resumed:
+            self.owner.finish(self.owner.initial, b'/exit')
+            self.owner.status('stored')
+            self.owner.initial = self.owner.start(['--resume', self.owner.sid])
+            self.owner.initial.until('›'.encode(), 10)
+            peer = self.owner.view()
+            prompt = self.wait_meter(peer, lambda value: value.startswith('~'))
+            self.assertEqual(int(prompt['values'][5][1:]) < 20, changed)
+        status = self.command('/status', 'session usage:')
+        self.assertIn(b'input=60000 tokens', status)
+        self.assertIn(b'historical;' if changed else b'matching selection and compaction', status)
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'/context\r')
+        self.owner.initial.until_after(b'compact=50000 (fixed)', b'METER ')
+        advice = bytes(self.owner.initial.output)
+        started_at = read_events(self.owner.journal)[-1]['seq']
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'next response under selected credentials\r')
+        peer.until('state', lambda message: not message['state']['prompt']['active'] and
+                   message['state']['prompt']['values'][5] == '1')
+        events = [e for e in read_events(self.owner.journal) if e['seq'] > started_at]
+        expected = int(not changed and not exact)
+        self.assertEqual(len(compacts), expected, 'incompatible input usage triggered compaction')
+        self.assertEqual(len([e for e in events if e['type'] == 'compaction_started']), expected)
+        self.assertEqual(len([e for e in events if e['type'] == 'compaction_completed']), expected)
+        self.assertFalse(any(e['type'] in ('turn_failed', 'turn_recovery', 'context_rebased')
+                             for e in events))
+        self.assertEqual(len(self.provider.requests), 4 if unmeasured else 3)
+        self.assertEqual(bool(counts), exact)
+        if exact:
+            starts = [e for e in events if e['type'] == 'response_started']
+            self.assertEqual(len(counts), 1)
+            self.assertEqual(starts[-1]['data']['count_method'], 'exact')
+            self.assertEqual(starts[-1]['data']['input_tokens_bound'], 1000)
+        encrypted = any(item.get('encrypted_content')
+                        for item in self.provider.requests[-1]['body']['input'])
+        self.assertEqual(encrypted, not changed)
+        self.assertNotIn(b'the next request compacts first', advice)
+        self.assertEqual(b'last measured input has reached an active limit' in advice, not changed)
+        self.assertEqual(b"compaction depends on the next request's accounting" in advice,
+                         not changed)
+        self.owner.finish(self.owner.initial, b'/exit')
+
+    def test_compaction_rejects_credential_incompatible_usage(self):
+        self.check_usage_scope()
+
+    def test_compaction_rejects_credential_incompatible_usage_after_legacy_resume(self):
+        self.check_usage_scope(resumed=True)
+
+    def test_compaction_rejects_credential_incompatible_usage_after_native_resume(self):
+        self.check_usage_scope(resumed=True)
+
+    def test_compaction_retains_credential_compatible_usage(self):
+        self.check_usage_scope(changed=False)
+
+    def test_compaction_retains_credential_compatible_usage_after_legacy_resume(self):
+        self.check_usage_scope(changed=False, resumed=True)
+
+    def test_compaction_retains_input_usage_without_output_usage(self):
+        self.check_usage_scope(changed=False, missing_output=True)
+
+    def test_input_only_display_survives_legacy_reload_and_resume(self):
+        self.check_usage_scope(changed=False, missing_output=True, resumed=True)
+
+    def test_input_only_display_survives_native_reload_and_resume(self):
+        self.check_usage_scope(changed=False, missing_output=True, resumed=True)
+
+    def test_input_only_display_rejects_changed_credential(self):
+        self.check_usage_scope(missing_output=True)
+
+    def test_compaction_exact_preflight_overrides_credential_incompatible_usage(self):
+        self.check_usage_scope(exact=True)
+
+    def test_context_advice_allows_exact_preflight_to_override_compatible_usage(self):
+        self.check_usage_scope(changed=False, exact=True)
+
+    def test_context_advice_allows_exact_override_after_legacy_resume(self):
+        self.check_usage_scope(changed=False, exact=True, resumed=True)
+
+    def test_compaction_unmeasured_response_keeps_measurement_binding(self):
+        self.check_usage_scope(unmeasured=True)
+
+    def check_compaction_control_interrupt(self, cancelled=False, credential=False, retry=False):
+        compacts, counts = [], []
+        self.addCleanup(self.release.set)
+        config = self.owner.config.read_text().replace('max_input_tokens = 100000',
+                                                      'max_input_tokens = 50000')
+        self.owner.config.write_text(config)
+        self.configure()
+
+        def respond(handler, request, sequence):
+            self.provider.reply(handler, self.provider.response_body(
+                sequence, f'control-answer-{sequence}').encode(), close_header=True)
+
+        def count(handler, request):
+            text = json.dumps(request)
+            over = ('continue after control interruption' in text and
+                    'continue with retained context after cancellation' not in text)
+            tokens = 60000 if over else 1000
+            if any(item.get('type') == 'compaction' for item in request['input']):
+                tokens = 1000
+            counts.append(tokens)
+            self.provider.reply(handler, json.dumps({'object': 'response.input_tokens',
+                'input_tokens': tokens}).encode(), content_type='application/json', close_header=True)
+
+        def compact(handler, request):
+            compacts.append(request)
+            number = len(compacts)
+            if number == 1:
+                self.ready.set()
+                self.release.wait(10)
+            self.provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
+                {'type': 'compaction', 'encrypted_content': f'control-summary-{number}'}]
+                }).encode(), content_type='application/json', close_header=True)
+
+        self.provider.runtime_handler = respond
+        self.provider.runtime_count_handler = count
+        self.provider.runtime_compact_handler = compact
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'keep completed history before control\r')
+        self.owner.initial.until(b'control-answer-1')
+        self.owner.wait_event('turn_completed')
+        self.owner.initial.until('›'.encode())
+        before = read_events(self.owner.journal)[-1]['seq']
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'continue after control interruption\r')
+        self.assertTrue(self.ready.wait(5), 'the over-budget request did not compact')
+        self.owner.wait_event('compaction_started')
+        if cancelled:
+            os.write(self.owner.initial.master, b'\x03')
+        else:
+            if not retry:
+                config = config.replace('max_input_tokens = 50000', 'max_input_tokens = 100000')
+            if credential:
+                config = config.replace('${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"')
+                self.provider.credential = 'changed-key'
+            self.owner.config.write_text(config)
+            self.owner.config.chmod(0o600)
+            self.command('/configure', 'accepted; applying at the next safe request boundary')
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            events = [e for e in read_events(self.owner.journal) if e['seq'] > before]
+            if any(e['type'] in ('turn_completed', 'turn_failed', 'turn_interrupted')
+                   for e in events):
+                break
+            time.sleep(.02)
+        self.release.set()
+        failures = [e['data'] for e in events if e['type'] in ('turn_failed', 'turn_recovery')]
+        self.assertEqual(failures, [], 'control interruption was treated as a context failure')
+        self.assertEqual(len([e for e in events if e['type'] == 'compaction_interrupted']), 1)
+        self.assertEqual(len([e for e in events if e['type'] == 'compaction_completed']), int(retry))
+        self.assertFalse(any(e['type'] == 'context_rebased' for e in events))
+        self.assertEqual(len(compacts), 2 if retry else 1)
+        if cancelled:
+            self.assertEqual(len([e for e in events if e['type'] == 'turn_interrupted']), 1)
+            self.assertFalse(any(e['type'] in ('response_started', 'turn_completed')
+                                 for e in events))
+            self.assertEqual(len(self.provider.requests), 1)
+            self.owner.initial.output.clear()
+            os.write(self.owner.initial.master, b'continue with retained context after cancellation\r')
+            self.owner.initial.until(b'control-answer-2')
+            self.owner.initial.until('›'.encode())
+            self.assertIn('keep completed history before control',
+                          json.dumps(self.provider.requests[-1]['body']))
+            self.assertNotIn('control-summary-1', json.dumps(self.provider.requests[-1]['body']))
+            self.assertEqual(len(compacts), 1)
+        else:
+            self.assertEqual(len([e for e in events if e['type'] == 'turn_completed']), 1)
+            started = [e['data'] for e in events if e['type'] == 'response_started']
+            self.assertEqual(len(started), 1)
+            self.assertEqual(started[0]['input_tokens_bound'], 1000 if retry else 60000)
+            self.assertGreaterEqual(started[0]['hard_input_tokens'], 1000 if retry else 60000)
+            self.assertEqual(started[0]['count_method'], 'exact')
+            self.assertEqual(counts.count(60000), 2)
+            self.assertEqual(len(self.provider.requests), 2)
+            self.assertIn('keep completed history before control',
+                          json.dumps(compacts[-1] if retry else self.provider.requests[-1]['body']))
+            self.assertNotIn('control-summary-1',
+                             json.dumps(self.provider.requests[-1]['body']))
+            if retry:
+                self.assertIn('control-summary-2', json.dumps(self.provider.requests[-1]['body']))
+            self.assertEqual(len([e for e in events if e['type'] == 'control_started']), 1)
+            self.assertEqual(len([e for e in events if e['type'] == 'control_finished']), 1)
+        self.owner.finish(self.owner.initial, b'/exit')
+
+    def test_compaction_configure_interrupt_resumes_current_turn(self):
+        self.check_compaction_control_interrupt()
+
+    def test_compaction_configure_interrupt_resumes_legacy_turn(self):
+        self.check_compaction_control_interrupt()
+
+    def test_compaction_credential_reload_interrupt_resumes_current_turn(self):
+        self.check_compaction_control_interrupt(credential=True)
+
+    def test_compaction_unchanged_reload_retries_interrupted_request(self):
+        self.check_compaction_control_interrupt(retry=True)
+
+    def test_compaction_unchanged_reload_retries_interrupted_legacy_request(self):
+        self.check_compaction_control_interrupt(retry=True)
+
+    def test_compaction_cancellation_retains_previous_context(self):
+        self.check_compaction_control_interrupt(cancelled=True)
+
+    def check_post_turn_compaction_interrupt(self, action='reload'):
+        config = self.owner.config.read_text().replace('auto_compact_input_tokens = 0',
+                                                      'auto_compact_input_tokens = 50000')
+        self.owner.config.write_text(config)
+        self.configure()
+        self.addCleanup(self.release.set)
+        compacts = []
+
+        def respond(handler, request, sequence):
+            body = self.provider.response_body(sequence, f'post-turn-answer-{sequence}')
+            if sequence == 1:
+                body = body.replace('"input_tokens":1', '"input_tokens":60000').replace(
+                    '"total_tokens":2', '"total_tokens":60001')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        def compact(handler, request):
+            compacts.append(request)
+            self.ready.set()
+            self.release.wait(10)
+            self.provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
+                {'type': 'compaction', 'encrypted_content': 'post-turn-late-capsule'}]}).encode(),
+                content_type='application/json', close_header=True)
+
+        self.provider.runtime_handler = respond
+        self.provider.runtime_compact_handler = compact
+        before = read_events(self.owner.journal)[-1]['seq']
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'answer before interrupting post-turn compaction\r')
+        self.assertTrue(self.ready.wait(5), 'post-turn compaction did not start')
+        completed = self.owner.wait_event('turn_completed')
+        started = self.owner.wait_event('compaction_started')
+        response = self.owner.wait_event('response_completed')
+        self.assertEqual(response['data']['usage']['input_tokens'], 60000)
+        self.assertGreater(started['seq'], completed['seq'])
+        self.assertEqual(started['data']['reason'], 'proactive')
+        if action == 'cancel':
+            os.write(self.owner.initial.master, b'\x03')
+        else:
+            config = config.replace('auto_compact_input_tokens = 50000',
+                                    'auto_compact_input_tokens = 0')
+            if action == 'credential':
+                config = config.replace('${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"')
+                self.provider.credential = 'changed-key'
+            self.owner.config.write_text(config)
+            self.owner.config.chmod(0o600)
+            self.command('/configure', 'accepted; applying at the next safe request boundary')
+        self.owner.wait_event('compaction_interrupted')
+        self.release.set()
+        if action != 'cancel':
+            self.owner.initial.until(b'configuration reloaded:')
+            self.owner.wait_event('control_finished')
+        self.owner.initial.until('›'.encode())
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'next small exact request after post-turn interruption\r')
+        self.owner.initial.until(b'post-turn-answer-2')
+        self.owner.initial.until('›'.encode())
+        events = [e for e in read_events(self.owner.journal) if e['seq'] > before]
+        names = [e['type'] for e in events]
+        self.assertEqual(names.count('turn_completed'), 2)
+        self.assertEqual(names.count('compaction_started'), 1)
+        self.assertEqual(names.count('compaction_interrupted'), 1)
+        self.assertEqual(names.count('control_finished'), int(action != 'cancel'))
+        self.assertFalse(any(name in ('turn_failed', 'turn_recovery', 'turn_interrupted',
+            'response_interrupted', 'compaction_completed', 'context_rebased') for name in names))
+        self.assertEqual(len(self.provider.requests), 2)
+        self.assertEqual(len(compacts), 1)
+        self.assertIn('post-turn-answer-1', json.dumps(self.provider.requests[-1]['body']))
+        self.assertNotIn('post-turn-late-capsule', json.dumps(self.provider.requests[-1]['body']))
+        self.owner.finish(self.owner.initial, b'/exit')
+
+    def test_post_turn_compaction_reload_retains_completed_answer(self):
+        self.check_post_turn_compaction_interrupt()
+
+    def test_post_turn_compaction_reload_retains_completed_legacy_answer(self):
+        self.check_post_turn_compaction_interrupt()
+
+    def test_post_turn_compaction_credential_reload_retains_completed_answer(self):
+        self.check_post_turn_compaction_interrupt('credential')
+
+    def test_post_turn_compaction_cancel_retains_completed_answer(self):
+        self.check_post_turn_compaction_interrupt('cancel')
 
     def command(self, text, marker):
         self.owner.initial.output.clear()

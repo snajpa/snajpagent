@@ -233,7 +233,6 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     uint64_t threshold;
     bool use_exact;
     bool reduced = false;
-    bool generated = false;
     char prior_request[SNAG_SHA256_HEX_LEN + 1u] = {0};
     bool started = false;
     bool native;
@@ -287,35 +286,9 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         snag_ui_text(&app->ui, SNAG_UI_HOST, "Compacting context; Ctrl-C interrupts") < 0)
         goto out;
     source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
-    /* The compact source must fit the model that summarises it. When the route
-     * cannot count exactly, derive a byte bound from this session's own last
-     * observation (bytes per input token) instead of a constant, so a large
-     * context does not send a request far over the model window only to stall
-     * there. No usable observation keeps the protocol maximum. */
-    /* Prefer the provider-reported usage anchor: it is a real count, while the
-     * context meter may hold a media upper bound that would collapse the ratio. */
-    const struct snag_input_observation *ratio_source = NULL;
-    if (app->session.usage_anchor.valid && app->session.usage_anchor.input_tokens &&
-        app->session.usage_anchor.model_input_bytes)
-        ratio_source = &app->session.usage_anchor;
-    else if (app->session.context_meter.valid && app->session.context_meter.input_tokens &&
-             app->session.context_meter.model_input_bytes)
-        ratio_source = &app->session.context_meter;
-    if (app->turn_capacity.hard_input_known && ratio_source) {
-        uint64_t per_token = ratio_source->model_input_bytes / ratio_source->input_tokens;
-        if (per_token) {
-            uint64_t window_bytes = (uint64_t)app->turn_capacity.hard_input_tokens * per_token;
-            window_bytes -= window_bytes / 8u; /* summary instruction and JSON framing */
-            if (window_bytes && window_bytes < source_budget) source_budget = window_bytes;
-            /* A distorted observation must not shrink the budget below the
-             * smallest meaningful source. */
-            if (source_budget < SNAG_CONTEXT_COMPACT_FLOOR)
-                source_budget = SNAG_CONTEXT_COMPACT_FLOOR;
-        }
-    }
     const struct snag_context_control control = {
         .cancelled = snag_app_context_cancelled, .opaque = app};
-    for (unsigned int selection = 0u; selection < 8u; ++selection) {
+    for (;;) {
         if (snag_app_provider_activity(app, true) < 0) goto out;
         /* The oversized-first exception belongs to the first attempt only: once
          * a rejection has forced a smaller budget, an oversized group must be
@@ -331,7 +304,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             goto out;
         }
         if (build_rc == 1) {
-            if (selection != 0u) {
+            if (reduced) {
                 (void)snag_fail(error, error_size, EOVERFLOW,
                     "no complete history prefix fits the hard context budget");
                 goto out;
@@ -470,10 +443,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                               : run_responses_compaction(app, projection.create_request.value,
                                     credential, &output, error, error_size);
             if (snag_app_provider_activity(app, false) < 0) goto out;
-            if (stage_rc == 0) {
-                generated = true;
-                break;
-            }
+            if (stage_rc == 0) break;
             if (stage_rc == SNAG_PROVIDER_UNSUPPORTED ||
                 stage_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW || stage_rc == SNAG_PROVIDER_REJECTED) {
                 if (commit_rendered(app, "compaction_interrupted",
@@ -494,68 +464,23 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
          * The walker preserves complete groups; identical irreducible input stops. */
         memcpy(prior_request, projection.create_request.sha256, sizeof(prior_request));
         reduced = true;
-        source_budget = projection.model_input.bytes / 2u;
+        uint64_t next_budget = projection.model_input.bytes / 2u;
         /* Floor the halving: below this the builder cannot fit any group and
          * reports the source as irreducible instead of cutting it. The floor
          * must never raise the budget above the source that was just rejected:
-         * a source already below the floor still has to shrink, or every retry
-         * repeats the identical request until the loop gives up and the turn
-         * ends without a compaction. */
-        if (source_budget < SNAG_CONTEXT_COMPACT_FLOOR &&
+         * a source already below the floor still has to shrink. */
+        if (next_budget < SNAG_CONTEXT_COMPACT_FLOOR &&
             projection.model_input.bytes > SNAG_CONTEXT_COMPACT_FLOOR)
-            source_budget = SNAG_CONTEXT_COMPACT_FLOOR;
-        snag_context_projection_free(&projection);
-    }
-    if (!generated) {
-        snprintf(error, error_size, "compaction input still exceeds context after eight attempts");
-        goto out;
-    }
-    /* Design step 3: a merged summary that has grown past a quarter of the window
-     * is condensed once, under the same binding, before it is measured and
-     * committed. The reduce carries only the merged text and the dedupe
-     * instruction, so no event re-enters the source and the covered boundary
-     * never moves; a failed reduce keeps the un-reduced merge. */
-    if (app->turn_capacity.hard_input_known) {
-        const struct snag_input_observation *ratio = NULL;
-        if (app->session.usage_anchor.valid && app->session.usage_anchor.input_tokens &&
-            app->session.usage_anchor.model_input_bytes)
-            ratio = &app->session.usage_anchor;
-        else if (app->session.context_meter.valid && app->session.context_meter.input_tokens &&
-                 app->session.context_meter.model_input_bytes)
-            ratio = &app->session.context_meter;
-        uint64_t per_token = ratio ? ratio->model_input_bytes / ratio->input_tokens : 0u;
-        uint64_t window_bytes =
-            per_token && app->turn_capacity.hard_input_tokens <= UINT64_MAX / per_token
-                ? (uint64_t)app->turn_capacity.hard_input_tokens * per_token
-                : 0u;
-        if (window_bytes && output.bytes > window_bytes / 4u) {
-            struct snag_json_document reduce_request = {0};
-            struct snag_json_document reduced = {0};
-            char reduce_error[256] = {0};
-            int reduce_rc = snag_context_compact_reduce_request_build(&app->session,
-                app->turn_provider, model, effort, output.value,
-                "merge these summaries of overlapping chunks, deduplicating anything that appears "
-                "twice",
-                &reduce_request, reduce_error, sizeof(reduce_error));
-            if (reduce_rc == 0 && native)
-                reduce_rc = prepare_native_compaction(app, &reduce_request, credential, effort,
-                    reduce_error, sizeof(reduce_error));
-            if (reduce_rc == 0) {
-                if (snag_app_provider_activity(app, true) < 0) goto out;
-                reduce_rc = native ? snag_app_provider_compact(app, reduce_request.value,
-                                         credential, &reduced, reduce_error, sizeof(reduce_error))
-                                   : run_responses_compaction(app, reduce_request.value, credential,
-                                         &reduced, reduce_error, sizeof(reduce_error));
-                if (snag_app_provider_activity(app, false) < 0) goto out;
-                if (reduce_rc == 0 && reduced.value) {
-                    snag_json_document_free(&output);
-                    output = reduced;
-                    memset(&reduced, 0, sizeof(reduced));
-                }
-            }
-            snag_json_document_free(&reduce_request);
-            snag_json_document_free(&reduced);
+            next_budget = SNAG_CONTEXT_COMPACT_FLOOR;
+        /* A strictly smaller positive source budget bounds retries without
+         * abandoning a fitting prefix just beyond an arbitrary attempt count. */
+        if (!next_budget || next_budget >= source_budget) {
+            (void)snag_fail(error, error_size, EOVERFLOW,
+                "compaction source cannot shrink further within the provider context");
+            goto out;
         }
+        source_budget = next_budget;
+        snag_context_projection_free(&projection);
     }
     output_tokens_bound = 0u;
     if (snag_context_compact_output_count_request_build(output.value,
@@ -716,16 +641,15 @@ snag_app_compact_image_boundary(struct app_state *app, char *error, size_t error
 }
 
 int
-snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
-    const char *count_method, char *error, size_t error_size)
+snag_app_compact_after_turn(struct app_state *app, char *error, size_t error_size)
 {
+    uint64_t input_tokens;
     uint64_t threshold;
 
-    if (!app || !app->config || !app->turn_provider || !count_method_valid(count_method))
+    if (!app || !app->config || !app->turn_provider)
         return snag_fail(error, error_size, EINVAL, "invalid proactive compaction state");
     threshold = snag_model_compact_threshold(app->turn_provider, &app->turn_capacity);
-    if (!snag_app_measured_input(app, &input_tokens_bound) || !threshold ||
-        input_tokens_bound < threshold)
+    if (!snag_app_measured_input(app, &input_tokens) || !threshold || input_tokens < threshold)
         return 0;
     return run_compaction(app, "proactive", false, NULL, NULL, error, error_size);
 }

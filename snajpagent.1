@@ -3042,6 +3042,8 @@ when the configuration file is unchanged. Use
 .B /model cache
 to fetch a new catalog from providers. MCP configuration and catalog replacements
 apply at the next turn; an unfinished turn retains its pinned tool contract.
+During pre-response compaction, the reload interrupts the compact operation,
+retains previous context and resumes request preparation with the reloaded settings.
 Stop local audio before reloading.
 .TP
 .B /config
@@ -3091,13 +3093,23 @@ advertised maximum or when the output reservation leaves no input.  The
 selection overrides a configured model-limit context for the session, is
 recorded in the session log, and is restored on resume.  The output
 reservation, client percentage and proactive compaction stay derived from the
-selected window, so shrinking it compacts before the next request.  During
+selected window. Compatible measured usage above the hard input budget or at
+an enabled automatic-compaction threshold prompts a notice about the last
+measurement. Compaction depends on the next request's accounting: an exact
+preflight count that fits can supersede that prior usage and skip compaction. During
 active work the command ends the current response and rebuilds the turn under
 the new window, retaining conversation and completed tool results.
 Independent advertised input ceilings apply to each selection. A ceiling above
 the default working window is usable with a larger selection within the advertised
 maximum. The input budget combines those ceilings with the selected window's output
 reservation and client percentage.
+When the saved catalog's input window limits that budget, the report identifies
+.B input_context_window_tokens
+and offers
+.BR "/model cache" .
+Refresh explicitly after the provider changes its advertised limits; selections
+use the saved catalog until it is refreshed. Genuine input ceilings continue to
+apply after refresh.
 .IP
 Append
 .B s
@@ -3916,8 +3928,10 @@ setting the proactive threshold to zero does not disable capacity handling.
 With a known hard input window, the default automatic threshold is 90% of that
 window. The prompt percentage tracks the current request and its growing response
 against the effective input budget. An exact outgoing count refreshes it before
-provider output. Streamed text and tool arguments increase a display estimate; completed input and
-output usage replace that estimate. Encrypted continuation bytes are excluded from
+provider output. Streamed text and tool arguments increase a display estimate.
+Completed input usage replaces the input estimate; known output usage replaces
+the output estimate. Missing output usage leaves a marked visible-output estimate.
+Encrypted continuation bytes are excluded from
 streaming estimates because their encoded size does not measure generated tokens.
 A leading ~ marks an estimate, including while an exact input count is combined
 with estimated output. Providers report hidden reasoning tokens at completion.
@@ -3925,15 +3939,25 @@ with estimated output. Providers report hidden reasoning tokens at completion.
 Compaction refreshes the meter immediately from the adopted context, including its
 summary, retained history and request overhead. Known-capacity models show an
 estimate while an exact count is unavailable. The estimate starts from compatible
-completed input and output usage, then adds
-new conversation items at four encoded bytes per token. Encrypted continuation
+completed input usage. Known output usage joins that anchor; unmeasured output
+and new conversation items add four encoded bytes per token. Encrypted continuation
 size does not inflate this estimate. Without compatible usage, visible request
 bytes supply the approximation; opaque context remains uncounted until provider
 usage is available. Streaming growth uses four retained text bytes per token.
-Resume and selection or source changes rebuild the display estimate.
+Resume and selection or source changes rebuild the display estimate using the
+selected provider, upstream model, endpoint and current credential snapshot.
+Successful configuration reload invalidates the previous preview, including after
+an account or API-key change. Previews stay offline and use the same encrypted
+continuation binding as the next request. A usage anchor also requires that binding
+to match its completed response; after an account or API-key change the rebuilt
+visible content supplies the estimate.
+When output usage is absent, reload and resume preserve the compatible input
+measurement and estimate the response's visible output.
 Unknown capacity or an unavailable context projection shows ?.
-These estimates serve presentation; capacity checks and automatic compaction retain
-their existing measured accounting. /status labels historical input observations
+These estimates serve presentation. Request admission uses exact counts, compatible
+provider usage and actual capacity rejections, including when a model switch
+restores archived history. Request-body byte limits apply independently.
+/status labels historical input observations
 when provider source, model, effort or compaction no longer matches, and
 context-selection advice uses that compatibility check.
 The percentage can fall after a completed
@@ -3947,16 +3971,19 @@ carries recent complete user messages, up to 256,000 encoded bytes. Older or ove
 messages are represented by the encrypted summary; their original text remains in
 session history. This bounds verbatim context carried between compactions, including
 IRC updates and host context. A model, endpoint or account change rebuilds earlier
-history when the encrypted result cannot be reused. API providers use the separate
+history when the encrypted result cannot be reused. The request explicitly labels
+that restoration, which can increase its input size. Completed tool results remain
+history rather than instructions to execute again. API providers use the separate
 Responses compact endpoint. Set
 .B native_compaction=false
 to summarize through ordinary Responses; the application wraps the returned
 summary text in its stored message format. Native compaction failures report an
 error and retain the original source and previous compacted context. An unavailable
-native endpoint does not switch to ordinary-text summarization. Capacity fitting
-can select a smaller source before dispatch; a failed native request is not retried
-with progressively less history. Failures retain the
-previous context.  Manual
+native endpoint does not switch to ordinary-text summarization. Exact preflight
+counts or explicit provider capacity rejections can select a smaller source.
+Each reduction must lower the source budget; fitting continues until a prefix
+fits or cannot shrink further. Other failures retain the source and previous
+context. Manual
 .B /compact
 is accepted at idle and during active work.  It reports when compaction starts,
 waits for a complete context boundary, finishes, or is interrupted.  An idle
@@ -3977,9 +4004,11 @@ retained summary as plain text, and compacts only the uncovered tail.  The
 previous binding is not selected again to prepare the new binding's request.
 Failed or cancelled turns and process exit retain the selection and compaction
 progress; resume continues from that durable state without replaying completed
-tools.  When a provider rejects a request for capacity and no uncovered events
-remain, the merged summary is condensed once under the selected binding and the
-turn is retried; the covered boundary and predecessor chain stay unchanged.
+tools. Compaction selects complete history groups within its 12 MiB request
+limit. An exact count or provider capacity rejection can require a smaller
+source. Byte/token ratios neither shorten that source nor schedule an extra
+summary request. The next response's measured capacity checks apply to the
+adopted summary together with its uncovered history and request overhead.
 .PP
 Automatic and manual compaction announce that context is being compacted.
 During compaction, Ctrl-C with an empty draft interrupts preparation or the provider request; a
@@ -3994,12 +4023,15 @@ also contains a context-limit code; they do not trigger capacity recovery.
 Accepted requests survive a process restart. Compaction changes
 model context and preserves the append-only local log.
 .PP
-The versioned session checkpoint is a record in the same journal.  It stores
-both recoverable session state and the materialized provider conversation, with
-the summary and only the uncovered continuation after successful compaction.
-On resume, the final complete journal record locates the latest checkpoint;
-recovery validates that record and the recent suffix.  Format-2 and format-3
-sessions with a long history require one initial scan to gain an indexed checkpoint, without
+A session checkpoint captures recoverable state and the provider conversation at
+one verified journal boundary, with the summary and uncovered continuation after
+successful compaction. Current development builds create native sessions with
+paired core and provider checkpoint images and indexed admission. Release
+0.99.8c and unconverted legacy sessions use JSONL, with a versioned
+checkpoint record in the same journal. Legacy resume locates the latest checkpoint
+from the final complete record and validates the checkpoint and recent suffix.
+Format-2 and format-3 sessions with a long history require one initial scan to gain
+an indexed checkpoint, without
 rewriting old history.  Checkpoints from before the download outbox feature
 resume with an empty outbox.  A damaged referenced checkpoint stops recovery with an
 error rather than silently starting a full-history replay.  Explicit requests
@@ -4511,7 +4543,11 @@ that endpoint continue using measured response usage and bounded overflow recove
 no local tokenizer or byte-to-token conversion is substituted.
 .PP
 Proactive compaction uses exact preflight or the last compatible measured input
-usage. Compaction covers complete older event prefixes; each completed summary
+usage. Compatibility includes the measured request's provider, model, effort,
+compaction and credential continuation binding. After an account or API-key
+change, earlier usage remains historical until the current binding is measured.
+Exact preflight counts the current request directly.
+Compaction covers complete older event prefixes; each completed summary
 records its covered boundary and later compactions start at that boundary, not
 at the beginning of the journal. Previously presented image payloads are omitted
 from summary requests. Native compaction output can retain user messages together
@@ -6592,7 +6628,8 @@ which can be smaller than the configured total after safety/output reserves.
 .B The prompt shows ~NUMBER% for context.
 The current context or streamed response is estimated. Completed provider usage
 replaces streamed estimates; an available exact input count replaces the request
-estimate. Compaction and resume provide a fresh estimate immediately for known
+estimate. Input-only usage keeps the measured input while output remains estimated.
+Compaction and resume provide a fresh estimate immediately for known
 capacity. The prompt uses the session owner's accounting in standalone and
 workspace displays. /status retains separately labelled measured input observations.
 .TP
@@ -6740,11 +6777,12 @@ OAuth token refresh retains continuity when the account ID is unchanged.
 Ordinary messages, summary text and paired tool results remain available across
 model switches.  The covered compaction boundary remains durable while opaque
 private compact items from another binding are omitted.  The selected binding
-performs any required tail compaction or summary reduction against its own
+performs any required compaction or history recovery against its own
 capacity. Failed and cancelled turns retain that progress and the selected
 model across resume, and completed tools are never re-executed.
 If an encrypted summary cannot cross a model or provider change, restored
-history is checked against the selected context estimate before upload.
+history uses the selected binding's exact-count and provider-rejection checks;
+request-body byte limits apply independently.
 If a new summary covers an earlier boundary, the uncovered original events remain
 available to following requests and resume. Older checkpoints with a gap in that
 retained history recover the missing events from the journal before projection.

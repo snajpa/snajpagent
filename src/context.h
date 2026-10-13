@@ -59,7 +59,6 @@ struct snag_context_projection {
     size_t request_input_bytes;
     size_t request_input_count;
     size_t request_controller_count;
-    bool restored_compacted_history;
     struct snag_input_observation display_anchor;
     uint64_t display_tokens;
     size_t display_bytes, display_plain_bytes;
@@ -122,6 +121,8 @@ void snag_context_projection_free(struct snag_context_projection *projection);
 /* Start the live view after creating a new session; resumed sessions derive it
  * from the journal once on their first projection. */
 void snag_context_start_new(struct snag_session *session);
+/* Verify the meter observation against its completed response continuation binding. */
+bool snag_context_input_scope_matches(struct snag_session *session, const char *scope);
 /* E2BIG means the projected request exceeds the wire bound; callers may compact. */
 int snag_context_build(struct snag_session *session, const char *model, const char *effort,
     unsigned int cycle, const json_t *steering, uint64_t max_output_tokens, bool max_output_known,
@@ -145,19 +146,9 @@ int snag_context_compact_output_count_request_build(const json_t *output, const 
  * here and the builder cuts the group instead of collapsing further. */
 #define SNAG_CONTEXT_COMPACT_FLOOR (64u * 1024u)
 
-/* Seam overlap: a compaction source re-reads this many already-covered events so
- * a chunk boundary cannot lose the joint between summaries. */
-/* Seam overlap: 0 disables the re-read. Otherwise that many already-covered
- * events are re-read so a chunk boundary cannot lose the joint between
- * summaries; the pruner in context.c keeps the request valid by dropping any
- * call or output whose counterpart fell outside the re-read.
- *
- * Back at 0 on purpose: with 16 the tmux terminal matrix's count-overflow mode
- * stopped producing compaction_completed ("AssertionError: count-overflow"),
- * so the overlap is not yet safe to carry. Next step is to check whether the
- * covered boundary is advanced to the overlap floor instead of the covered end;
- * the boundary must advance past everything the chunk actually covered while
- * only the request source re-reads behind it. */
+/* The first compaction attempt re-reads this many covered events to join adjacent
+ * summaries. The committed coverage cursor still advances to the selected end.
+ * Rejected sources retry without overlap; unmatched call/result halves are pruned. */
 #define SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS 16u
 
 int snag_context_compact_output_valid(const json_t *output,
@@ -166,12 +157,5 @@ int snag_context_compact_output_valid(const json_t *output,
 /* Consumes a compact result and retains its validated canonical measurement. */
 int snag_context_compact_output_set(
     struct snag_json_document *document, json_t *value, char *error, size_t error_size);
-/* Builds the one-shot condense request for a merged summary that has grown past
- * the window fraction: its input is the merged text plus the dedupe
- * instruction and nothing else, so no event re-enters the source. */
-int snag_context_compact_reduce_request_build(struct snag_session *session,
-    const struct snag_provider_config *provider, const char *model, const char *effort,
-    const json_t *output, const char *instruction, struct snag_json_document *create_request,
-    char *error, size_t error_size);
 
 #endif

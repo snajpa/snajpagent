@@ -3047,7 +3047,7 @@ test_media_count_fallback(void)
         assert(snag_app_compact_before_response(
                    &app, &credential, tokens, method, &compacted, error, sizeof(error)) == 0);
         assert(!compacted);
-        assert(snag_app_compact_after_turn(&app, tokens, method, error, sizeof(error)) == 0);
+        assert(snag_app_compact_after_turn(&app, error, sizeof(error)) == 0);
     }
     /* An exceeding upper bound does not prove actual overflow. Reproduce the
      * large-text plus one-image route without an exact token counter. */
