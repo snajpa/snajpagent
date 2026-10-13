@@ -1716,7 +1716,8 @@ on the remote host:
 Focus the agent pane and keep one writable tmux client viewing it for the
 transfer. Other panes may continue producing output. The native wrapper supports
 /receive, /send and model send_file through tmux without changing its options.
-SSH also supports dropping a local file into the composer; on Mosh use /receive.
+SSH and stock Mosh support dropping a local file into the composer when updated
+native wrappers and receivers are installed at both ends.
 A workstation tmux pane may contain the outer wrapper too. Place the wrapper
 at the workstation boundary; nested remote wrappers inside tmux are unqualified.
 .PP
@@ -1759,8 +1760,14 @@ regular workstation file into the composer, or paste its absolute path.
 Literal, shell-quoted and bracketed-paste paths are accepted without shell
 expansion. The file becomes an unsent attachment; existing draft text and active
 work are preserved. Ordinary text, missing paths and input to other programs
-pass through unchanged. Update both endpoints for native drops; use /receive
-with older receivers. Drop files one at a time.
+pass through unchanged. Drops work through SSH and stock Mosh with updated
+native wrappers and receivers. Drop files one at a time.
+.PP
+If a drop inserts the workstation path into the draft, remove that path and use
+.B /receive
+to select the file. Update both the local wrapper and remote receiver, then
+reconnect through the wrapper when convenient. Already-running processes retain
+their loaded builds after an installation update.
 .PP
 If the transport process exits while the native file picker is open, the wrapper
 closes the picker and restores the local terminal. Reconnect the tunnel to continue

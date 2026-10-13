@@ -529,14 +529,17 @@ transfer EXIT are seeded into the restarted input ring ahead of new terminal
 reads. The workstation's trzsz filter owns local selection and file streaming;
 this path adds no listener or out-of-band connection.
 The native receiver advertises private mode 9002 only while it owns terminal
-input, with screen passthrough where needed. The outer wrapper recognizes one
-absolute local-file path in a drop burst or bracketed paste, decodes quoting
-without shell evaluation, and retains an opened regular-file descriptor until
-the transfer. CSI 9002~ requests upload without modifying or submitting the
-draft. Generic programs and relay wrappers pass input through. Oversized and
-non-file pastes retain their original bytes. Unframed path bursts wait 80 ms
-for remaining bytes; an unanswered upload request closes its descriptor after
-five seconds and reports that the file was not sent.
+input, with screen passthrough where needed. It also publishes that ownership
+in retained `SNAJPAGENT-SCREEN/1:INPUT:h` and `INPUT:l` title frames so stock
+Mosh, which discards the private CSI mode, can carry the state to the outer
+wrapper. The outer wrapper recognizes one absolute local-file path in a drop
+burst or bracketed paste, decodes quoting without shell evaluation, and retains
+an opened regular-file descriptor until the transfer. CSI 9002~ requests upload
+without modifying or submitting the draft. Generic programs and relay wrappers
+pass input through. Oversized and non-file pastes retain their original bytes.
+Unframed path bursts wait 80 ms for remaining bytes; an unanswered upload
+request closes its descriptor after five seconds and reports that the file was
+not sent.
 On session resume or deletion, the session lock protects cleanup of crash-left
 upload staging. Only private directories with exact operation names and ordinary
 private file leaves are removed; unfamiliar content stops cleanup, and retained

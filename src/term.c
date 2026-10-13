@@ -2,6 +2,7 @@
 #include "term.h"
 #include "fs.h"
 #include "json.h"
+#include "screen_wire.h"
 #include "tmux.h"
 #include "unicode.h"
 
@@ -534,29 +535,29 @@ set_raw(struct snag_term *term)
     return 0;
 }
 
-/* Scope native drop interception to the agent's input ownership. Screen needs
- * a passthrough envelope for this private mode; ordinary paste stays visible. */
+/* Mirror input ownership in retained title state: Mosh discards private CSI
+ * modes. Screen needs a passthrough envelope; ordinary paste stays visible. */
 static int
 input_modes(const struct snag_term *term, bool enabled)
 {
     const char *paste = enabled ? "\033[?2004h" : "\033[?2004l";
     if (snag_term_write(STDERR_FILENO, paste, 8u) < 0) return -1;
 #ifndef _WIN32
+    bool screen = term->screen && !term->backend.tmux[0];
+    char mode[96];
+    int n = snprintf(mode, sizeof(mode), "%s\033[?9002%c\033]2;"
+        SNAG_SCREEN_PREFIX "INPUT:%c\a%s", screen ? "\033P" : "",
+        enabled ? 'h' : 'l', enabled ? 'h' : 'l', screen ? "\033\\" : "");
+    if (n < 0 || (size_t)n >= sizeof(mode)) return -1;
     if (term->backend.tmux[0]) {
         int fd = snag_tmux_output_open(&term->backend, NULL);
         if (fd >= 0) {
-            const char *mode = enabled ? "\033[?9002h" : "\033[?9002l";
-            ssize_t ignored = write(fd, mode, 8u);
+            ssize_t ignored = write(fd, mode, (size_t)n);
             (void)ignored;
             (void)close(fd);
         }
         return 0;
     }
-    bool screen = term->screen;
-    char mode[16];
-    int n = snprintf(mode, sizeof(mode), "%s\033[?9002%c%s", screen ? "\033P" : "",
-        enabled ? 'h' : 'l', screen ? "\033\\" : "");
-    if (n < 0 || (size_t)n >= sizeof(mode)) return -1;
     return snag_term_write(STDERR_FILENO, mode, (size_t)n);
 #else
     (void)term;

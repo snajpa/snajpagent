@@ -568,13 +568,26 @@ class RemoteStartupTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("mosh") and shutil.which("mosh-server"),
                          "stock Mosh client and server unavailable")
     def test_stock_local_mosh_transfers_both_directions(self):
+        self.stock_local_mosh_transfers()
+
+    @unittest.skipUnless(shutil.which("mosh") and shutil.which("mosh-server"),
+                         "stock Mosh client and server unavailable")
+    def test_stock_local_mosh_drop_preserves_draft(self):
+        self.stock_local_mosh_transfers(drop=True)
+
+    @unittest.skipUnless(shutil.which("mosh") and shutil.which("mosh-server"),
+                         "stock Mosh client and server unavailable")
+    def test_stock_local_mosh_initial_drop_preserves_draft(self):
+        self.stock_local_mosh_transfers(drop=True, initial=True)
+
+    def stock_local_mosh_transfers(self, drop=False, initial=False):
         with tempfile.TemporaryDirectory(prefix="snag-stock-mosh-") as tmp:
             root = Path(tmp).resolve()
             home = root / "client"
             home.mkdir()
             remote_file = root / "remote.bin"
             remote_file.write_bytes(bytes(range(128)))
-            local_file = home / "local.bin"
+            local_file = home / "local file.bin"
             local_file.write_bytes(bytes(reversed(range(128))))
             dotdir = root / "agent"
 
@@ -603,21 +616,36 @@ class RemoteStartupTests(unittest.TestCase):
                 child.until("›".encode(), 20)
                 self.assertTrue(native_owners(), "stock-Mosh fixture owner was not identified")
                 mode = termios.tcgetattr(child.slave)
-                os.write(child.master, f"/send {remote_file}\r".encode())
-                target = home / "Downloads" / remote_file.name
-                output = child.until(b"Client acknowledged the file digest and final EXIT.", 35)
-                self.assertEqual(target.read_bytes(), remote_file.read_bytes())
-                self.assertNotIn(b"SNAJPAGENT-SCREEN/1", output)
-                self.assertNotIn(b"#DATA:", output)
-                os.write(child.master, b"/receive\r")
-                child.until(b"Select local file", 20)
-                os.write(child.master, f"{local_file}\r".encode())
+                if not initial:
+                    os.write(child.master, f"/send {remote_file}\r".encode())
+                    target = home / "Downloads" / remote_file.name
+                    output = child.until(b"Client acknowledged the file digest and final EXIT.", 35)
+                    self.assertEqual(target.read_bytes(), remote_file.read_bytes())
+                    self.assertNotIn(b"SNAJPAGENT-SCREEN/1", output)
+                    self.assertNotIn(b"#DATA:", output)
+                if drop:
+                    os.write(child.master, b"ping")
+                    child.until(b"ping", 10)
+                    os.write(child.master, b"\x1b[200~" +
+                             shlex.quote(str(local_file)).encode() + b" \x1b[201~")
+                else:
+                    os.write(child.master, b"/receive\r")
+                    child.until(b"Select local file", 20)
+                    os.write(child.master, f"{local_file}\r".encode())
                 output = child.until(b"1 unsent attachment(s)", 35)
                 media = next((dotdir / "sessions").glob("*/media"))
                 self.assertEqual([p.read_bytes() for p in media.iterdir()],
                                  [local_file.read_bytes()])
                 self.assertNotIn(b"SNAJPAGENT-SCREEN/1", output)
-                os.write(child.master, b"ping\r")
+                if drop:
+                    second = home / "second 'drop'.bin"
+                    second.write_bytes(b"second native drop")
+                    os.write(child.master, shlex.quote(str(second)).encode() + b" ")
+                    output = child.until(b"2 unsent attachment(s)", 35)
+                    self.assertEqual(sorted(p.read_bytes() for p in media.iterdir()),
+                                     sorted([local_file.read_bytes(), second.read_bytes()]))
+                    self.assertNotIn(b"SNAJPAGENT-SCREEN/1", output)
+                os.write(child.master, b"\r" if drop else b"ping\r")
                 child.until(b"pong", 10)
                 self.assertEqual(termios.tcgetattr(child.slave), mode)
                 child.process.send_signal(signal.SIGTERM)
@@ -953,6 +981,39 @@ class RemoteStartupTests(unittest.TestCase):
                 child.wait(0)
             finally:
                 child.close()
+
+    def test_title_drop_ownership_release_leaves_paths_literal(self):
+        for form in ("released", "invalid", "nested"):
+            with self.subTest(form=form), tempfile.TemporaryDirectory(
+                    prefix="snag-drop-release-") as tmp:
+                root = Path(tmp).resolve()
+                source = root / "regular.md"
+                source.write_text("keep this path literal after input ownership ends")
+                title = b"\x1b]2;[mosh] SNAJPAGENT-SCREEN/1:INPUT:"
+                modes = (title + b"h\a" + title + b"l\a" if form != "invalid" else
+                         title + b"h:invalid\a")
+                code = textwrap.dedent('''
+                    import os, tty
+                    tty.setraw(0)
+                    os.write(1, MODES + b'READY\\n')
+                    data = b''
+                    while not data.endswith(b'\x1b[201~'):
+                        data += os.read(0, 4096)
+                    print(data.hex(), flush=True)
+                ''').replace("MODES", repr(modes))
+                command = [sys.executable, "-u", "-c", code]
+                if form == "nested":
+                    command = [str(PRODUCT), "remote", *command]
+                child = RemoteProcess(root, command)
+                try:
+                    child.until(b"READY", 8)
+                    data = b"\x1b[200~" + str(source).encode() + b"\x1b[201~"
+                    os.write(child.master, data)
+                    output = child.until(data.hex().encode(), 8)
+                    self.assertNotIn(b"SNAJPAGENT-SCREEN/1", output)
+                    child.wait(0)
+                finally:
+                    child.close()
 
     def test_native_drop_keeps_nonfile_and_embedded_paths_literal(self):
         with tempfile.TemporaryDirectory(prefix="snag-drop-literal-") as tmp:

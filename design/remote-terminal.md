@@ -22,6 +22,16 @@ Workstation file streaming uses the existing process-host child read, write and
 wait operations. The proxy retains ownership of that child throughout a transfer;
 the protocol layer borrows it without reaching into its platform-specific descriptors.
 
+The POSIX composer announces native drop ownership through its private CSI mode
+and a retained `SNAJPAGENT-SCREEN/1:INPUT:h` title. Releasing input emits `INPUT:l`.
+Stock Mosh discards the private CSI mode; its title state carries the same
+ownership to the workstation wrapper. The wrapper consumes those titles and
+updates the existing drop-ready flag without sending keyboard acknowledgements.
+Relay wrappers forward ownership to the outermost workstation client. Screen
+uses its passthrough envelope; tmux routes the announcement to its client tty.
+Ownership transitions also cover transfers, external editors and attachment
+release, so a local file path remains ordinary input to other programs.
+
 ## Session attachment transport
 
 The native session endpoint is rooted in its held private directory, not a
@@ -177,9 +187,11 @@ wrapper outside the remote tmux connection.
   titles, loss, replay and resize. `tests/test_remote_terminal.py` checks both
   directions, unchanged file bytes, cancellation, prompt reuse and absence of
   transfer text in captured physical-terminal output.
-- The optional stock-Mosh local test starts an unmodified Mosh client and server
-  over loopback, verifies upload and download bytes and terminal hygiene, and
-  keeps external SSH credentials and user sessions out of fixture execution.
+- The optional stock-Mosh local tests start an unmodified Mosh client and server
+  over loopback, verify download, selected-upload and consecutive native drops,
+  preserve an existing draft and check terminal hygiene. The simulated screen
+  relay discards the same private CSI ownership mode. These tests
+  keep external SSH credentials and user sessions out of fixture execution.
 
 Qualification records distinguish PTY/path selection from desktop GUI actions.
 

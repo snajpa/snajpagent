@@ -600,6 +600,12 @@ remote_title(struct remote_transfer *client, const unsigned char *data, size_t l
     size_t at = remote_title_body(data, length);
     const unsigned char *body = data + at;
     size_t size = end - at;
+    static const char input[] = SNAG_SCREEN_PREFIX "INPUT:";
+    if (size == sizeof(input) && !memcmp(body, input, sizeof(input) - 1u) &&
+        (body[size - 1u] == 'h' || body[size - 1u] == 'l')) {
+        client->drop_ready = body[size - 1u] == 'h';
+        return 1;
+    }
     if (size >= sizeof(prefix) - 1u + 5u &&
         !memcmp(body + sizeof(prefix) - 1u, "CLIP:", 5u)) {
         char reply[128];

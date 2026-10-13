@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Carry native file-drop input ownership through stock Mosh's retained title
+  state. Workstation drops upload attachments and preserve the draft; releasing
+  input keeps local paths literal in other programs.
+
 - Reject provider totals smaller than their known input and output components,
   including reasoning when aggregate output is missing, before admitting tool
   calls. Preserve valid partial usage and historical journal decoding.

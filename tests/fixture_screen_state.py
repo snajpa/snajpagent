@@ -46,6 +46,7 @@ class OutputFilter:
     def output(self, data):
         result = bytearray()
         probe = b"\x1b[?9001;"
+        drop = b"\x1b[?9002"
         for byte in data:
             if not self.pending:
                 if byte == 27:
@@ -98,6 +99,12 @@ class OutputFilter:
                 elif len(current) > 512:
                     result.extend(current)
                     self.pending.clear()
+            elif current in (drop + b"h", drop + b"l"):
+                # Stock Mosh discards unknown private modes rather than
+                # forwarding the application's byte stream.
+                self.pending.clear()
+            elif drop.startswith(current):
+                continue
             elif probe.startswith(current):
                 continue
             elif current.startswith(probe) and len(current) <= 30:
