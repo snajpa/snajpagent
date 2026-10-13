@@ -912,7 +912,10 @@ class MCPTests(unittest.TestCase):
         deadline = time.monotonic() + 2
         while self.server.notify_change.is_set() and time.monotonic() < deadline:
             term.read(.02)
-        term.read(.2)
+        self.assertFalse(self.server.notify_change.is_set())
+        deadline = time.monotonic() + .2
+        while time.monotonic() < deadline:
+            term.read(min(.02, max(0, deadline - time.monotonic())))
         term.output.clear()
         term.write(b'next catalog\r')
         self.wait_result(term, 2, tools=False)
