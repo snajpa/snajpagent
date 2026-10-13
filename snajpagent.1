@@ -5801,6 +5801,9 @@ for a wholesale replacement and
 .B apply_patch
 for several files or hunks.
 .PP
+File and directory handles are released when each write or edit finishes,
+including failed operations and edits that make no change.
+.PP
 Modification tools are declared in every turn. They execute only in an ordinary
 turn; a read-only attempt returns a terminal refusal and leaves target files
 unchanged.

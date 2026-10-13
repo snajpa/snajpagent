@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Release parent-directory descriptors after native file writes and edits, including
+  rejected edits. Long sessions retain descriptor capacity for later files and TLS.
+
 - Preserve compatible input-only usage in the context preview after reload and
   resume. Estimate unmeasured visible output while excluding encrypted payloads;
   keep the meter marked as an estimate.

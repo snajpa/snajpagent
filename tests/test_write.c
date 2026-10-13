@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base.h"
+#include "fs.h"
 #include "json.h"
 #include "turn.h"
 #include "tools_write.h"
@@ -190,6 +191,51 @@ test_edit_exact_and_ambiguous(void)
     expect_status(result, "failed");
 }
 
+static void
+expect_descriptor_released(int first, int second)
+{
+    int a = snag_open_read(workspace, true);
+    int b = snag_open_read(workspace, true);
+    assert(a >= 0 && b >= 0);
+    if (a != first || b != second)
+        fprintf(stderr, "file tool retained a descriptor: expected %d/%d, got %d/%d\n",
+            first, second, a, b);
+    assert(close(a) == 0 && close(b) == 0);
+    assert(a == first && b == second);
+}
+
+static void
+test_file_tools_release_parent(void)
+{
+    int first = snag_open_read(workspace, true);
+    int second = snag_open_read(workspace, true);
+    assert(first >= 0 && second >= 0);
+    assert(close(first) == 0 && close(second) == 0);
+    char absolute[8192];
+    assert(snprintf(absolute, sizeof(absolute), "%s/fd-lifetime.txt", workspace) > 0);
+
+    /* Every result keeps descriptor capacity available for the next TLS/file operation. */
+    for (unsigned int i = 0u; i < 64u; ++i) {
+        const char *path = i % 2u ? absolute : "fd-lifetime.txt";
+        expect_status(invoke("write_file",
+            json_pack("{s:s,s:s}", "path", path, "content", "before\n")), "succeeded");
+        expect_descriptor_released(first, second);
+        expect_status(invoke("edit_file", json_pack("{s:s,s:s,s:s}",
+            "path", path, "old", "before", "new", "after")), "succeeded");
+        expect_descriptor_released(first, second);
+        expect_status(invoke("edit_file", json_pack("{s:s,s:s,s:s}",
+            "path", path, "old", "absent", "new", "ignored")), "not_run");
+        expect_descriptor_released(first, second);
+        assert(strcmp(read_file_bytes("fd-lifetime.txt"), "after\n") == 0);
+        expect_status(invoke("edit_file", json_pack("{s:s,s:s,s:s}",
+            "path", "fd-missing.txt", "old", "before", "new", "after")), "failed");
+        expect_descriptor_released(first, second);
+        expect_status(invoke("write_file", json_pack("{s:s,s:s}",
+            "path", "missing/fd-lifetime.txt", "content", "ignored")), "failed");
+        expect_descriptor_released(first, second);
+    }
+}
+
 int
 main(void)
 {
@@ -201,6 +247,7 @@ main(void)
     assert(canonical && strlen(canonical) < sizeof(workspace));
     (void)snprintf(workspace, sizeof(workspace), "%s", canonical);
     free(canonical);
+    test_file_tools_release_parent();
     test_write_creates_and_replaces();
     test_write_preserves_mode();
     test_write_rejects_unsafe_paths();
