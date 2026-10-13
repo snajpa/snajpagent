@@ -3938,6 +3938,8 @@ is known output usage. When both input usage and exact preflight are unavailable
 completed output or reasoning usage can still improve the estimated meter after
 reload; it never becomes an exact input count. The request prefix is estimated
 separately from visible output, and encrypted reasoning bytes remain excluded.
+Later user or tool items remain byte-estimated; an aggregate output total replaces
+only the completed response span rather than hiding later context.
 Encrypted continuation bytes are excluded from
 streaming estimates because their encoded size does not measure generated tokens.
 A leading ~ marks an estimate, including while an exact input count is combined

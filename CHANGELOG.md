@@ -8,7 +8,8 @@
   including reasoning when aggregate output is missing, before admitting tool
   calls. Preserve valid partial usage and historical journal decoding.
 - Preserve completed output-only or reasoning-only usage in rebuilt estimated
-  context meters when input usage and exact preflight are unavailable.
+  context meters when input usage and exact preflight are unavailable, while
+  retaining later user/tool context after the measured response span.
 
 - Keep reported reasoning tokens in live and rebuilt context meters when aggregate
   output usage is absent. Estimate the visible remainder; a reported output total

@@ -1541,13 +1541,16 @@ class ContextMeterTests(unittest.TestCase):
         self.check_exact_preview_fallback(outcome='failed', resumed=True)
 
     def check_output_only_preview(self, output_known=False, opaque=False, changed=False,
-                                  unreported=False, summary=False, cancelled=False):
+                                  unreported=False, summary=False, cancelled=False,
+                                  followup=False):
         config = self.owner.config.read_text().replace(
             'exact_token_count = true', 'exact_token_count = false')
         self.owner.config.write_text(config +
             f'[irc]\nlisten = 127.0.0.1:{harness.free_loopback_port()}\n')
         self.configure()
         counts = []
+        followup_release = threading.Event()
+        self.addCleanup(followup_release.set)
 
         def count(handler, request):
             counts.append(request)
@@ -1555,13 +1558,24 @@ class ContextMeterTests(unittest.TestCase):
                                 content_type='application/json', close_header=True)
 
         def respond(handler, request, sequence):
+            if followup and sequence == 2:
+                self.second.set()
+                followup_release.wait(10)
+                return self.provider.reply(
+                    handler, self.provider.response_body(sequence, 'follow-up').encode(),
+                    close_header=True)
             self.ready.set()
             self.release.wait(10)
             rid = 'output_only_response'
-            output = [{'type': 'reasoning', 'id': 'output_only_reasoning',
-                       'summary': [{'type': 'summary_text', 'text': 'private' * 20000}]
-                                  if summary else [],
-                       'encrypted_content': 'opaque' * 40000}] if opaque or summary else []
+            output = ([{'type': 'message', 'id': 'output_only_message', 'role': 'assistant',
+                        'status': 'completed', 'content': [
+                            {'type': 'output_text', 'text': 'visible follow-up anchor'}]}]
+                      if followup else []) + (
+                          [{'type': 'reasoning', 'id': 'output_only_reasoning',
+                            'summary': [{'type': 'summary_text', 'text': 'private' * 20000}]
+                                       if summary else [],
+                            'encrypted_content': 'opaque' * 40000}]
+                          if opaque or summary else [])
             usage = {'input_tokens': None, 'output_tokens': 60000 if output_known else None,
                      'output_tokens_details': {'reasoning_tokens': None if unreported else 50000},
                      'total_tokens': None}
@@ -1588,7 +1602,7 @@ class ContextMeterTests(unittest.TestCase):
             self.owner.wait_event('turn_interrupted')
         self.release.set()
         if not cancelled:
-            self.owner.wait_event('turn_completed_silent')
+            self.owner.wait_event('turn_completed' if followup else 'turn_completed_silent')
         events = read_events(self.owner.journal)
         completed_events = [e for e in events if e['type'] == 'response_completed']
         if cancelled:
@@ -1603,6 +1617,34 @@ class ContextMeterTests(unittest.TestCase):
         completed = self.wait_meter(peer, lambda value: value.startswith('~'))['values'][5]
         self.assertGreaterEqual(int(completed[1:]), floor)
         self.assertLess(int(completed[1:]), floor + 20)
+        followup_seq = max((event['seq'] for event in self.owner.events()), default=0)
+        if followup:
+            self.owner.detach()
+            peer = self.owner.view(bind=True)
+            followup_text = b'follow-up context ' + (b'x' * 40000)
+            request = peer.submit(followup_text.decode())
+            self.assertEqual(peer.result(request)['status'], 'committed')
+            self.assertTrue(self.second.wait(5))
+            started = self.owner.wait_event('response_started', after_seq=followup_seq)
+            self.assertEqual(started['data']['count_method'], 'unknown')
+            self.assertGreaterEqual(len(self.provider.requests), 2)
+            self.assertTrue(any(followup_text.decode() in json.dumps(request['body'])
+                                for request in self.provider.requests))
+            followup_meter = peer.until('state', lambda message:
+                message['state']['prompt']['active'] and
+                message['state']['prompt']['values'][5].startswith('~'))[
+                    'state']['prompt']['values'][5]
+            self.assertGreaterEqual(int(followup_meter[1:]), int(completed[1:]) + 8,
+                                    'later context was hidden by aggregate output accounting')
+            followup_release.set()
+            self.owner.wait_event('turn_completed', after_seq=followup_seq)
+            self.assertEqual(counts, [], 'follow-up performed an exact count')
+            self.assertFalse(any(e['type'] in ('compaction_started', 'turn_failed',
+                                              'turn_recovery') for e in self.owner.events()))
+            peer.send(type='quit', generation=peer.generation)
+            self.assertEqual(peer.until('exit')['status'], 0)
+            peer.close()
+            return
         if changed:
             self.owner.config.write_text(self.owner.config.read_text().replace(
                 '${SNAJPAGENT_IRC_UI_KEY}', '"changed-key"'))
@@ -1676,6 +1718,12 @@ class ContextMeterTests(unittest.TestCase):
 
     def test_output_only_preview_rejects_uncompleted_response_legacy(self):
         self.check_output_only_preview(cancelled=True)
+
+    def test_output_only_aggregate_retains_later_context(self):
+        self.check_output_only_preview(output_known=True, followup=True)
+
+    def test_output_only_aggregate_retains_later_context_legacy(self):
+        self.check_output_only_preview(output_known=True, followup=True)
 
     def check_partial_usage_tool(self, repeated=False, valid=False):
         counts = []

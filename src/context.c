@@ -4329,7 +4329,9 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         size_t first = builder.display_input_measured
                            ? builder.display_count
                            : builder.display_anchor.request_input_count;
-        size_t last = json_array_size(builder.request_input);
+        size_t last = !builder.display_input_measured && builder.display_output_measured
+                          ? builder.display_count
+                          : json_array_size(builder.request_input);
         for (size_t i = first; i < last; ++i) {
             const json_t *item = json_array_get(builder.request_input, i);
             size_t bytes;
@@ -4424,7 +4426,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         }
     }
     if (builder.display_anchor.valid && !builder.display_input_measured) {
-        /* Aggregate output replaces its visible span; otherwise estimate it. */
+        /* Aggregate output replaces only its response span, retaining later input. */
         if (builder.display_output_measured)
             projection->display_bytes = projection->display_plain_bytes - projection->display_bytes;
         else projection->display_bytes = projection->display_plain_bytes;
