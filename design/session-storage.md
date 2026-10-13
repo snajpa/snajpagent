@@ -1289,8 +1289,9 @@ order. Value 32 preserves the cached field's presence, including explicit null;
 a known cache value requires this bit. Other unknown values reconstruct as null.
 Known counters retain the signed-64-bit range of the existing JSON admission
 profile. Existing reasoning/output and total/input/output consistency checks
-apply. Reported cache values above input remain represented; the reducer decides
-whether to include them in trusted cache accounting.
+apply. New provider-wire checks for contradictory partial totals leave these
+historical decoding rules unchanged. Reported cache values above input remain
+represented; the reducer decides whether to include them in trusted cache accounting.
 
 Continuation form 0 omits the historical pair. Forms 1 (null) and 2 (list) carry
 the 32-byte scope; form 2 then carries a four-byte count of entries. Each entry

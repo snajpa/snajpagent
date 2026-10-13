@@ -7246,6 +7246,18 @@ test_response_complete(void)
     /* Preserve inconsistent reported cache counts; totals decide whether to use them. */
     complete->usage.cached_input_tokens = 20u;
     roundtrip(&event);
+    /* Older partial totals remain readable after new provider ingress checks. */
+    const struct snag_response_usage historical[] = {
+        {.input_known = true, .input_tokens = 12u, .total_known = true, .total_tokens = 11u},
+        {.output_known = true, .output_tokens = 4u, .total_known = true, .total_tokens = 3u},
+        {.reasoning_known = true, .reasoning_tokens = 4u, .total_known = true, .total_tokens = 3u},
+        {.input_known = true, .input_tokens = 12u, .reasoning_known = true,
+            .reasoning_tokens = 4u, .total_known = true, .total_tokens = 15u},
+    };
+    for (size_t i = 0u; i < sizeof(historical) / sizeof(historical[0]); ++i) {
+        complete->usage = historical[i];
+        roundtrip(&event);
+    }
     for (unsigned i = 0u; i < 5u; ++i) {
         complete->usage = (struct snag_response_usage){0};
         uint64_t *tokens[] = {&complete->usage.input_tokens, &complete->usage.output_tokens,

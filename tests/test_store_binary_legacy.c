@@ -2781,6 +2781,24 @@ response_public_projection(void)
 static void
 response_complete_usage(void)
 {
+    /* Re-encoding historical partial totals keeps their original acceptance profile. */
+    const char *historical[] = {
+        ("{\"input_tokens\":12,\"output_tokens\":null,\"reasoning_tokens\":null,"
+            "\"total_tokens\":11}"),
+        ("{\"input_tokens\":null,\"output_tokens\":4,\"reasoning_tokens\":null,"
+            "\"total_tokens\":3}"),
+        ("{\"input_tokens\":null,\"output_tokens\":null,\"reasoning_tokens\":4,"
+            "\"total_tokens\":3}"),
+        ("{\"input_tokens\":12,\"output_tokens\":null,\"reasoning_tokens\":4,"
+            "\"total_tokens\":15}"),
+    };
+    for (size_t i = 0u; i < sizeof(historical) / sizeof(historical[0]); ++i) {
+        json_t *saved = json_loads(samples[70].data, JSON_REJECT_DUPLICATES, NULL);
+        assert(saved);
+        assert(!json_object_set_new(saved, "usage", json_loads(historical[i], 0, NULL)));
+        roundtrip("response_completed", saved, 165u);
+        json_decref(saved);
+    }
     const char *keys[] = {"input_tokens", "output_tokens", "reasoning_tokens", "total_tokens"};
     const json_int_t tokens[] = {10, 4, 2, 14};
     for (unsigned int mask = 0u; mask < 16u; ++mask) {

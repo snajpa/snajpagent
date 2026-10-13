@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Reject provider totals smaller than their known input and output components,
+  including reasoning when aggregate output is missing, before admitting tool
+  calls. Preserve valid partial usage and historical journal decoding.
+
 - Keep reported reasoning tokens in live and rebuilt context meters when aggregate
   output usage is absent. Estimate the visible remainder; a reported output total
   takes precedence and is not counted twice.

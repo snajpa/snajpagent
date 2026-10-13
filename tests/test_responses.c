@@ -2235,9 +2235,89 @@ test_large_completion_reasoning(void)
     free(opaque);
 }
 
+static void
+check_partial_usage_totals(void)
+{
+    const struct {
+        const char *name;
+        const char *usage;
+        bool accepted;
+    } cases[] = {
+        {"input exceeds total", "{\"input_tokens\":12,\"total_tokens\":11}", false},
+        {"output exceeds total", "{\"output_tokens\":4,\"total_tokens\":3}", false},
+        {"reasoning exceeds total", "{\"total_tokens\":3,"
+            "\"output_tokens_details\":{\"reasoning_tokens\":4}}", false},
+        {"input and reasoning exceed total", "{\"input_tokens\":12,\"output_tokens\":null,"
+            "\"total_tokens\":15,\"output_tokens_details\":{\"reasoning_tokens\":4}}", false},
+        {"aggregate output takes precedence", "{\"input_tokens\":12,\"output_tokens\":4,"
+            "\"total_tokens\":15,\"output_tokens_details\":{\"reasoning_tokens\":2}}", false},
+        {"partial equality", "{\"input_tokens\":12,\"output_tokens\":null,"
+            "\"total_tokens\":16,\"output_tokens_details\":{\"reasoning_tokens\":4}}", true},
+        {"partial remainder", "{\"input_tokens\":12,\"output_tokens\":null,"
+            "\"total_tokens\":17,\"output_tokens_details\":{\"reasoning_tokens\":4}}", true},
+        {"unknown input", "{\"output_tokens\":4,\"total_tokens\":4,"
+            "\"output_tokens_details\":{\"reasoning_tokens\":2}}", true},
+        {"reasoning only", "{\"total_tokens\":4,"
+            "\"output_tokens_details\":{\"reasoning_tokens\":4}}", true},
+        {"zero total with unknown components", "{\"total_tokens\":0}", true},
+        {"unknown total", "{\"input_tokens\":12,\"total_tokens\":null,"
+            "\"output_tokens_details\":{\"reasoning_tokens\":4}}", true},
+        {"known aggregate includes reasoning", "{\"input_tokens\":12,\"output_tokens\":4,"
+            "\"total_tokens\":16,\"output_tokens_details\":{\"reasoning_tokens\":2}}", true},
+        {"cache telemetry stays best effort", "{\"input_tokens\":12,\"total_tokens\":12,"
+            "\"input_tokens_details\":{\"cached_tokens\":999}}", true},
+        {"large partial bound", "{\"input_tokens\":9223372036854775807,"
+            "\"total_tokens\":9223372036854775807,"
+            "\"output_tokens_details\":{\"reasoning_tokens\":1}}", false},
+        {"large aggregate bound", "{\"output_tokens\":9223372036854775807,"
+            "\"total_tokens\":9223372036854775807}", true},
+    };
+    size_t mismatches = 0u;
+
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        for (size_t chunk = 1u; chunk <= 64u; chunk *= 64u) {
+            struct parsed_stream parsed = parsed_new(4096u);
+            char wire[1024];
+            int n = snprintf(wire, sizeof(wire), "data: {\"type\":\"response.created\","
+                "\"response\":{\"id\":\"partial\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+                "data: {\"type\":\"response.completed\","
+                "\"response\":{\"id\":\"partial\",\"status\":\"completed\",\"usage\":%s,"
+                "\"output\":[]}}\n\n", cases[i].usage);
+            assert(n > 0 && (size_t)n < sizeof(wire));
+            int rc = parse_stream(wire, chunk, &parsed);
+            if ((rc == 0) != cases[i].accepted) {
+                fprintf(stderr, "partial usage %s (chunk %zu): expected %s, got %s\n",
+                    cases[i].name, chunk, cases[i].accepted ? "accept" : "reject",
+                    rc == 0 ? "accept" : parsed.error);
+                ++mismatches;
+            }
+            if (rc == 0) {
+                json_t *expected = json_loads(cases[i].usage, 0, NULL);
+                assert(expected);
+                assert(parsed.graph.usage.input_known ==
+                    json_is_integer(json_object_get(expected, "input_tokens")));
+                assert(parsed.graph.usage.output_known ==
+                    json_is_integer(json_object_get(expected, "output_tokens")));
+                assert(parsed.graph.usage.total_known ==
+                    json_is_integer(json_object_get(expected, "total_tokens")));
+                assert(parsed.graph.usage.reasoning_known == json_is_integer(json_object_get(
+                    json_object_get(expected, "output_tokens_details"), "reasoning_tokens")));
+                assert(parsed.graph.usage.cached_known == json_is_integer(json_object_get(
+                    json_object_get(expected, "input_tokens_details"), "cached_tokens")));
+                json_decref(expected);
+            } else if (!cases[i].accepted) {
+                assert(strstr(parsed.error, "inconsistent response usage"));
+            }
+            parsed_free(&parsed);
+        }
+    }
+    assert(mismatches == 0u);
+}
+
 int
 main(void)
 {
+    check_partial_usage_totals();
     test_large_completion_reasoning();
     test_message_completion_finalizes_phase();
     test_sparse_output_identities();

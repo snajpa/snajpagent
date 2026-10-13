@@ -6760,6 +6760,13 @@ completion reconciles any remaining text once. A conflicting phase in a later
 completed snapshot is a protocol error, as are inconsistent message identity or
 content. This supports providers such as DeepSeek Flash that finalize pre-tool
 text as commentary after initially announcing a final answer.
+.PP
+A reported total must cover known input and output tokens. When aggregate output
+usage is absent, reported reasoning tokens supply the known output component.
+With both input and output known, their sum must equal the total. A contradictory
+report fails the response before its tool calls are admitted and enters ordinary
+recovery. Valid partial usage keeps missing counters unknown. Previously saved
+usage records retain their original decoding rules.
 .SS "Provider reasoning streams"
 Completed reasoning items are retained in the private session journal and
 returned to the same provider, endpoint, upstream model and credential identity

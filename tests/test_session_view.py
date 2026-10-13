@@ -1540,6 +1540,99 @@ class ContextMeterTests(unittest.TestCase):
     def test_exact_preview_fallback_rejects_failed_legacy_response(self):
         self.check_exact_preview_fallback(outcome='failed', resumed=True)
 
+    def check_partial_usage_tool(self, repeated=False, valid=False):
+        counts = []
+
+        def count(handler, request):
+            counts.append(request)
+            self.provider.reply(handler, b'{"object":"response.input_tokens","input_tokens":60000}',
+                                content_type='application/json', close_header=True)
+
+        def respond(handler, request, sequence):
+            if sequence > 1 and not repeated:
+                body = self.provider.response_body(sequence, 'valid-after-partial-usage')
+            else:
+                rid = 'partial_total_response_' + str(sequence)
+                item = {'type': 'function_call', 'id': 'partial_total_item_' + str(sequence),
+                        'call_id': 'partial_total_call_' + str(sequence), 'name': 'get_cwd',
+                        'arguments': '{}', 'status': 'completed'}
+                usage = {'input_tokens': 60000, 'output_tokens': None,
+                         'total_tokens': 65000 if valid else 60000,
+                         'output_tokens_details': {'reasoning_tokens': 5000}}
+                events = [
+                    ('response.created', {'response': {'id': rid, 'status': 'in_progress',
+                                                       'output': []}}),
+                    ('response.output_item.added', {'output_index': 0, 'item': {
+                        **item, 'arguments': '', 'status': 'in_progress'}}),
+                    ('response.output_item.done', {'output_index': 0, 'item': item}),
+                    ('response.completed', {'response': {'id': rid, 'status': 'completed',
+                                                        'usage': usage, 'output': [item]}}),
+                ]
+                body = ''.join('event: ' + kind + '\ndata: ' +
+                               json.dumps({'type': kind, **data}) + '\n\n'
+                               for kind, data in events)
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_count_handler = count
+        self.provider.runtime_handler = respond
+        os.write(self.owner.initial.master, b'partial usage tool admission\r')
+        self.owner.wait_event('turn_failed' if repeated else 'turn_completed')
+        events = read_events(self.owner.journal)
+        completed = [e for e in events if e['type'] == 'response_completed']
+        failed = [e for e in events if e['type'] == 'response_failed']
+        response_count = 6 if repeated else 2
+        self.assertEqual(len(self.provider.requests), response_count)
+        self.assertEqual(len(counts), response_count)
+        self.assertEqual(len(completed), 2 if valid else (0 if repeated else 1))
+        self.assertEqual(len(failed), 0 if valid else (6 if repeated else 1))
+        for event in failed:
+            self.assertIn('inconsistent response usage', event['data']['message'])
+        self.assertEqual(sum(e['type'] == 'turn_recovery' for e in events),
+                         0 if valid else (5 if repeated else 1))
+        for kind in ('tool_started', 'tool_finished'):
+            self.assertEqual(sum(e['type'] == kind for e in events), int(valid),
+                             'invalid partial usage admitted a staged tool')
+        self.assertFalse(any(e['type'] == 'compaction_started' for e in events))
+        if valid:
+            usage = completed[0]['data']['usage']
+            self.assertEqual(usage['input_tokens'], 60000)
+            self.assertIsNone(usage['output_tokens'])
+            self.assertEqual(usage['reasoning_tokens'], 5000)
+            self.assertEqual(usage['total_tokens'], 65000)
+        elif not repeated:
+            self.assertEqual(completed[0]['data']['usage']['input_tokens'], 1)
+        self.command('/configure', 'configuration reloaded:')
+        self.owner.initial.until_after(b'configuration reloaded:', b'METER ')
+        self.assertEqual(len(counts), response_count,
+                         'failed or completed preview performed another count')
+        self.assertEqual(len(self.provider.requests), response_count,
+                         'preview submitted another response')
+        self.owner.finish(self.owner.initial, b'/exit')
+        resumed = self.owner.start(['--resume', self.owner.sid])
+        resumed.until(b'METER ')
+        self.assertEqual(len(counts), response_count, 'resume performed another count')
+        self.assertEqual(len(self.provider.requests), response_count,
+                         'resume submitted another response')
+        self.owner.finish(resumed, b'/exit')
+
+    def test_partial_usage_rejects_staged_tool_and_recovers(self):
+        self.check_partial_usage_tool()
+
+    def test_partial_usage_rejects_staged_tool_and_recovers_legacy(self):
+        self.check_partial_usage_tool()
+
+    def test_partial_usage_repeated_failure_never_admits_tool(self):
+        self.check_partial_usage_tool(repeated=True)
+
+    def test_partial_usage_repeated_failure_never_admits_tool_legacy(self):
+        self.check_partial_usage_tool(repeated=True)
+
+    def test_partial_usage_valid_total_admits_tool(self):
+        self.check_partial_usage_tool(valid=True)
+
+    def test_partial_usage_valid_total_admits_tool_legacy(self):
+        self.check_partial_usage_tool(valid=True)
+
     def check_output_usage_meter(self, input_known=True, output_known=False,
                                  output_tokens=0, reasoning_tokens=None, text='', preview_only=False):
         self.owner.config.write_text(self.owner.config.read_text() +

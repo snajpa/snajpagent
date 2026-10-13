@@ -475,6 +475,33 @@ main(void)
         assert(snag_response_usage_output_floor(&usage) == 0u);
     }
 
+    /* New provider checks must not retroactively reject old nullable usage records. */
+    {
+        const char *saved[] = {
+            ("{\"input_tokens\":12,\"output_tokens\":null,\"reasoning_tokens\":4,"
+                "\"total_tokens\":15}"),
+            ("{\"input_tokens\":12,\"output_tokens\":null,\"reasoning_tokens\":null,"
+                "\"total_tokens\":11}"),
+            ("{\"input_tokens\":null,\"output_tokens\":4,\"reasoning_tokens\":null,"
+                "\"total_tokens\":3}"),
+            ("{\"input_tokens\":null,\"output_tokens\":null,\"reasoning_tokens\":4,"
+                "\"total_tokens\":3}"),
+            ("{\"input_tokens\":12,\"output_tokens\":null,\"reasoning_tokens\":null,"
+                "\"total_tokens\":12,"
+                "\"cached_tokens\":999}"),
+        };
+        for (size_t i = 0u; i < sizeof(saved) / sizeof(saved[0]); ++i) {
+            struct snag_response_usage usage;
+            json_t *value = json_loads(saved[i], 0, NULL);
+            assert(value);
+            assert(snag_response_usage_from_json(value, &usage) == 0);
+            json_t *encoded = snag_response_usage_json(&usage);
+            assert(encoded && json_equal(encoded, value));
+            json_decref(encoded);
+            json_decref(value);
+        }
+    }
+
     /* A response may carry any number of calls and items. */
     {
         struct snag_response_graph wide = {0};

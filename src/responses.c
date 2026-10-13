@@ -916,6 +916,13 @@ parse_provider_usage(struct snag_responses_stream *stream, const json_t *respons
     }
     if (snag_response_usage_valid(&usage) < 0)
         return stream_fail(stream, EPROTO, "inconsistent response usage");
+    /* Keep stricter ingress checks out of the historical journal decoder. */
+    if (usage.total_known) {
+        uint64_t input = usage.input_known ? usage.input_tokens : 0u;
+        uint64_t output = snag_response_usage_output_floor(&usage);
+        if (input > usage.total_tokens || output > usage.total_tokens - input)
+            return stream_fail(stream, EPROTO, "inconsistent response usage");
+    }
     stream->usage = usage;
     return 0;
 }

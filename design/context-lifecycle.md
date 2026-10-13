@@ -334,6 +334,11 @@ measured anchors. Failed compaction preserves the current binding and measuremen
 An exact outgoing count becomes durable at `response_started`; provider usage
 may replace it at `response_completed`. Post-turn compaction reads this committed
 measurement directly after the completed response's usage has been applied.
+Provider ingress validates a reported total against known input plus known output
+(aggregate output, otherwise reasoning). Fully known input and output must sum
+to that total. Contradictions fail the response before tool admission; valid
+partial usage leaves missing counters unknown. This additional check belongs to
+the wire parser, preserving native and legacy historical usage decoding.
 There is no `input_token_count` journal transition. Refresh at those real
 transitions and at completed compaction/rebase.
 Use the same binding/compaction matcher for measured admission, status annotation
