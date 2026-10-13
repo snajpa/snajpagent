@@ -165,8 +165,8 @@ model-switched paths share this order:
    the source budget strictly. Continue while it decreases; a zero or unchanged
    budget terminates fitting. This is independent of the owning turn's retry
    policy and preserves smaller prefixes beyond a fixed number of reductions.
-5. Bound consecutive reductions before a provider response using the existing
-   attempt budget. If a usable context still cannot fit, try one explicit minimal
+5. Allow one bounded hard-budget compact before a provider response. Remeasure
+   the rebuilt request; if it remains over the window, try one explicit minimal
    recovery projection. A fitting summary takes precedence over that fallback.
    An unchanged minimal request that still cannot fit fails this attempt; it
    must not oscillate between old full context and empty rebases. Fresh durable

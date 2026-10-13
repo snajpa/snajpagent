@@ -5614,7 +5614,8 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
     char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
     char rejected_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
-    unsigned int hard_compaction_attempts = 0u, cyber_clarifications = 0u;
+    bool hard_compacted = false;
+    unsigned int cyber_clarifications = 0u;
     bool continuing = app->session.active_turn;
     bool fallback_started = false;
     unsigned int next_cycle = continuing ? app->session.active_cycle + 1u : 1u;
@@ -5871,7 +5872,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 /* One bounded compact gets a chance to preserve the archive.
                  * Recheck its rebuilt size before choosing history recovery. */
                 bool compacted = false;
-                int compact_rc = hard_compaction_attempts ? 0 :
+                int compact_rc = hard_compacted ? 0 :
                     snag_app_compact_oversized_request(app, &credential,
                         &compacted, error, sizeof(error));
                 if (compact_rc == 1 && (app->steering_requested ||
@@ -5880,7 +5881,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 if (compact_rc == 2 && app->interrupt_requested) goto user_interrupted;
                 if (compact_rc == 0) {
                     if (compacted) {
-                        ++hard_compaction_attempts;
+                        hard_compacted = true;
                     } else {
                         app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
                         app->history_recovery_rebase = true;
@@ -5931,7 +5932,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                              projection.input_tokens_bound > app->turn_capacity.hard_input_tokens;
             int compact_rc;
 
-            if (over_hard && !pure_history_recovery && hard_compaction_attempts) {
+            if (over_hard && !pure_history_recovery && hard_compacted) {
                 /* One checkpoint can summarize an ordinary prefix. If the
                  * active turn still exceeds the window, let the model fetch
                  * needed history rather than walking every older tool group.
@@ -5952,15 +5953,12 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 goto out;
             }
             if (over_hard &&
-                (hard_compaction_attempts >= 8u ||
-                    strcmp(over_budget_request_hash, projection.create_request.sha256) == 0)) {
+                strcmp(over_budget_request_hash, projection.create_request.sha256) == 0) {
                 char failure[256];
 
                 (void)snprintf(failure, sizeof(failure),
-                    "%s while reducing context input count %llu (%s) to hard budget %llu",
-                    hard_compaction_attempts >= 8u
-                        ? "context compaction reached its eight-attempt bound"
-                        : "context compaction repeated an over-budget request",
+                    "context compaction repeated an over-budget request while reducing input "
+                    "count %llu (%s) to hard budget %llu",
                     (unsigned long long)projection.input_tokens_bound, count_method,
                     (unsigned long long)app->turn_capacity.hard_input_tokens);
                 result = finish_turn_failure(
@@ -5970,17 +5968,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             if (over_hard)
                 memcpy(over_budget_request_hash, projection.create_request.sha256,
                     sizeof(over_budget_request_hash));
-            if (over_hard && hard_compaction_attempts) {
-                /* This is the rebuilt, remeasured request after earlier
-                 * compaction. Only now is it truthful to say context remains
-                 * over budget and another pass is actually beginning. */
-                char notice[192];
-                (void)snprintf(notice, sizeof(notice),
-                    "context still over the model window after %u compaction%s; "
-                    "compacting further (Ctrl-C interrupts)",
-                    hard_compaction_attempts, hard_compaction_attempts == 1u ? "" : "s");
-                (void)snag_ui_text(&app->ui, SNAG_UI_HOST, notice);
-            }
             compact_rc = snag_app_compact_before_response(app, &credential,
                 projection.input_tokens_bound, count_method, &compacted, error, sizeof(error));
             if (compact_rc == 1 && app->steering_requested) goto steered_before_response;
@@ -5995,7 +5982,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 goto out;
             }
             if (compacted) {
-                if (over_hard) ++hard_compaction_attempts;
+                if (over_hard) hard_compacted = true;
                 goto rebuild_request;
             }
         }
@@ -6324,7 +6311,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
          * not for the whole (possibly very long) active turn. A completed
          * provider response is genuine progress; its new tool/assistant group
          * may need another checkpoint later instead of a summary-less rebase. */
-        hard_compaction_attempts = 0u;
+        hard_compacted = false;
         over_budget_request_hash[0] = '\0';
         {
             struct snag_usage_totals *totals = &app->program_usage;

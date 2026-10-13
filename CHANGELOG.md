@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep hard-budget preparation state to one successful checkpoint per response
+  cycle, then use the measured recovery projection.
+
 - Fit compaction sources while their byte budget keeps decreasing, including
   prefixes that need more than eight reductions. Stop on an irreducible source
   and retain the prior context when fitting fails.
