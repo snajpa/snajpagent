@@ -89,7 +89,7 @@ LIVE_WORKSPACE ?= $(CURDIR)
 LIVE_RESULT_ROOT ?=
 TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
 PLATFORM_SRC = src/base64.c src/base.c src/platform.c src/term_host.c src/tmux.c src/session_host.c src/session_relay.c src/session_client.c src/wake.c src/net.c src/process_host.c
-COMMON_SRC = $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/tools_write.c src/history.c src/history_view.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_irc_attention.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
+COMMON_SRC = $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/tools_write.c src/history.c src/history_view.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_irc_attention.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/metrics.c src/top.c src/app.c
 COMMON_SRC += src/convert.c src/tools_media.c src/media.c src/tools_document.c src/tools_audio.c src/app_media.c src/app_upload.c src/app_audio.c src/av.c src/pcm.c src/audio_device.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c src/voice.c src/voice_rtc.c src/app_voice.c
 COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c src/remote.c
 COMMON_SRC += src/clipboard.c src/clipboard_transfer.c
@@ -124,7 +124,7 @@ BINARY_RUNTIME_SRC += src/store_binary_import.c
 COMMON_SRC += $(BINARY_RUNTIME_SRC)
 COMMON_SRC += src/store_binary_context.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
-HEADERS = src/tmux.h src/session_host.h src/session_relay.h src/session_client.h src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/http.h src/update.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/store_record.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h src/history_view.h src/vm_reader.h src/vm_grid.h src/unicode.h src/unicode_tables.inc src/base64.h src/convert.h src/media.h src/rules.h src/tools_write.h src/tools_file.h
+HEADERS = src/tmux.h src/session_host.h src/session_relay.h src/session_client.h src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/http.h src/update.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/store_record.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/metrics.h src/top.h src/ui.h src/history.h src/history_view.h src/vm_reader.h src/vm_grid.h src/unicode.h src/unicode_tables.inc src/base64.h src/convert.h src/media.h src/rules.h src/tools_write.h src/tools_file.h
 DEPFLAGS = -MMD -MP
 HEADERS += src/session_view.h src/vm_connection.h src/vm_report.h
 HEADERS += src/vm_editor.h src/vm_selection.h src/vm_navigation.h
@@ -142,7 +142,7 @@ HEADERS += src/vm.h
 HEADERS += src/vm_transcript.h src/vm_document.h
 HEADERS += src/irc_address.h src/commands.h
 FIXTURE_BIN = tests/$(NAME)-fixture
-TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire tests/test_clipboard tests/test_clipboard_transfer $(FIXTURE_BIN)
+TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record tests/test_metrics $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire tests/test_clipboard tests/test_clipboard_transfer $(FIXTURE_BIN)
 TEST_BIN += tests/test_json_abi
 BUILD_INPUTS = build/.build-inputs
 TEST_BIN += tests/test_irc_address
@@ -230,6 +230,8 @@ $(FIXTURE_BIN): $(COMMON_SRC) src/main.c tests/fixture_provider.c $(HEADERS) $(P
 	$(CC) $(LDFLAGS) -o $@ $$objs $(PDF_OBJ) $(AUDIO_DEVICE_OBJ) $(LDLIBS) $(CURL_LIBS)
 
 tests/test_base: src/pcm.c src/pcm.h $(PLATFORM_SRC) src/convert.c src/office_confine.c src/office.h src/session_host.h src/session_relay.h tests/test_base.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/process_host.h
+
+tests/test_metrics: $(PLATFORM_SRC) src/base.c src/metrics.c tests/test_metrics.c src/base.h src/fs.h src/store.h src/metrics.h
 
 tests/test_config: $(PLATFORM_SRC) src/config.c src/secret_source.c src/json.c src/rules.c tests/test_config.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/rules.h
 
@@ -379,6 +381,9 @@ tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/chec
 tests/test_base tests/test_sse tests/test_provider_retry tests/test_upload_wire:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^) $(LDLIBS)
 
+tests/test_metrics:
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^) $(LDLIBS)
+
 tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_write:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c %.o,$^) $(LDLIBS)
@@ -398,6 +403,7 @@ tests/test_store:
 check: $(BIN) $(TEST_BIN)
 	./tests/test_base
 	./tests/test_config
+	python3 tests/test_top.py ./$(BIN)
 	./tests/test_irc
 	./tests/test_irc_address
 	./tests/test_irc_event

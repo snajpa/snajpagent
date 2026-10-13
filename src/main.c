@@ -9,6 +9,7 @@
 #include "remote.h"
 #include "snajpagent.h"
 #include "store_convert.h"
+#include "top.h"
 #include "vm.h"
 #ifdef _WIN32
 #include "process_host.h"
@@ -31,6 +32,7 @@ run(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "convert")) {
         return snag_convert_main(argc - 2, argv + 2);
     }
+    if (argc > 1 && !strcmp(argv[1], "top")) return snag_top_main(argc - 2, argv + 2);
     snag_office_program(argv[0]);
     if (argc > 1 && !strcmp(argv[1], "--internal-session-owner"))
         return snag_app_owner_main(argc, argv);

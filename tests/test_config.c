@@ -991,6 +991,8 @@ main(void)
         "prompt_spinner_provider = \" \\|/-\"\n"
         "prompt_spinner_tool = \" \"\n"
         "prompt_spinner_per_second = 60\n"
+        "\n[metrics]\n"
+        "refresh_seconds = 9\n"
         "\n[irc]\n"
         "listen = 127.0.0.1:7667\n"
         "client = irc-a.example\n"
@@ -1036,6 +1038,7 @@ main(void)
     assert(!config.auto_update && !config.update_url[0]);
 #endif
     assert(config.markdown);
+    assert(config.metrics_refresh_seconds == SNAG_CONFIG_METRICS_REFRESH_SECONDS);
     assert(config.resume_history_turns == 1u);
     assert(config.typing_pause_ms == 500u);
     assert(strstr(config.prompt,
@@ -1124,6 +1127,7 @@ main(void)
     assert(snag_config_load(&config, path, dotdir, error, sizeof(error)) == 0);
     assert(strcmp(config.model, "gpt-5.5") == 0);
     assert(strcmp(config.provider, "backup") == 0);
+    assert(config.metrics_refresh_seconds == 9u);
     assert(!strcmp(config.audio.provider, "backup"));
     assert(!strcmp(config.audio.listen_model, "listen-fixture"));
     assert(!strcmp(config.audio.transcribe_model, "transcribe-fixture"));

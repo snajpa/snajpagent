@@ -12,6 +12,7 @@
 #include "instructions.h"
 #include "irc.h"
 #include "model_cache.h"
+#include "metrics.h"
 #include "mcp.h"
 #include "render.h"
 #include "responses.h"
@@ -87,6 +88,8 @@ struct app_state {
     uint64_t response_started_ms;
     uint64_t last_response_ms;
     uint64_t last_response_output_tokens;
+    uint64_t metrics_started_ms;
+    uint64_t metrics_last_write_ms;
     struct snag_ui ui;
     bool attachment_history_pending;
     char remote_nonce[10];

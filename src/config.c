@@ -25,6 +25,7 @@ enum section {
     SECTION_MODEL_LIMIT,
     SECTION_MODEL_ALIAS,
     SECTION_UI,
+    SECTION_METRICS,
     SECTION_IRC,
     SECTION_TOOL,
     SECTION_RULE,
@@ -129,6 +130,7 @@ snag_config_init(struct snag_config *config)
 #endif
     config->color = SNAG_COLOR_AUTO;
     config->markdown = true;
+    config->metrics_refresh_seconds = SNAG_CONFIG_METRICS_REFRESH_SECONDS;
     config->resume_history_turns = 1u;
     config->typing_pause_ms = 500u;
     memcpy(config->pager, "on", 3u);
@@ -671,6 +673,8 @@ set_section(struct parse_state *state, char *name)
         section = SECTION_AUDIO;
     else if (strcmp(name, "ui") == 0)
         section = SECTION_UI;
+    else if (strcmp(name, "metrics") == 0)
+        section = SECTION_METRICS;
     else if (strcmp(name, "irc") == 0)
         section = SECTION_IRC;
     else if (strcmp(name, "tool") == 0)
@@ -928,6 +932,8 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
             &config->prompt_tool_spinner_off_delay_ms, 0, 60000},
         {SECTION_UI, "prompt_spinner_per_second", SET_U32, &config->prompt_spinner_per_second, 1,
             60},
+        {SECTION_METRICS, "refresh_seconds", SET_U32, &config->metrics_refresh_seconds, 1,
+            UINT32_MAX},
         {SECTION_IRC, "room_name", SET_TEXT, irc->room_name, 0, sizeof(irc->room_name)},
         {SECTION_IRC, "history_lines", SET_U32, &irc->history_lines, 1,
             SNAG_CONFIG_IRC_HISTORY_MAX},

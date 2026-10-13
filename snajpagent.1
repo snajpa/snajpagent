@@ -59,6 +59,13 @@ snajpagent \- terminal coding agent with built-in IRC
 .B snajpagent convert
 .RI [ --dotdir " PATH]"
 .RI [ --jobs " N]"
+.br
+.B snajpagent top
+.RI [ --config " PATH"]
+.RI [ --dotdir " PATH"]
+.RI [ --delay " SECONDS"]
+.RI [ --sort " total|state|turns|id"]
+.RI [ --color " auto|always|never"]
 .SH DESCRIPTION
 .B snajpagent
 is a coding agent for the terminal, with a built-in IRC server and client.
@@ -906,6 +913,48 @@ older binaries refuse to resume a session containing them.
 .PP
 The built-in IRC subset has no TLS or authentication.  A non-loopback listener
 is suitable only for a trusted network or a separately secured tunnel.
+.SH "Monitoring sessions"
+.B snajpagent top
+shows live and stored sessions without starting a provider or an HTTP listener.
+Each owner atomically refreshes a Prometheus text file at
+.I $DOTDIR/metrics/SESSION_ID.prom .
+The directory is private to the account.  Files contain session identity labels,
+model and provider, attachment state, turn counts, process-start totals,
+durable session totals, process id, uptime, response duration, and estimated
+prefill and decode rates.  Process totals cover the current owner process;
+session totals survive resume and owner replacement.
+.PP
+The default refresh interval is 30 seconds.  Set it with
+.EX
+[metrics]
+refresh_seconds = 30
+.EE
+or override it for one invocation with
+.B --delay SECONDS .
+The command also accepts
+.B --sort total|state|turns|id
+and
+.B --color auto|always|never .
+The default order is attached, detached, running, stored, then descending
+process total.
+.PP
+In an interactive terminal, Up/Down or
+.B j / k
+moves the selection,
+.B r
+refreshes immediately, and
+.B q
+exits.  Press
+.B x
+then
+.B y
+to request termination of a live owner; the live session lock is checked
+before the owner process named by its current metrics file receives SIGTERM.
+Stored sessions display their totals but cannot be killed.  The inverted final
+line summarizes all visible rows.
+.PP
+Redirected output renders once and ends, which permits simple collection of the
+same file-backed data without a network endpoint.
 .SH "Options"
 .TP
 .BR \-s " [" endpoint "]", " \-\-listen" [= endpoint ]
@@ -5013,6 +5062,13 @@ A new tool call resets the delay when it finishes. After expiry the current
 provider, goal and idle state is shown normally. Uses the existing spinner
 refresh timer, including when the configured tool frame is static.
 Only presentation is delayed; tool execution and result delivery are unchanged.
+.SS metrics
+.TP
+.B refresh_seconds
+Owner metrics refresh interval in seconds.  Range: 1 through 4294967295.
+Default: 30.  Each session owner writes its private
+.I $DOTDIR/metrics/SESSION_ID.prom
+file atomically; this setting does not open a network listener.
 .SS tool
 .TP
 .B shell
@@ -6385,6 +6441,13 @@ selected file.
 Atomically replaced versioned provider/model registry containing advertised
 token capacities, counting capabilities and observed context ceilings.  Refresh only with
 .BR /model\ cache .
+.TP
+.I $HOME/.snajpagent/metrics/SESSION_ID.prom
+Private, atomically replaced Prometheus text exposition for one owner/session.
+It is refreshed from the owner process and durable session accounting; it is
+not an HTTP endpoint.  The
+.B top
+subcommand reads these files and the session catalog.
 .TP
 .I $HOME/.snajpagent/prompt_history
 Global plaintext prompt-history archive. On orderly exit (including handled

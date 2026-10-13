@@ -86,6 +86,15 @@ journal suffix before checkpoint recent events and stop at their snapshot;
 older checkpoints fall back to verified journal traversal. Metadata parsing
 stops before history.
 Stored sessions retain their last recorded topology and identities.
+
+Owner observability is file-backed under `$DOTDIR/metrics`. Each owner writes
+`<session-id>.prom` by syncing a temporary file and atomically replacing the
+published sample. The exposition carries identity labels, attached/detached
+state, process-lifetime and durable-session token counters, process identity,
+and estimated prefill/decode rates. `snajpagent top` combines these samples with
+the session catalog; it does not start a provider or an HTTP listener. Its
+termination action checks the session writer lock before signaling the metrics
+owner, while stored sessions remain read-only.
 Probing the caller's own session uses its retained lock descriptor.
 
 All saved sessions participate in resume selection and --last. Archiving has been

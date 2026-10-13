@@ -35,6 +35,7 @@
 #define SNAG_CONFIG_IRC_NICK_MAX 30u
 #define SNAG_CONFIG_IRC_ROOM_MAX 50u
 #define SNAG_CONFIG_IRC_HISTORY_MAX 1000u
+#define SNAG_CONFIG_METRICS_REFRESH_SECONDS 30u
 
 enum snag_color_mode { SNAG_COLOR_AUTO, SNAG_COLOR_ALWAYS, SNAG_COLOR_NEVER };
 
@@ -195,6 +196,7 @@ struct snag_config {
     size_t model_limit_count, model_limit_capacity;
     enum snag_color_mode color;
     bool markdown;
+    uint32_t metrics_refresh_seconds;
     uint64_t resume_history_turns;
     uint32_t typing_pause_ms;
     char pager[SNAG_CONFIG_PAGER_MAX];

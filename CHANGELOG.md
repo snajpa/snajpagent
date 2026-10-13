@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Export private per-session Prometheus metrics under the dotdir and add
+  `snajpagent top` for attachment states, process/session token totals, rates,
+  turn selection and live-owner termination. Stored sessions remain read-only.
+
 - Carry native file-drop input ownership through stock Mosh's retained title
   state. Workstation drops upload attachments and preserve the draft; releasing
   input keeps local paths literal in other programs.

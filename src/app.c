@@ -84,6 +84,54 @@ static atomic_int pending_shutdown_signal;
 static _Atomic(struct snag_ui *) shutdown_ui;
 static void write_resume_command(struct app_state *, const char *, const char *);
 static int submit_idle(struct app_state *, const char *, enum snag_render_view, bool *);
+static int refresh_metrics(struct app_state *, bool);
+
+static int
+refresh_metrics(struct app_state *app, bool force)
+{
+    uint64_t now;
+    uint64_t interval;
+    const char *provider;
+    const char *model;
+    const char *state;
+    struct snag_metrics_sample sample;
+    char error[256] = {0};
+
+    if (!app || app->store.root_fd < 0 || !app->session.id[0] || !app->config) return 0;
+    now = snag_monotonic_ms();
+    interval = (uint64_t)app->config->metrics_refresh_seconds * 1000u;
+    if (!force && app->metrics_last_write_ms && now - app->metrics_last_write_ms < interval)
+        return 0;
+    provider = app->turn_provider ? app->turn_provider->name : app->session.default_provider;
+    model = app->turn_model && *app->turn_model
+                ? app->turn_model
+                : app->session.active_turn_model[0] ? app->session.active_turn_model
+                                                     : app->session.default_model;
+    state = app->ui.opened && (!app->ui.native || app->ui.direct ||
+                                   snag_ui_session_attachment(&app->ui))
+                ? "attached"
+                : "detached";
+    sample = (struct snag_metrics_sample){
+        .session = &app->session,
+        .program_usage = &app->program_usage,
+        .provider = provider,
+        .model = model,
+        .active_turn_id = app->session.active_turn ? app->session.active_turn_id : "",
+        .state = state,
+        .process_started_ms = app->metrics_started_ms,
+        .process_pid = (uint64_t)getpid(),
+        .observed_ms = now,
+        .turn_started_ms = app->turn_started_ms,
+        .turn_output_tokens = app->turn_output_tokens,
+        .response_started_ms = app->response_started_ms,
+        .last_response_ms = app->last_response_ms,
+        .last_response_output_tokens = app->last_response_output_tokens,
+        .turn_active = app->session.active_turn,
+        .response_open = app->session.response_open};
+    if (snag_metrics_write(app->store.root_fd, &sample, error, sizeof(error)) < 0) return 0;
+    app->metrics_last_write_ms = now;
+    return 0;
+}
 
 static void
 mark_shutdown_signal(int signal_number)
@@ -198,6 +246,7 @@ persist_session(struct app_state *app, char *error, size_t error_size)
         (void)snag_history_bind(&app->ui.history, app->session.dir_path);
         history_warning(app);
     }
+    if (rc == 0) (void)refresh_metrics(app, false);
     return rc;
 }
 static int
@@ -4570,6 +4619,7 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
 {
     struct app_state *app = opaque;
 again:;
+    (void)refresh_metrics(app, false);
     bool leaving = snag_ui_leaving(&app->ui);
     enum snag_term_action action = SNAG_TERM_NONE;
     char *line = NULL;
@@ -7282,6 +7332,7 @@ interactive_loop(struct app_state *app, const char *initial)
         initial = NULL;
         free(owned);
         owned = NULL;
+        (void)refresh_metrics(app, false);
         if (service_pager(app) < 0 || service_attachment(app, app->pager != NULL) < 0) {
             rc = 6;
             break;
@@ -7521,6 +7572,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     int rc = 3;
     memset(&app, 0, sizeof(app));
     app.program = program;
+    app.metrics_started_ms = snag_monotonic_ms();
     app.switch_target = SNAG_RENDER_VIEW_COUNT;
     snag_buf_init(&app.irc_urgent, SNAG_MAX_IRC_SNAPSHOT);
     snag_buf_init(&app.irc_urgent_refs, SNAG_MAX_IRC_SNAPSHOT);
@@ -7751,6 +7803,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         app.turn_effort = snag_app_resolve_effort(app.session.default_effort);
         app.turn_provider = selected_provider;
     }
+    (void)refresh_metrics(&app, true);
     if (selection.context_set &&
         record_context_selection(&app, &selection.context, error, sizeof(error)) < 0)
         goto fail;
@@ -7820,6 +7873,7 @@ fail:
 report:
     (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, invalid_message);
 out:
+    (void)refresh_metrics(&app, true);
     owner_report(&report_fd, app.session.log_fd >= 0 ? app.session.id : NULL, invalid_message);
 #if SNAJPAGENT_VM
     if (direct && rc)
