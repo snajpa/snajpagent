@@ -147,9 +147,10 @@ def check_network(fixture):
         child.until(b"|[network]|host-model C>", 10)
         for i, listener in enumerate(listeners, 1):
             register(listener, i, links)
-        fixture.send(child, "/names", "model agent2 operator human2")
+        # Each selected prompt waits for its accepted endpoint identities.
         fixture.send(child, "/1", "human1|agent1|[network]|host-model C>")
         fixture.send(child, "/2", "human2|agent2|[network]|host-model C>")
+        fixture.send(child, "/names", f"members[{endpoints[1]}/#lab]: @human2 agent2")
         os.write(child.master, b"draft")
         for link in links[2:]:
             link.sendall(b":human2!u@fake NICK :human3\r\n:agent2!u@fake NICK :agent3\r\n")
