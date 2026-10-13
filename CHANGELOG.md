@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Select compaction sources by their wire limit and actual capacity checks.
+  Remove byte/token-ratio cuts and the extra ratio-triggered condensation of
+  readable summaries; retain exact-count and provider-rejection recovery.
+
 - Keep request-byte estimates out of token-budget compaction after a model
   switch restores archived history. Exact counts, compatible provider usage,
   provider capacity rejections and request-body limits retain their checks.

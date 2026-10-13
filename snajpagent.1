@@ -3964,10 +3964,9 @@ Responses compact endpoint. Set
 to summarize through ordinary Responses; the application wraps the returned
 summary text in its stored message format. Native compaction failures report an
 error and retain the original source and previous compacted context. An unavailable
-native endpoint does not switch to ordinary-text summarization. Capacity fitting
-can select a smaller source before dispatch; a failed native request is not retried
-with progressively less history. Failures retain the
-previous context.  Manual
+native endpoint does not switch to ordinary-text summarization. Exact preflight
+counts or explicit provider capacity rejections can select a smaller source.
+Other failures retain the source and previous context. Manual
 .B /compact
 is accepted at idle and during active work.  It reports when compaction starts,
 waits for a complete context boundary, finishes, or is interrupted.  An idle
@@ -3988,9 +3987,11 @@ retained summary as plain text, and compacts only the uncovered tail.  The
 previous binding is not selected again to prepare the new binding's request.
 Failed or cancelled turns and process exit retain the selection and compaction
 progress; resume continues from that durable state without replaying completed
-tools.  When a provider rejects a request for capacity and no uncovered events
-remain, the merged summary is condensed once under the selected binding and the
-turn is retried; the covered boundary and predecessor chain stay unchanged.
+tools. Compaction selects complete history groups within its 12 MiB request
+limit. An exact count or provider capacity rejection can require a smaller
+source. Byte/token ratios neither shorten that source nor schedule an extra
+summary request. The next response's measured capacity checks apply to the
+adopted summary together with its uncovered history and request overhead.
 .PP
 Automatic and manual compaction announce that context is being compacted.
 During compaction, Ctrl-C with an empty draft interrupts preparation or the provider request; a
@@ -6748,11 +6749,12 @@ OAuth token refresh retains continuity when the account ID is unchanged.
 Ordinary messages, summary text and paired tool results remain available across
 model switches.  The covered compaction boundary remains durable while opaque
 private compact items from another binding are omitted.  The selected binding
-performs any required tail compaction or summary reduction against its own
+performs any required compaction or history recovery against its own
 capacity. Failed and cancelled turns retain that progress and the selected
 model across resume, and completed tools are never re-executed.
 If an encrypted summary cannot cross a model or provider change, restored
-history is checked against the selected context estimate before upload.
+history uses the selected binding's exact-count and provider-rejection checks;
+request-body byte limits apply independently.
 If a new summary covers an earlier boundary, the uncovered original events remain
 available to following requests and resume. Older checkpoints with a gap in that
 retained history recover the missing events from the journal before projection.

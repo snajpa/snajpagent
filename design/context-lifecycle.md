@@ -244,8 +244,11 @@ and unconsumed referenced room events remain outside coverage until admitted.
 Native compact and Responses-summary adapters produce the same validated
 completion transition. Native output is opaque continuation, not parseable prose.
 A fallback summary is explicitly summary data, not a newly authoritative user
-instruction. Summary reduction operates on the retained summary, not on a second
-copy of all already covered events.
+instruction. Source selection starts from the compact request's wire bound;
+an exact count or provider capacity rejection can require smaller complete groups.
+Byte/token ratios neither shorten that source nor schedule an additional summary
+request. Adopt the validated output and apply measured capacity checks when
+building the next response request.
 
 Manual controls remain pending when no safe prefix exists and are revisited at
 a safe boundary. Cancel/failure clears only the current attempt and leaves the

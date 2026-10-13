@@ -497,31 +497,6 @@ test_worknote_moments(struct snag_store *store, const char *cwd)
             session.default_effort, false, 0u, false, NULL, &compact, error, sizeof(error), NULL);
         if (rc != 0) fprintf(stderr, "compact build: %s\n", error);
         assert(rc == 0);
-        /* The reduce pass (design step 3) frames the merged text and the dedupe
-           instruction as one user item and nothing else, so no event re-enters
-           the source it was built from. */
-        {
-            struct snag_json_document reduce = {0};
-            json_t *merged = json_pack("[{s:s,s:s}]", "type", "compaction_summary", "text",
-                "overlapping summaries to condense");
-            int reduce_rc = snag_context_compact_reduce_request_build(&session, NULL,
-                session.default_model, session.default_effort, merged,
-                "merge these summaries of overlapping chunks, deduplicating anything that appears "
-                "twice",
-                &reduce, error, sizeof(error));
-            if (reduce_rc != 0) fprintf(stderr, "reduce build: %s\n", error);
-            assert(reduce_rc == 0);
-            json_t *reduce_input = json_object_get(reduce.value, "input");
-            assert(json_is_array(reduce_input) && json_array_size(reduce_input) == 1);
-            assert(reduce_input->refcount == 1u); /* The request is its only owner. */
-            json_t *reduce_item = json_array_get(reduce_input, 0);
-            assert_string(reduce_item, "role", "user");
-            const char *reduce_text = json_string_value(json_object_get(reduce_item, "content"));
-            assert(reduce_text && strstr(reduce_text, "deduplicating anything that appears twice"));
-            assert(json_object_get(reduce.value, "include"));
-            snag_json_document_free(&reduce);
-            json_decref(merged);
-        }
         /* The compact request itself never carries the note (context.c:1355); model the real
            cycle — install the summary, then rebuild with an active next turn. */
         {
@@ -3418,7 +3393,6 @@ test_opaque_compaction_binding(struct snag_store *store, const char *cwd, bool l
     struct snag_session session;
     struct snag_context_projection compact = {0};
     struct snag_context_projection next = {0};
-    struct snag_json_document reduce = {0};
     char scope[65], other[65], saved[33], error[512] = {0};
     json_t *empty = json_array();
     json_t *output = compact_output_fixture();
@@ -3518,9 +3492,6 @@ test_opaque_compaction_binding(struct snag_store *store, const char *cwd, bool l
         "content", "middle history survives"));
     snag_context_projection_free(&next);
     snag_context_projection_free(&rebuild);
-    assert(snag_context_compact_reduce_request_build(&session, NULL, SNAJPAGENT_MODEL, "medium",
-               output, "merge these summaries", &reduce, error, sizeof(error)) < 0);
-    assert(!reduce.value && strstr(error, "encrypted"));
     snag_context_projection_free(&compact);
     json_decref(output);
     json_decref(empty);

@@ -61,6 +61,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             "type": "invalid_request_error", "message": "fixture capacity rejection"}}).encode())
                 return
             body = response()
+            if getattr(self.server, "response_text", None) is not None:
+                body = body.replace(b"HTTPS answer once", self.server.response_text.encode())
             if getattr(self.server, "input_usage", None) is not None:
                 assert b'"input_tokens": 1' in body and b'"total_tokens": 4' in body
                 body = body.replace(b'"input_tokens": 1',
@@ -371,8 +373,86 @@ def check_catalog_refresh(binary):
     print("Context maximum: stale ceiling diagnostic, explicit refresh, model suffix and resume: ok")
 
 
+def check_compact_byte_ratios(binary, mode, exact=True):
+    with tempfile.TemporaryDirectory(prefix="snag-compact-ratio-") as directory:
+        root = Path(directory).resolve()
+        state, config = root / "state", root / "config.ini"
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.requests, server.count_requests = [], []
+        server.v2, server.failure, server.catalog_status = True, 0, 200
+        server.catalog_delay, server.input_usage = False, 50000
+        server.invalid_output = [{"type": "compaction", "encrypted_content": "opaque-context"}]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        config.write_text("[agent]\nmodel=gpt-fixture\nreasoning_effort=max\n"
+                          "read_agents_md=false\nmax_turn_retries=0\n"
+                          f"[provider fixture]\nbase_url=http://127.0.0.1:{server.server_port}/v1\n"
+                          'api_key="fixture-secret"\n'
+                          f"exact_token_count={'true' if exact else 'false'}\n"
+                          f"native_compaction={'true' if mode == 'source' else 'false'}\n"
+                          "auto_compact_input_tokens=0\n"
+                          "[model-limit fixture/gpt-fixture]\nmax_input_tokens=100000\n"
+                          "[ui]\ncolor=never\n")
+        config.chmod(0o600)
+        env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+               "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
+        env.pop("OPENAI_API_KEY", None)
+        prefix = [str(binary), "--dotdir", str(state), "--config", str(config)]
+        markers = [f"complete-source-{n}" for n in range(3 if mode == "source" else 1)]
+        child = None
+        try:
+            sid = None
+            for marker in markers:
+                resume = ["--resume", sid] if sid else []
+                result = subprocess.run([*prefix, *resume, "-e"], cwd=root, env=env,
+                                        input=marker + " " + "x" * 200000,
+                                        capture_output=True, text=True, timeout=30)
+                assert result.returncode == 0, result.stderr
+                journal, = journal_paths(state)
+                sid = journal.parent.name
+            creates = len(server.requests)
+            if mode == "output":
+                server.response_text = "fitting-summary " + "x" * 150000
+            child = RemoteProcess(root, [*prefix, "--resume", sid], wrapped=None,
+                                  extra_env=env, winsize=(24, 180))
+            child.until("›".encode(), timeout=10)
+            if mode == "source":
+                child.output.clear()
+                os.write(child.master, b"/context 10000\r")
+                child.until_after(b"context for next turn:", "›".encode(), timeout=10)
+            child.output.clear()
+            os.write(child.master, b"/compact\r")
+            child.until_after(b"Compacted", "›".encode(), timeout=20)
+            os.write(child.master, b"/exit\r")
+            child.wait(0)
+            compacts = [body for path, body, _, _ in server.requests[creates:]]
+            assert len(compacts) == 1, ("encoded bytes triggered a second compact", len(compacts))
+            assert all(marker in json.dumps(compacts[0]["input"]) for marker in markers), (
+                "byte/token ratio trimmed a source whose exact count fits",
+                [marker for marker in markers if marker in json.dumps(compacts[0]["input"])])
+            if exact:
+                assert any(count["input"] == compacts[0]["input"]
+                           for count in server.count_requests)
+            else:
+                assert not server.count_requests
+            completed = [e["data"] for e in read_events(journal)
+                         if e["type"] == "compaction_completed"]
+            assert len(completed) == 1
+            assert completed[0]["output_count_method"] == ("exact" if exact else "unknown")
+        finally:
+            if child is not None:
+                child.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+    print(f"Compact {mode}, exact={exact}: byte ratios do not select or reduce context: ok")
+
+
 if __name__ == "__main__":
     binary = Path(sys.argv[1]).resolve()
     check(binary)
     check_context_limits(binary)
     check_catalog_refresh(binary)
+    for mode in ("source", "output"):
+        for exact in (False, True):
+            check_compact_byte_ratios(binary, mode, exact)
