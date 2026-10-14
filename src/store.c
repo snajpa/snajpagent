@@ -202,7 +202,7 @@ snag_session_option_arity(const char *name)
 {
     if (snag_string_in(name, "--no-listen --no-client --markdown --no-markdown -v")) return 0;
     if (snag_string_in(name,
-            "--config -d --color --listen --client --model-nick --operator-nick --room-name")) {
+            "--config -d -dl --color --listen --client --model-nick --operator-nick --room-name")) {
         return 1;
     }
     return -1;
@@ -2020,7 +2020,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
         }
         legacy_instruction_metadata = session->legacy_journal && json_is_array(instructions) &&
                                       json_array_size(instructions) > 0u &&
-                                      json_is_object(json_array_get(instructions, 0u));
+                                      json_is_object(json_array_get(instructions, 0u)) &&
+                                      json_object_get(json_array_get(instructions, 0u), "bytes");
         read_only_ok = json_object_get(data, "read_only")
                            ? json_is_boolean(json_object_get(data, "read_only"))
                            : session->legacy_journal;

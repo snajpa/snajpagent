@@ -146,6 +146,8 @@ struct snag_binary_part {
 struct snag_binary_instruction {
     /* Bounded NUL-terminated UTF-8 on wire. */
     struct snag_binary_text path;
+    struct snag_binary_text label;
+    bool has_label;
     bool has_snapshot; /* Preserve workspace-era metadata, not inferred file contents. */
     uint64_t bytes;
     unsigned char sha256[32];

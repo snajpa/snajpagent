@@ -728,18 +728,35 @@ instruction_paths_valid(const json_t *paths, bool snapshots)
 {
     /* Shape and exact uniqueness; rootedness requires the source platform. */
     if (!json_is_array(paths)) return invalid();
-    bool metadata = snapshots && json_is_object(json_array_get(paths, 0u));
+    bool snapshot_metadata = false;
+    if (json_array_size(paths)) {
+        const json_t *first = json_array_get(paths, 0u);
+        snapshot_metadata = json_is_object(first) &&
+            (json_object_get(first, "bytes") != NULL || json_object_get(first, "sha256") != NULL);
+    }
     json_t *seen = json_object();
     if (!seen) return -1;
     int rc = -1;
     for (size_t i = 0u; i < json_array_size(paths); ++i) {
         const json_t *value = json_array_get(paths, i);
-        if (metadata && json_is_object(value)) {
-            uint64_t bytes;
-            unsigned char digest[32];
-            if (!snag_json_exact_keys(value, "bytes path sha256") ||
-                snag_json_integer_u64(value, "bytes", &bytes) < 0 ||
-                read_digest(value, "sha256", digest) < 0) {
+        if (json_is_object(value)) {
+            const json_t *label = json_object_get(value, "label");
+            bool has_snapshot = json_object_get(value, "bytes") != NULL ||
+                json_object_get(value, "sha256") != NULL;
+            if (has_snapshot) {
+                uint64_t bytes;
+                unsigned char digest[32];
+                if (!snapshots || !snapshot_metadata ||
+                    !snag_json_exact_keys(value, label ?
+                        "bytes label path sha256" : "bytes path sha256") ||
+                    snag_json_integer_u64(value, "bytes", &bytes) < 0 ||
+                    read_digest(value, "sha256", digest) < 0) {
+                    (void)invalid();
+                    goto done;
+                }
+            } else if (snapshot_metadata || !label ||
+                       !snag_json_exact_keys(value, "label path") ||
+                       !snag_text_valid(json_string_value(label), 1u, SNAG_TERM_LABEL_BYTES)) {
                 (void)invalid();
                 goto done;
             }
@@ -769,14 +786,22 @@ read_instruction_paths(const json_t *paths, struct snag_buf *out, bool snapshots
     for (size_t i = 0u; i < count; ++i) {
         const json_t *item = json_array_get(paths, i);
         const json_t *path = item;
-        items[i].has_snapshot = json_is_object(item);
+        const json_t *label = json_is_object(item) ? json_object_get(item, "label") : NULL;
+        items[i].has_snapshot = json_is_object(item) && json_object_get(item, "bytes") != NULL;
+        if (json_is_object(item)) {
+            path = json_object_get(item, "path");
+        }
         if (items[i].has_snapshot) {
             if (snag_json_integer_u64(item, "bytes", &items[i].bytes) < 0 ||
                 read_digest(item, "sha256", items[i].sha256) < 0) {
                 free(items);
                 return -1;
             }
-            path = json_object_get(item, "path");
+        }
+        if (label) {
+            items[i].has_label = true;
+            items[i].label = (struct snag_binary_text){
+                (const unsigned char *)json_string_value(label), json_string_length(label)};
         }
         items[i].path = (struct snag_binary_text){
             (const unsigned char *)json_string_value(path), json_string_length(path)
@@ -2572,8 +2597,16 @@ snag_binary_instructions_legacy(const struct snag_binary_instructions *paths, bo
             }
             value = json_pack("{s:I}", "bytes", (json_int_t)item.bytes);
             if (!value) goto fail;
-            if (put_text(value, "path", item.path) < 0 ||
+            if ((item.has_label && put_text(value, "label", item.label) < 0) ||
+                put_text(value, "path", item.path) < 0 ||
                 put_digest(value, "sha256", item.sha256) < 0) {
+                json_decref(value);
+                goto fail;
+            }
+        } else if (item.has_label) {
+            value = json_object();
+            if (!value || put_text(value, "label", item.label) < 0 ||
+                put_text(value, "path", item.path) < 0) {
                 json_decref(value);
                 goto fail;
             }

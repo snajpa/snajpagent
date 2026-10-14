@@ -1588,7 +1588,7 @@ append_instruction_messages(struct context_builder *builder)
 {
     struct snag_buf text;
     json_t *paths;
-    size_t per_path = SNAG_PATH_MAX_BYTES * 6u + 4u, budget;
+    size_t per_path = (SNAG_PATH_MAX_BYTES + SNAG_TERM_LABEL_BYTES) * 6u + 64u, budget;
     int rc = -1;
 
     if (!builder->instructions || !builder->instructions->count) return 0;
@@ -1597,8 +1597,9 @@ append_instruction_messages(struct context_builder *builder)
     paths = snag_instructions_metadata_json(builder->instructions);
     snag_buf_init(&text, budget);
     if (paths &&
-        snag_buf_printf(
-            &text, "Working-document entry points (JSON paths, not file contents):\n") == 0 &&
+        snag_buf_printf(&text,
+            "Working-document entries (JSON paths and optional labels, not file contents):\n") ==
+            0 &&
         snag_json_canonical(paths, &text) == 0 &&
         snag_buf_printf(&text,
             "\nUse tools to read the relevant AGENTS files and follow their document pointers as "

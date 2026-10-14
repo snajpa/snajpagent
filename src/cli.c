@@ -230,6 +230,13 @@ parse_options(
     const char *arg = argv[*index], *p = arg + 1;
     bool long_option = *p == '-';
 
+    if (!strcmp(arg, "-dl")) {
+        const char *label = option_argument(argc, argv, index, NULL, "-dl", error, error_size);
+        return label ? snag_instructions_label_last(&cli->doc_instructions, label, error,
+                                     error_size)
+                     : -1;
+    }
+
     do {
         const struct option *option = NULL;
         const char *attached = NULL;
@@ -485,6 +492,7 @@ snag_cli_usage(int fd)
         "      --markdown               render model Markdown (default)\n"
         "      --no-markdown            show model Markdown literally\n"
         "  -d DIR                       additional working docs with AGENTS.md; repeatable\n"
+        "  -dl LABEL                   label the preceding -d directory\n"
         "  -m [PROVIDER/]MODEL[/EFFORT][:CONTEXT]  model/context on start or resume\n"
         "  -v                           exact detail level: repeat 1 through 6 times\n"
         "                               1 tools; 2 previews; 3 full tools;\n"

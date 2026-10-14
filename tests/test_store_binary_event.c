@@ -211,6 +211,20 @@ test_input_lists(void)
     snag_buf_reset(&again);
     assert(!snag_binary_instructions_encode(&again, decoded_paths, 2u));
     assert(again.len == bytes.len && !memcmp(again.data, bytes.data, bytes.len));
+    instructions[0].has_snapshot = false;
+    instructions[0].has_label = true;
+    instructions[0].label = text("working memory");
+    snag_buf_reset(&bytes);
+    assert(!snag_binary_instructions_encode(&bytes, instructions, 2u));
+    assert(!snag_binary_instructions_decode(bytes.data, bytes.len, &paths));
+    offset = 0u;
+    assert(!snag_binary_instructions_next(&paths, &offset, &decoded_paths[0]));
+    assert(decoded_paths[0].has_label && decoded_paths[0].label.size == 14u &&
+           !memcmp(decoded_paths[0].label.data, "working memory", 14u));
+    assert(!snag_binary_instructions_next(&paths, &offset, &decoded_paths[1]));
+    assert(!decoded_paths[1].has_label);
+    instructions[0].has_label = false;
+    instructions[0].label = (struct snag_binary_text){0};
     saved = bytes.len;
     instructions[0].path = text("");
     assert(snag_binary_instructions_encode(&bytes, instructions, 2u) < 0 && bytes.len == saved);

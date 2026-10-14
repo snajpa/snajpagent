@@ -5745,12 +5745,17 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 app->session.active_instructions, error, sizeof(error)) < 0)
             goto fail;
         for (size_t i = 0; i < json_array_size(app->session.active_instructions); ++i) {
+            const json_t *entry = json_array_get(app->session.active_instructions, i);
+            const char *label = json_is_object(entry) ? snag_json_string(entry, "label") : NULL;
             char *path = snag_strdup_checked(
-                json_string_value(json_array_get(app->session.active_instructions, i)),
+                json_is_string(entry) ? json_string_value(entry) : snag_json_string(entry, "path"),
                 SNAG_PATH_MAX_BYTES);
             if (!path) goto fail;
             if (snag_instructions_add_owned(&app->turn_instructions, path, error, sizeof(error)) <
                 0)
+                goto fail;
+            if (label && snag_instructions_label_last(
+                             &app->turn_instructions, label, error, sizeof(error)) < 0)
                 goto fail;
         }
     } else {
@@ -5765,9 +5770,18 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                             : NULL;
         size_t count = saved ? json_array_size(saved) : app->cli->doc_instructions.count;
         for (size_t i = 0; i < count; ++i) {
-            const char *path = saved ? json_string_value(json_array_get(saved, i))
-                                     : app->cli->doc_instructions.paths[i];
-            if (snag_instructions_add_file(&app->turn_instructions, path, error, sizeof(error)) < 0)
+            const json_t *entry = saved ? json_array_get(saved, i) : NULL;
+            const char *path = saved
+                                   ? (json_is_string(entry) ? json_string_value(entry)
+                                                              : snag_json_string(entry, "path"))
+                                   : app->cli->doc_instructions.paths[i];
+            const char *label = saved && json_is_object(entry) ? snag_json_string(entry, "label")
+                                                                : NULL;
+            if (!path || snag_instructions_add_file(
+                              &app->turn_instructions, path, error, sizeof(error)) < 0)
+                goto fail;
+            if (label && snag_instructions_label_last(
+                             &app->turn_instructions, label, error, sizeof(error)) < 0)
                 goto fail;
         }
     }

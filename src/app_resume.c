@@ -31,6 +31,9 @@ snag_app_save_resume_options(struct app_state *app, char *error, size_t error_si
         if (!slash || json_array_append_new(args, json_string("-d")) < 0 ||
             json_array_append_new(args, json_stringn(path, (size_t)(slash - path + 1))) < 0)
             goto fail;
+        if (cli->doc_instructions.labels[i] &&
+            option(args, "-dl", cli->doc_instructions.labels[i]) < 0)
+            goto fail;
     }
     enum snag_color_mode color = snag_cli_color(cli, config->color);
     if (option(args, "--color", color == SNAG_COLOR_ALWAYS ? "always" :

@@ -12,6 +12,7 @@
 #define SNAG_WORKNOTE_MAX_BYTES (64u * 1024u)
 struct snag_instruction_set {
     char **paths;
+    char **labels;
     size_t count, capacity;
 };
 
@@ -23,6 +24,8 @@ int snag_instructions_add_file(struct snag_instruction_set *set, const char *pat
 /* Takes ownership of an already canonical path; grows the set as needed. */
 int snag_instructions_add_owned(struct snag_instruction_set *set, char *path,
                                char *error, size_t error_size);
+int snag_instructions_label_last(struct snag_instruction_set *set, const char *label,
+                                char *error, size_t error_size);
 int snag_instructions_discover(struct snag_instruction_set *set, const char *cwd,
                               char *error, size_t error_size);
 int snag_instructions_worknote(const char *cwd, char **note,

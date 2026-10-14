@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Add repeatable `-dl LABEL` documentation-root labels after `-d DIR`. Preserve
+  labels in active-turn metadata, model context and resume options while keeping
+  unlabeled instruction metadata compatible with existing journals.
+
+- Keep `/context` advice tied to the selected input budget and automatic
+  compaction threshold. A measured input below both limits no longer reports
+  that the next request will compact first; add coverage for the 272000/450000/
+  405000-token case.
+
 - Export private per-session Prometheus metrics under the dotdir and add
   `snajpagent top` for attachment states, process/session token totals, rates,
   turn selection and live-owner termination. Stored sessions remain read-only.

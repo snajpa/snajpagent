@@ -377,6 +377,53 @@ def check_catalog_refresh(binary):
     print("Context maximum: stale ceiling diagnostic, explicit refresh, model suffix and resume: ok")
 
 
+def check_default_context_advice(binary):
+    """A measured input below the selected soft threshold must not claim compaction is next."""
+    with tempfile.TemporaryDirectory(prefix="snag-context-default-advice-") as directory:
+        root = Path(directory).resolve()
+        state, config = root / "state", root / "config.ini"
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.requests, server.count_requests = [], []
+        server.v2, server.failure, server.catalog_status = True, 0, 200
+        server.catalog_delay, server.invalid_output, server.input_usage = False, None, 272000
+        server.catalog_metadata = {"context_window": 272000, "max_context_window": 872000}
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        config.write_text(
+            "[agent]\nmodel=gpt-fixture\nreasoning_effort=xhigh\n"
+            "read_agents_md=false\nmax_turn_retries=0\n"
+            f"[provider fixture]\nbase_url=http://127.0.0.1:{server.server_port}/v1\n"
+            'api_key="fixture-secret"\nexact_token_count=false\nnative_compaction=true\n'
+            "[model-limit fixture/gpt-fixture]\ncontext_window_tokens=500000\n"
+            "[ui]\ncolor=never\n")
+        config.chmod(0o600)
+        env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+               "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1", "OPENAI_API_KEY": None}
+        child = RemoteProcess(root, [str(binary), "--dotdir", str(state), "--config", str(config)],
+                              wrapped=None, extra_env=env, winsize=(24, 180))
+        try:
+            child.until("›".encode(), timeout=10)
+            os.write(child.master, b"ping\r")
+            child.until(b"once", timeout=10)
+            child.until("›".encode(), timeout=10)
+            start = len(child.output)
+            os.write(child.master, b"/context default\r")
+            child.until(b"selected=500000", timeout=10)
+            child.until(b"input-budget=450000", timeout=10)
+            child.until(b"compact=405000 (auto)", timeout=10)
+            advice = bytes(child.output[start:])
+            assert b"the next request compacts first" not in advice, advice
+            assert b"last measured input has reached an active limit" not in advice, advice
+            os.write(child.master, b"/exit\r")
+            child.wait(0)
+        finally:
+            child.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+    print("Context default advice: 272000 below the 405000 threshold: ok")
+
+
 def check_compact_byte_ratios(binary, mode, exact=True):
     with tempfile.TemporaryDirectory(prefix="snag-compact-ratio-") as directory:
         root = Path(directory).resolve()
@@ -528,6 +575,7 @@ if __name__ == "__main__":
     check(binary)
     check_context_limits(binary)
     check_catalog_refresh(binary)
+    check_default_context_advice(binary)
     for mode in ("source", "output"):
         for exact in (False, True):
             check_compact_byte_ratios(binary, mode, exact)

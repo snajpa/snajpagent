@@ -189,9 +189,18 @@ snag_app_voice_read(struct app_state *app, const struct snag_response_item *call
                        : app->cli ? app->cli->doc_instructions.count
                                   : 0u;
         for (size_t i = 0; i < count; ++i) {
-            const char *path = saved ? json_string_value(json_array_get(saved, i))
-                                     : app->cli->doc_instructions.paths[i];
-            if (snag_instructions_add_file(&discovered, path, error, size) < 0) {
+            const json_t *entry = saved ? json_array_get(saved, i) : NULL;
+            const char *path = saved
+                                   ? (json_is_string(entry) ? json_string_value(entry)
+                                                              : snag_json_string(entry, "path"))
+                                   : app->cli->doc_instructions.paths[i];
+            const char *label = saved && json_is_object(entry) ? snag_json_string(entry, "label")
+                                                                : NULL;
+            if (!path || snag_instructions_add_file(&discovered, path, error, size) < 0) {
+                rc = -1;
+                goto out;
+            }
+            if (label && snag_instructions_label_last(&discovered, label, error, size) < 0) {
                 rc = -1;
                 goto out;
             }

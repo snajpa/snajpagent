@@ -15,8 +15,12 @@
 void
 snag_instructions_free(struct snag_instruction_set *set)
 {
-    for (size_t i = 0; i < set->count; ++i) free(set->paths[i]);
+    for (size_t i = 0; i < set->count; ++i) {
+        free(set->paths[i]);
+        free(set->labels[i]);
+    }
     free(set->paths);
+    free(set->labels);
     *set = (struct snag_instruction_set){0};
 }
 
@@ -24,7 +28,8 @@ int
 snag_instructions_add_owned(
     struct snag_instruction_set *set, char *path, char *error, size_t error_size)
 {
-    char **grown;
+    char **grown_paths;
+    char **grown_labels;
 
     if (!set || !path) {
         free(path);
@@ -36,15 +41,45 @@ snag_instructions_add_owned(
             free(path);
             return snag_fail(error, error_size, EOVERFLOW, "instruction path capacity overflow");
         }
-        grown = realloc(set->paths, capacity * sizeof(*grown));
-        if (!grown) {
+        grown_paths = malloc(capacity * sizeof(*grown_paths));
+        grown_labels = calloc(capacity, sizeof(*grown_labels));
+        if (!grown_paths || !grown_labels) {
+            free(grown_paths);
+            free(grown_labels);
             free(path);
             return snag_fail(error, error_size, ENOMEM, "cannot retain instruction path");
         }
-        set->paths = grown;
+        if (set->count) {
+            memcpy(grown_paths, set->paths, set->count * sizeof(*grown_paths));
+            memcpy(grown_labels, set->labels, set->count * sizeof(*grown_labels));
+        }
+        free(set->paths);
+        free(set->labels);
+        set->paths = grown_paths;
+        set->labels = grown_labels;
         set->capacity = capacity;
     }
     set->paths[set->count++] = path;
+    return 0;
+}
+
+int
+snag_instructions_label_last(
+    struct snag_instruction_set *set, const char *label, char *error, size_t error_size)
+{
+    char *copy;
+
+    if (!set || !set->count)
+        return snag_fail(error, error_size, EINVAL, "-dl requires a preceding -d directory");
+    if (set->labels[set->count - 1u])
+        return snag_fail(
+            error, error_size, EINVAL, "duplicate label for the preceding -d directory");
+    if (!snag_text_valid(label, 1u, SNAG_TERM_LABEL_BYTES))
+        return snag_fail(error, error_size, EINVAL,
+            "-dl label must be nonempty UTF-8 text within %u bytes", SNAG_TERM_LABEL_BYTES);
+    copy = snag_strdup_checked(label, SNAG_TERM_LABEL_BYTES);
+    if (!copy) return snag_errorf(error, error_size, "cannot retain -dl label");
+    set->labels[set->count - 1u] = copy;
     return 0;
 }
 
@@ -312,10 +347,16 @@ snag_instructions_metadata_json(const struct snag_instruction_set *set)
 
     if (!array) return NULL;
     for (size_t i = 0; set && i < set->count; ++i) {
-        if (json_array_append_new(array, json_string(set->paths[i])) < 0) {
+        json_t *entry = set->labels[i]
+                            ? json_pack("{s:s,s:s}", "label", set->labels[i], "path",
+                                  set->paths[i])
+                            : json_string(set->paths[i]);
+        if (!entry || json_array_append(array, entry) < 0) {
+            json_decref(entry);
             json_decref(array);
             return NULL;
         }
+        json_decref(entry);
     }
     return array;
 }
@@ -329,13 +370,23 @@ snag_instructions_metadata_valid(const json_t *array, char *error, size_t error_
     count = json_array_size(array);
     for (size_t i = 0; i < count; ++i) {
         const json_t *value = json_array_get(array, i);
-        const char *path = json_string_value(value);
-        if (!snag_path_root_len(path) || strlen(path) > SNAG_PATH_MAX_BYTES ||
-            json_string_length(value) != strlen(path) ||
-            !snag_utf8_valid((const unsigned char *)path, strlen(path), true))
+        const char *path = json_is_string(value) ? json_string_value(value)
+                                                  : snag_json_string(value, "path");
+        const char *label = json_is_object(value) ? snag_json_string(value, "label") : NULL;
+        if ((json_is_object(value) && !snag_json_exact_keys(value, "label path")) ||
+            (json_is_object(value) && !label) ||
+            !path || !snag_path_root_len(path) || strlen(path) > SNAG_PATH_MAX_BYTES ||
+            (json_is_string(value) && json_string_length(value) != strlen(path)) ||
+            !snag_utf8_valid((const unsigned char *)path, strlen(path), true) ||
+            (label && !snag_text_valid(label, 1u, SNAG_TERM_LABEL_BYTES)))
             goto invalid;
-        for (size_t j = 0; j < i; ++j)
-            if (strcmp(json_string_value(json_array_get(array, j)), path) == 0) goto invalid;
+        for (size_t j = 0; j < i; ++j) {
+            const json_t *other = json_array_get(array, j);
+            const char *other_path = json_is_string(other)
+                                         ? json_string_value(other)
+                                         : snag_json_string(other, "path");
+            if (other_path && strcmp(other_path, path) == 0) goto invalid;
+        }
     }
     return 0;
 invalid:
@@ -351,8 +402,16 @@ snag_instructions_match_metadata(
     if (snag_instructions_metadata_valid(array, error, error_size) < 0) return -1;
     count = json_array_size(array);
     if ((!set && count != 0u) || (set && count != set->count)) goto mismatch;
-    for (size_t i = 0; set && i < set->count; ++i)
-        if (strcmp(json_string_value(json_array_get(array, i)), set->paths[i]) != 0) goto mismatch;
+    for (size_t i = 0; set && i < set->count; ++i) {
+        const json_t *value = json_array_get(array, i);
+        const char *path = json_is_string(value) ? json_string_value(value)
+                                                  : snag_json_string(value, "path");
+        const char *label = json_is_object(value) ? snag_json_string(value, "label") : NULL;
+        if (strcmp(path, set->paths[i]) != 0 ||
+            ((label != NULL) != (set->labels[i] != NULL)) ||
+            (label && strcmp(label, set->labels[i]) != 0))
+            goto mismatch;
+    }
     return 0;
 mismatch:
     return snag_fail(error, error_size, EINVAL,

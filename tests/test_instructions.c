@@ -77,10 +77,15 @@ main(void)
     assert(strcmp(set.paths[3], path) == 0);
     assert(snag_instructions_add_directory(&set, leaf, error, sizeof(error)) == 0);
     assert(set.count == 4u); /* repeated roots do not duplicate pointers */
+    assert(snag_instructions_label_last(&set, "Project guidance", error, sizeof(error)) == 0);
     metadata = snag_instructions_metadata_json(&set);
     assert(metadata);
     assert(snag_instructions_metadata_valid(metadata, error, sizeof(error)) == 0);
     assert(snag_instructions_match_metadata(&set, metadata, error, sizeof(error)) == 0);
+    assert(json_is_object(json_array_get(metadata, 3u)));
+    assert(!strcmp(json_string_value(json_object_get(json_array_get(metadata, 3u), "label")),
+        "Project guidance"));
+    assert(snag_instructions_label_last(&set, "Duplicate", error, sizeof(error)) < 0);
     write_file(path, "Changed after discovery; only pointers are frozen.\n");
     assert(snag_instructions_match_metadata(&set, metadata, error, sizeof(error)) == 0);
     assert(json_array_append_new(metadata, json_string(path)) == 0);

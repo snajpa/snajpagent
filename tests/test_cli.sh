@@ -1314,9 +1314,38 @@ resumed = subprocess.run([command[0], "-e", *command[1:], "--", "ping"], cwd=lau
                          text=True, capture_output=True, timeout=15)
 assert resumed.returncode == 0, resumed.stderr
 assert turns()[-1]["instructions"][-3:] == expected
+label_dir = root / "docs-labeled"
+label_dir.mkdir()
+(label_dir / "AGENTS.md").write_text("Labeled working notes.\n")
+result = subprocess.run(
+    [*common, "-d", str(label_dir), "-dl", "Operator working memory", "-e", "--", "ping"],
+    cwd=launch, env={**os.environ, "HOME": str(home)},
+    text=True, capture_output=True, timeout=15)
+assert result.returncode == 0, result.stderr
+labeled_session = max((state / "sessions").iterdir(), key=lambda p: p.stat().st_mtime)
+labeled_turns = [e["data"] for e in read_events(labeled_session / "journal.bin")
+                 if e["type"] == "turn_started"]
+labeled_path = str(label_dir / "AGENTS.md")
+assert labeled_turns[-1]["instructions"][-1] == {
+    "label": "Operator working memory", "path": labeled_path}
+options_events = [e for e in read_events(labeled_session / "journal.bin")
+                  if e["type"] == "session_options"]
+saved_args = options_events[-1]["data"]["args"] if options_events else []
+assert any(saved_args[i:i + 2] == ["-dl", "Operator working memory"]
+           for i in range(len(saved_args) - 1))
+command = shlex.split(result.stderr.splitlines()[-1])
+resumed = subprocess.run([command[0], "-e", *command[1:], "--", "ping"], cwd=launch,
+                         env={**os.environ, "HOME": str(home)},
+                         text=True, capture_output=True, timeout=15)
+assert resumed.returncode == 0, resumed.stderr
+labeled_turns = [e["data"] for e in read_events(labeled_session / "journal.bin")
+                 if e["type"] == "turn_started"]
+assert labeled_turns[-1]["instructions"][-1] == {
+    "label": "Operator working memory", "path": labeled_path}
 for args in (["-d"], ["-d", ""], ["-d", str(agents)],
              ["-d", str(root / "missing")], ["-d", str(launch)],
-             ["-d", str(dirs[0]), "-l"], ["-d", str(dirs[0]), "login", "status"]):
+             ["-d", str(dirs[0]), "-l"], ["-d", str(dirs[0]), "login", "status"],
+             ["-dl", "orphan label"], ["-d", str(dirs[0]), "-dl"]):
     result = subprocess.run([*common, *args], cwd=launch,
                             text=True, capture_output=True, timeout=15)
     assert result.returncode == 2, (args, result.stderr)

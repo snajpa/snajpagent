@@ -17,6 +17,8 @@ struct fields {
     bool references;
 };
 
+#define SNAG_BINARY_INSTRUCTIONS_LABELS (1u << 31)
+
 static int
 invalid(void)
 {
@@ -104,18 +106,24 @@ read_text(struct fields *fields, struct snag_binary_text *text, size_t minimum, 
 }
 
 static bool
-read_terminated_text(struct fields *fields, struct snag_binary_text *out)
+read_terminated_text_limit(struct fields *fields, struct snag_binary_text *out, size_t maximum)
 {
     size_t remaining = fields->size - fields->offset;
-    size_t limit = remaining < SNAG_PATH_MAX_BYTES + 1u ? remaining : SNAG_PATH_MAX_BYTES + 1u;
+    size_t limit = remaining < maximum + 1u ? remaining : maximum + 1u;
     const unsigned char *start = fields->data + fields->offset;
     const unsigned char *end = memchr(start, 0, limit);
     if (!end) return false;
     struct snag_binary_text text = {start, (size_t)(end - start)};
-    if (!text_valid(text, 1u, SNAG_PATH_MAX_BYTES)) return false;
+    if (!text_valid(text, 1u, maximum)) return false;
     fields->offset += text.size + 1u;
     *out = text;
     return true;
+}
+
+static bool
+read_terminated_text(struct fields *fields, struct snag_binary_text *out)
+{
+    return read_terminated_text_limit(fields, out, SNAG_PATH_MAX_BYTES);
 }
 
 static bool
@@ -307,7 +315,8 @@ snag_binary_content_next(const struct snag_binary_content *content, size_t *offs
 }
 
 static int
-write_instruction(struct snag_buf *out, const struct snag_binary_instruction *instruction)
+write_instruction(struct snag_buf *out, const struct snag_binary_instruction *instruction,
+    bool labels)
 {
     if (!text_valid(instruction->path, 1u, SNAG_PATH_MAX_BYTES)) return invalid();
     if (write_uint(out, instruction->has_snapshot, 1u) < 0 ||
@@ -315,18 +324,30 @@ write_instruction(struct snag_buf *out, const struct snag_binary_instruction *in
         snag_buf_putc(out, 0) < 0) {
         return -1;
     }
+    if (labels && (write_uint(out, instruction->has_label, 1u) < 0 ||
+        (instruction->has_label && (!text_valid(instruction->label, 1u, SNAG_TERM_LABEL_BYTES) ||
+            snag_buf_append(out, instruction->label.data, instruction->label.size) < 0 ||
+            snag_buf_putc(out, 0) < 0)))) return -1;
     if (instruction->has_snapshot && (write_uint(out, instruction->bytes, 8u) < 0 ||
         snag_buf_append(out, instruction->sha256, 32u) < 0)) return -1;
     return 0;
 }
 
 static bool
-read_instruction(struct fields *fields, struct snag_binary_instruction *instruction)
+read_instruction(struct fields *fields, struct snag_binary_instruction *instruction, bool labels)
 {
     uint64_t value;
     if (!read_uint(fields, 1u, &value) || value > 1u) return false;
+    bool snapshot = value != 0u;
     if (!read_terminated_text(fields, &instruction->path)) return false;
-    instruction->has_snapshot = value != 0;
+    if (labels) {
+        if (!read_uint(fields, 1u, &value) || value > 1u) return false;
+        instruction->has_label = value != 0u;
+        if (instruction->has_label &&
+            !read_terminated_text_limit(fields, &instruction->label, SNAG_TERM_LABEL_BYTES))
+            return false;
+    }
+    instruction->has_snapshot = snapshot;
     return !instruction->has_snapshot || (read_uint(fields, 8u, &instruction->bytes) &&
         read_bytes(fields, instruction->sha256, 32u));
 }
@@ -336,12 +357,13 @@ read_instructions(struct fields *fields, struct snag_binary_instructions *out, b
 {
     size_t start = fields->offset;
     uint64_t count;
-    if (!read_uint(fields, 4u, &count) || count > (fields->size - fields->offset) / 3u) {
-        return false;
-    }
+    if (!read_uint(fields, 4u, &count) || count > UINT32_MAX) return false;
+    bool labels = ((unsigned int)count & SNAG_BINARY_INSTRUCTIONS_LABELS) != 0u;
+    count &= ~((uint64_t)SNAG_BINARY_INSTRUCTIONS_LABELS);
+    if (count > (fields->size - fields->offset) / 3u) return false;
     for (uint64_t i = 0; i < count; ++i) {
         struct snag_binary_instruction instruction = {0};
-        if (!read_instruction(fields, &instruction) ||
+        if (!read_instruction(fields, &instruction, labels) ||
             (!snapshots && instruction.has_snapshot)) return false;
     }
     *out = (struct snag_binary_instructions){fields->data + start, fields->offset - start};
@@ -354,12 +376,15 @@ snag_binary_instructions_encode(struct snag_buf *out,
 {
     struct snag_buf encoded = {.max = SNAG_MAX_EVENT_LINE};
     int rc = -1;
+    bool labels = false;
     if (!out || (!instructions && count) || count > (SNAG_MAX_EVENT_LINE - 4u) / 3u) {
         return invalid();
     }
-    if (write_uint(&encoded, count, 4u) < 0) goto done;
+    for (size_t i = 0u; i < count; ++i) labels = labels || instructions[i].has_label;
+    if (write_uint(&encoded, count | (labels ? SNAG_BINARY_INSTRUCTIONS_LABELS : 0u), 4u) < 0)
+        goto done;
     for (size_t i = 0; i < count; ++i)
-        if (write_instruction(&encoded, &instructions[i]) < 0) goto done;
+        if (write_instruction(&encoded, &instructions[i], labels) < 0) goto done;
     rc = snag_buf_append(out, encoded.data, encoded.len);
  done:
     snag_buf_free(&encoded);
@@ -387,9 +412,13 @@ snag_binary_instructions_next(const struct snag_binary_instructions *instruction
     struct fields fields = {
         .data = instructions->data, .size = instructions->size, .offset = *offset ? *offset : 4u
     };
+    struct fields header = {.data = instructions->data, .size = instructions->size};
+    uint64_t count;
+    if (!read_uint(&header, 4u, &count) || count > UINT32_MAX) return invalid();
+    bool labels = ((unsigned int)count & SNAG_BINARY_INSTRUCTIONS_LABELS) != 0u;
     struct snag_binary_instruction decoded = {0};
     if (fields.offset == fields.size) return 1;
-    if (!read_instruction(&fields, &decoded)) return invalid();
+    if (!read_instruction(&fields, &decoded, labels)) return invalid();
     *out = decoded;
     *offset = fields.offset;
     return 0;
