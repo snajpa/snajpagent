@@ -415,6 +415,7 @@ check: $(BIN) $(TEST_BIN)
 	python3 tests/test_irc_channels.py ./$(BIN)
 	python3 tests/test_irc_connections.py ./$(BIN)
 	./tests/test_instructions
+	python3 tests/test_cwd_recovery.py ./$(BIN)
 	./tests/test_credential
 	./tests/test_sse
 	./tests/test_json

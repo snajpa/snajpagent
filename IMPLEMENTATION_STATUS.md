@@ -2,6 +2,10 @@
 
 # Implementation status
 
+Saved working directories that disappear remain recorded while new turns load
+global and explicit instruction roots. Context reports the unavailable path so
+the model can recover with an absolute `cd`; successful recovery is durable.
+
 Native session detach prints a copyable resume command. Saved workspaces print
 their return command after terminal restoration, using the current full ID and
 nondefault dotdir. Workspace agent detach shows :attach SESSION_ID after release.

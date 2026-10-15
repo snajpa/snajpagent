@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep new turns usable when the saved working directory disappears or becomes
+  a file. Retain global and explicit guidance, report the unavailable cwd to the
+  model, and allow an absolute `cd` to recover without silently changing paths.
+
 - Add repeatable `-dl LABEL` documentation-root labels after `-d DIR`. Preserve
   labels in active-turn metadata, model context and resume options while keeping
   unlabeled instruction metadata compatible with existing journals.

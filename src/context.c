@@ -4120,6 +4120,15 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             session->default_timeout_ms, session->max_timeout_ms, session->max_parallel_commands,
             session->tool_output_bytes, config->max_goal_prompt_bytes, SNAG_MAX_GOAL_BLOCKER) < 0)
         goto out;
+    snag_file_info cwd_info;
+    if ((snag_stat(session->cwd, &cwd_info) < 0 || !S_ISDIR(cwd_info.st_mode)) &&
+        append_messagef(&builder, "system", 8192u,
+            "Saved working directory is unavailable: %s. Project instruction discovery cannot "
+            "use that path. The saved cwd is unchanged; use cd with an existing "
+            "absolute directory before relative file or command tools. Read-only queries "
+            "can use existing absolute paths and ask the operator to recover cwd in a "
+            "writable turn.", session->cwd) < 0)
+        goto out;
     if (session->active_read_only &&
         append_message(&builder, "system",
             "This turn is a read-only query. Answer only this query using the "

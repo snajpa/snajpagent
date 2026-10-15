@@ -306,7 +306,9 @@ snag_instructions_discover(
     int rc = -1;
 
     snag_instructions_free(set);
-    if (!cwd) return snag_errno(EINVAL);
+    if (!snag_text_valid(cwd, 1u, SNAG_PATH_MAX_BYTES))
+        return snag_fail(error, error_size, EINVAL,
+            "cwd must be a nonempty UTF-8 path for instruction discovery");
     global = config_instruction_root(error, error_size);
     if (!global) goto out;
     if (snag_lstat(global, &st) == 0) {
@@ -322,10 +324,19 @@ snag_instructions_discover(
         goto out;
     }
     canonical_cwd = snag_realpath(cwd);
+    /* Keep global guidance when the saved cwd vanished; cd can recover it. */
+    if (!canonical_cwd && (errno == ENOENT || errno == ENOTDIR)) {
+        rc = 0;
+        goto out;
+    }
     if (!snag_text_valid(canonical_cwd, 0u, SNAG_PATH_MAX_BYTES) ||
-        snag_stat(canonical_cwd, &st) < 0 || !S_ISDIR(st.st_mode)) {
+        snag_stat(canonical_cwd, &st) < 0) {
         (void)snag_fail(error, error_size, EINVAL,
             "cwd must be an existing UTF-8 directory for instruction discovery");
+        goto out;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        rc = 0;
         goto out;
     }
     if (find_project_root(canonical_cwd, &project_root, error, error_size) < 0 ||

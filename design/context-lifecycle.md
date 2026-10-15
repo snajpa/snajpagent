@@ -161,6 +161,9 @@ model-switched paths share this order:
 2. Build one canonical item sequence: fixed instructions, compatible retained
    summary, uncovered complete transcript groups, then current host facts.
    Create/count/accounting envelopes refer to those same items and tool shapes.
+   A missing or non-directory saved cwd skips project discovery while retaining
+   global and explicit instruction pointers. Current host facts report the
+   unavailable cwd; only a successful explicit `cd` changes the durable path.
 3. Measure or classify the outgoing request under that exact binding. Freeze its
    hashes, capacity provenance and current host snapshot for the response attempt.
 4. If reduction is required, compact a bounded complete prefix and rebuild and

@@ -316,6 +316,13 @@ with the home directory as their working directory. The model can call
 to inspect it and
 .B cd
 to change it; absolute paths work anywhere the process can access.
+If a saved working directory has been moved, removed or replaced by a file,
+new turns retain global and explicit documentation roots and skip project
+instruction discovery for that path. The model receives a recovery notice and
+can call
+.B cd
+with an existing absolute directory. The saved cwd changes only after that
+call succeeds; relative tools continue to use the saved path until then.
 File and command tools run with your OS permissions, without per-call approval.
 Tool calls are hidden at the default verbosity.
 .PP

@@ -134,6 +134,26 @@ main(void)
     (void)unlink(path);
     snag_instructions_free(&set);
 
+    /* A vanished cwd retains global guidance so a turn can recover with cd. */
+    assert(snprintf(path, sizeof(path), "%s/missing/work", canonical) > 0);
+    assert(snag_instructions_discover(&set, path, error, sizeof(error)) == 0);
+    assert(set.count == 1u);
+    assert(strstr(set.paths[0], "/snajpagent/AGENTS.override.md"));
+    assert(snprintf(path, sizeof(path), "%s/not-a-directory", canonical) > 0);
+    write_file(path, "file\n");
+    assert(snag_instructions_discover(&set, path, error, sizeof(error)) == 0);
+    assert(set.count == 1u);
+    assert(snprintf(path, sizeof(path), "%s/not-a-directory/child", canonical) > 0);
+    assert(snag_instructions_discover(&set, path, error, sizeof(error)) == 0);
+    assert(set.count == 1u);
+    snag_instructions_free(&set);
+    assert(snag_instructions_discover(&set, "", error, sizeof(error)) < 0);
+    assert(snag_instructions_discover(&set, "/missing-\xff", error, sizeof(error)) < 0);
+    assert(snprintf(path, sizeof(path), "%s/cwd-loop", canonical) > 0);
+    assert(symlink("cwd-loop", path) == 0);
+    assert(snag_instructions_discover(&set, path, error, sizeof(error)) < 0);
+    assert(unlink(path) == 0);
+
     /* The work note: workspace first, then the global root; one note; fail-soft; no cap slot. */
     char *note = NULL;
     assert(snag_instructions_worknote(leaf, &note, error, sizeof(error)) == 0);
