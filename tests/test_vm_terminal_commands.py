@@ -92,7 +92,11 @@ input()
         write_config = control.owners.harness.write_irc_config
 
         def configuration(*args, **kwargs):
-            return write_config(*args, **dict(kwargs, pager=str(editor)))
+            result = write_config(*args, **dict(kwargs, pager=str(editor)))
+            if self._testMethodName == 'test_yielded_receive_keeps_terminal_report_pending':
+                with args[0].open('a') as config:
+                    config.write('\n[tool]\ndefault_yield_ms=50\nmax_wait_ms=100\n')
+            return result
 
         with mock.patch.dict(os.environ, EDITOR=str(editor), VISUAL=str(editor)):
             with mock.patch.object(control.owners.harness, 'write_irc_config', configuration):
@@ -410,6 +414,27 @@ input()
 
     def test_drop_upload_keeps_unsent_pane_draft(self):
         self.pane_upload(b'unsent draft\x1b[9002~', 'unsent draft', 'drop-receive')
+
+    def test_yielded_receive_keeps_terminal_report_pending(self):
+        path = self.root / 'yielded.txt'
+        path.write_text('yielded workspace upload\n')
+        child = self.transfer_terminal('yielded-receive')
+        child.command('attach ' + self.owner.sid)
+        child.attached()
+        child.write(b'i/receive\r')
+        child.until(b'Select local file', 10)
+        time.sleep(.2)
+        rows = self.snapshots()
+        pending = rollout(next(iter(rows.values()))['state']['buffers'][0])['pending']
+        self.assertIsNotNone(pending)
+        child.write((str(path) + '\r').encode())
+        child.until(b'1 unsent attachment(s)', 15)
+        self.return_to_workspace(child)
+        self.show_report(child, '/receive')
+        child.repaint_until(b'1 unsent attachment(s)')
+        self.assertEqual(self.inputs(), [])
+        child.finish('close')
+        self.owner.status('detached')
 
     def test_stock_upload_launch_alias_uses_terminal_transfer(self):
         self.pane_upload(b'trz\r', '', 'upload-alias')

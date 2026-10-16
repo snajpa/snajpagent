@@ -292,6 +292,29 @@ app_reportf(struct app_state *app, const char *format, ...)
 static int
 service_attachment(struct app_state *app, bool external)
 {
+#if SNAJPAGENT_VM
+    struct app_view_terminal *terminal = app->transfer && !app->transfer_waiting
+        ? app->view_terminal : NULL;
+    struct snag_buf *report = app->ui.command_report;
+    bool passthrough = app->ui.command_report_passthrough;
+    bool failed = app->ui.command_error;
+    if (terminal) {
+        app->ui.command_report = &terminal->report;
+        app->ui.command_report_passthrough = true;
+        app->ui.command_error = false;
+    }
+#endif
+    int transfer_rc = snag_app_transfer_service(app);
+#if SNAJPAGENT_VM
+    if (terminal) {
+        terminal->failed |= app->ui.command_error;
+        app->ui.command_report = report;
+        app->ui.command_report_passthrough = passthrough;
+        app->ui.command_error = failed;
+        if (!transfer_rc) transfer_rc = view_terminal_finish(app);
+    }
+#endif
+    if (transfer_rc < 0) return -1;
     snag_mcp_poll(app->mcp);
     if (snag_ui_view_state(&app->ui, &app->session) < 0) return -1;
     if (snag_app_voice_attachment_service(app) < 0) return -1;
@@ -1944,7 +1967,7 @@ start_pager(
     struct app_state *app, const char *command, const char *path, const char *text, size_t length)
 {
     char error[256] = {0};
-    if (app->pager) return snag_errno(EBUSY);
+    if (app->pager || app->transfer) return snag_errno(EBUSY);
     char *report = text ? snag_strdup_checked(text, length) : NULL;
     if (text && !report) return -1;
     if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) {
@@ -3031,6 +3054,10 @@ run_config_editor(struct app_state *app, bool *success, char *error, size_t erro
 {
     const char *editor = getenv("EDITOR");
 
+    if (app->transfer) {
+        (void)snag_errorf(error, error_size, "Wait for the active terminal transfer to finish.");
+        return 1;
+    }
     if (!editor || !*editor) {
         (void)snag_fail(error, error_size, ENOENT, "$EDITOR is not set");
         return 1;
@@ -3916,16 +3943,19 @@ handle_common_command(
         return 0;
     }
     if (strcmp(line, "/yield") == 0) {
-        if (!app->tool_waiting)
+        if (!app->tool_waiting && !app->transfer_waiting)
             return app_textf(app, SNAG_UI_HOST, "No active tool wait to yield.");
         char error[256] = {0};
-        if (commit_event(app, "turn_yield_requested",
+        if ((app->session.pending_call_count || app->session.process_count) &&
+            commit_event(app, "turn_yield_requested",
                 json_pack("{s:s}", "turn_id", app->session.active_turn_id), error,
                 sizeof(error)) < 0)
             return -1;
         app->yield_requested = true;
         return app_textf(
-            app, SNAG_UI_HOST, "Operator requested tool yield; returning control to the model.");
+            app, SNAG_UI_HOST, app->transfer_waiting ?
+                "Operator requested transfer yield; transfer continues in the background." :
+                "Operator requested tool yield; returning control to the model.");
     }
     if (strcmp(line, "/status") == 0) return render_status(app);
     if ((!strncmp(line, "/session", 8u) && (!line[8] || isspace((unsigned char)line[8]))) ||
@@ -4173,7 +4203,6 @@ flush_download_queue(struct app_state *app)
     int rc = 0;
     for (size_t i = 0; rc == 0 && i < json_array_size(snapshot); ++i) {
         json_t *item = json_array_get(snapshot, i);
-        const char *id = snag_json_string(item, "id");
         char error[256] = {0};
         json_t *result = NULL;
         rc = snag_app_download_pending(app, item, NULL, &result, error, sizeof(error));
@@ -4184,15 +4213,8 @@ flush_download_queue(struct app_state *app)
                                                                          : SNAG_UI_ERROR,
                 message ? message : "Send finished.");
         }
-        if (rc == 0 && result && !strcmp(snag_json_string(result, "status"), "succeeded")) {
-            if (snag_app_commit_event(app, "download_removed",
-                    json_pack("{s:s,s:s}", "id", id, "reason", "delivered to wrapped client"),
-                    error, sizeof(error)) < 0) {
-                rc = snag_ui_text(&app->ui, SNAG_UI_ERROR,
-                    error[0] ? error : "delivered download could not be removed from queue");
-            }
-        }
         json_decref(result);
+        if (app->transfer) break;
     }
     json_decref(snapshot);
     return rc;
@@ -4422,7 +4444,8 @@ static int
 view_terminal_finish(struct app_state *app)
 {
     struct app_view_terminal *command = app->view_terminal;
-    if (!command || command->dispatching || command->controls || command->pager) return 0;
+    if (!command || command->dispatching || command->controls || command->pager || app->transfer)
+        return 0;
     int rc = view_command_complete(app, command->id, command->command, &command->report,
         command->failed, true, NULL, NULL, -1);
     view_terminal_free(app);
@@ -7159,6 +7182,7 @@ idle_poll_timeout(const struct app_state *app)
     int timeout =
         app->pager || app->audio || app->voice || app->networked || app->irc_background.len ? 25
                                                                                             : -1;
+    if (app->transfer && (timeout < 0 || timeout > 50)) timeout = 50;
     if (snag_mcp_watching(app->mcp) && (timeout < 0 || timeout > 100)) timeout = 100;
     if (json_array_size(app->session.download_queue) && (timeout < 0 || timeout > 250))
         timeout = 250;
@@ -7899,6 +7923,7 @@ out:
         (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         if (!rc) rc = 3;
     }
+    snag_app_transfer_close(&app);
     snag_app_voice_attachment_close(&app);
     if (app.pager) {
         snag_pager_close(app.pager);

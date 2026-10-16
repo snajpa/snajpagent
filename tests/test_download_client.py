@@ -18,7 +18,7 @@ from test_upload_client import CLIENT, PRODUCT, Session, frame
 
 
 class DownloadSession(Session):
-    def __init__(self, root, wrapper=None, command=None, screen=False):
+    def __init__(self, root, wrapper=None, command=None, screen=False, settings=None):
         # Native bootstrap requires canonical paths, including custom commands.
         root = root.resolve()
         self.home = root / "home"
@@ -31,6 +31,10 @@ class DownloadSession(Session):
         env = dict(os.environ, HOME=str(self.home), TERM="xterm-256color", PAGER="",
                    SNAJPAGENT_DOTDIR=str(self.dotdir))
         command = command or [str(PRODUCT), "--dotdir", str(self.dotdir)]
+        if settings is not None:
+            config = root / "config"
+            config.write_text("[provider openai]\napi_key=fixture\n" + settings)
+            command += ["--config", str(config)]
         self.screen_name = None
         self.screen_env = None
         if screen:
@@ -199,6 +203,100 @@ class DownloadTests(unittest.TestCase):
                 session.read_until(b" complete")
                 self.assertEqual([e["data"]["result"]["status"] for e in session.events()
                                   if e["type"] == "tool_finished"], ["succeeded", "succeeded"])
+                session.exit()
+            finally:
+                session.close()
+
+    def wait_event(self, session, kind, seconds=4):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            events = [event for event in session.events() if event["type"] == kind]
+            if events:
+                return events[-1]
+            time.sleep(.02)
+        self.fail(f"agent blocked waiting for transfer before {kind}")
+
+    def test_model_send_yields_before_final_receipt_and_finishes_once(self):
+        with tempfile.TemporaryDirectory(prefix="snag-download-yield-") as path:
+            session = DownloadSession(Path(path), settings=
+                "[tool]\ndefault_yield_ms=50\nmax_wait_ms=100\n")
+            try:
+                digest = session.download("yield.bin", b"abc", b"download_tool ./yield.bin\r")
+                self.wait_event(session, "turn_completed")
+                events = session.events()
+                result = next(e["data"]["result"] for e in events if e["type"] == "tool_finished")
+                self.assertIn("pending", result["model_text"].lower())
+                self.assertFalse(any(e["type"] == "download_removed" for e in events))
+                session.finish(digest)
+                self.wait_event(session, "download_removed")
+                session.write(b"ping\r")
+                session.read_until(b"pong", 8)
+                events = session.events()
+                self.assertEqual(sum(e["type"] == "tool_finished" for e in events), 1)
+                self.assertEqual(sum(e["type"] == "download_removed" for e in events), 1)
+                self.assertEqual((session.home / "yield.bin").read_bytes(), b"abc")
+                session.exit()
+            finally:
+                session.close()
+
+    def test_yielded_send_failure_and_cancel_preserve_pending_intent(self):
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel), tempfile.TemporaryDirectory(
+                    prefix="snag-download-yield-fail-") as path:
+                session = DownloadSession(Path(path), settings=
+                    "[tool]\ndefault_yield_ms=50\nmax_wait_ms=100\n")
+                try:
+                    session.download("yield.bin", b"abc", b"download_tool ./yield.bin\r")
+                    self.wait_event(session, "turn_completed")
+                    if cancel:
+                        session.write(b"\x03")
+                        session.read_until(b"Download cancelled;")
+                    else:
+                        session.write(frame("SUCC", b"x" * 16))
+                        session.read_frame("FAIL")
+                        session.read_until(b"download digest:")
+                    events = session.events()
+                    self.assertFalse(any(e["type"] == "download_removed" for e in events))
+                    self.assertEqual(sum(e["type"] == "tool_finished" for e in events), 1)
+                    self.assertEqual((session.home / "yield.bin").read_bytes(), b"abc")
+                    session.write(b"ping\r")
+                    session.read_until(b"pong", 8)
+                    session.exit()
+                finally:
+                    session.close()
+
+    def test_receive_yields_active_run_and_retains_completed_upload(self):
+        with tempfile.TemporaryDirectory(prefix="snag-receive-yield-") as path:
+            session = DownloadSession(Path(path), settings=
+                "[tool]\ndefault_yield_ms=50\nmax_wait_ms=100\n")
+            try:
+                session.write(b"slow\r")
+                session.read_until(b"working slowly")
+                session.write(b"/receive\r")
+                session.read_until(b"::TRZSZ:TRANSFER:R:1.0.0:")
+                session.read_until(b"\r\n")
+                session.write(frame("ACT", b'{"confirm":true,"protocol":4,"newline":"\\n"}'))
+                session.decoded("CFG")
+                self.wait_event(session, "turn_completed", 6)
+                session.write(frame("NUM", 1, numeric=True))
+                self.assertEqual(session.read_frame("SUCC"), b"1")
+                session.write(frame("NAME", b"yield.bin"))
+                self.assertTrue(session.decoded("SUCC"))
+                session.write(frame("SIZE", 3, numeric=True))
+                self.assertEqual(session.read_frame("SUCC"), b"3")
+                session.write(frame("DATA", b"abc"))
+                self.assertEqual(session.read_frame("SUCC"), b"3")
+                session.write(frame("MD5", hashlib.md5(b"abc").digest()))
+                self.assertEqual(session.decoded("SUCC"), hashlib.md5(b"abc").digest())
+                session.write(frame("EXIT", b"done"))
+                session.read_until(b"1 unsent attachment(s)")
+                session.read_until(b"[1 attached]")
+                journal, = journal_paths(session.dotdir)
+                self.assertEqual([p.read_bytes() for p in (journal.parent / "media").iterdir()],
+                                 [b"abc"])
+                self.assertFalse(list(journal.parent.glob("upload-*")))
+                session.write(b"ping\r")
+                session.read_until(b"pong", 8)
                 session.exit()
             finally:
                 session.close()

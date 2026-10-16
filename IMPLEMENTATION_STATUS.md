@@ -86,6 +86,10 @@ uploads become private unsent attachments; acknowledged downloads display actual
 local-path receipts. The trzsz-go client remains usable with explicit transfer
 commands. Model `send_file` journals export intent before delivery and tries
 screen-state mode when an attached interactive client lacks the fast reply.
+Current source runs send/receive wire I/O in one owned worker and yields the
+foreground after the configured tool wait. The model receives pending intent
+while delivery continues. Completion retains uploaded files or removes the
+acknowledged export on the engine thread before terminal input resumes.
 The saved remote-session queue supports stable-ID listing, removal and clearing,
 including stale sources; read-only permits listing only. Detached GNU screen
 exports remain pending without protocol frames. Fast-client reattachment

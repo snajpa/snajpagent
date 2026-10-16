@@ -58,13 +58,17 @@ other execution constraints.
 `send_file` is always advertised and requires `path`. Dispatch first commits a
 pending export in the existing remote session, then probes for a live native
 workstation client. A queued result reports intent, not delivery; acknowledged
-completion requires digest confirmation and EXIT. Actual native receipt paths
-enter the model result and ordinary UI after terminal restoration. Source bytes
+completion requires digest confirmation and EXIT. The configured tool wait
+bounds foreground admission; expiry or an admitted `/yield` returns pending
+intent while one transfer worker retains the wire. `download_queue list` exposes
+the stable pending ID until acknowledgement. Synchronous native receipts enter
+the model result; background receipts appear in ordinary UI after restoration. Source bytes
 stay outside tool output. Read-only rejects export creation.
 
 `download_queue` is always advertised with list/remove/clear actions and stable
 item IDs. Listing is allowed in read-only mode; mutations follow its ordinary
-refusal. Removal cancels intent without deleting source or completed local files.
+refusal. Removal cancels matching active transfer work and intent while preserving
+source and completed local files.
 Detached, unwrapped, interrupted and changed-source exports remain pending.
 Explicit `/receive` and `/send` retain trzsz-go interoperability.
 See [remote-terminal.md](remote-terminal.md) and the manual's Model tools and

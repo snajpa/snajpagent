@@ -36,34 +36,38 @@ prepare_checkpoint(void *opaque, unsigned int timeout_ms)
 
 #ifndef _WIN32
 #include <fcntl.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <termios.h>
 
-struct terminal_transfer {
-    struct app_state *app;
+struct app_transfer {
+    pthread_t thread;
+    atomic_bool done, cancel;
     uint64_t attachment;
+    struct snag_terminal_profile profile;
+    struct snag_upload_result result;
+    struct termios saved;
+    int tty, input, stage_fd, rc, cause;
+    size_t slots;
+    bool started, leased, raw, native, upload, fast, allow_legacy;
+    char stage[SNAG_ID_HEX_LEN + 8u];
+    char *source, *name;
+    json_t *pending;
+    char error[256];
 };
 
 static bool
-transfer_replaced(const struct terminal_transfer *lease)
+transfer_replaced(const struct app_state *app, const struct app_transfer *transfer)
 {
-    return lease->app->ui.native && (!lease->attachment ||
-        lease->attachment != snag_ui_session_attachment(&lease->app->ui));
+    return app->ui.native && (!transfer->attachment ||
+        transfer->attachment != snag_ui_session_attachment(&app->ui));
 }
 
 static int
 transfer_checkpoint(void *opaque)
 {
-    const struct terminal_transfer *lease = opaque;
-    return lease->app->input_closed || lease->app->shutdown_signal || transfer_replaced(lease);
-}
-
-static int
-transfer_discard_stale_input(const struct terminal_transfer *lease, int tty,
-                              struct snag_upload_result *result)
-{
-    if (!transfer_replaced(lease)) return 0;
-    result->tail_len = 0u;
-    return tty < 0 ? 0 : tcflush(tty, TCIFLUSH);
+    const struct app_transfer *transfer = opaque;
+    return atomic_load(&transfer->cancel);
 }
 
 static void
@@ -168,6 +172,228 @@ out:
 }
 #endif
 
+#ifndef _WIN32
+static struct app_transfer *
+transfer_new(struct app_state *app, bool upload)
+{
+    struct app_transfer *transfer = calloc(1u, sizeof(*transfer));
+    if (!transfer) return NULL;
+    atomic_init(&transfer->done, false);
+    atomic_init(&transfer->cancel, false);
+    transfer->tty = transfer->input = transfer->stage_fd = -1;
+    transfer->attachment = snag_ui_session_attachment(&app->ui);
+    transfer->native = app->ui.native;
+    transfer->profile = app->ui.profile;
+    transfer->upload = upload;
+    transfer->fast = transfer_fast_client(app);
+    transfer->rc = -1;
+    return transfer;
+}
+
+static void *
+transfer_owner(void *opaque)
+{
+    struct app_transfer *transfer = opaque;
+    const struct snag_terminal_profile *profile = transfer->native ? &transfer->profile : NULL;
+    if (transfer->upload)
+        transfer->rc = snag_upload_receive(transfer->tty, transfer->stage_fd, transfer->slots,
+            false, profile, !transfer->fast, true, transfer_checkpoint, transfer,
+            &transfer->result, transfer->error, sizeof(transfer->error));
+    else
+        transfer->rc = snag_download_send(transfer->tty, transfer->input, transfer->name,
+            transfer->pending ? snag_json_string(transfer->pending, "sha256") : NULL,
+            profile, !transfer->fast, transfer->allow_legacy, transfer_checkpoint, transfer,
+            &transfer->result, transfer->error, sizeof(transfer->error));
+    transfer->cause = errno;
+    atomic_store(&transfer->done, true);
+    return NULL;
+}
+
+static int
+transfer_start(struct app_state *app, struct app_transfer *transfer)
+{
+    app->attaching = true;
+    app->transfer = transfer;
+    if (snag_ui_external(&app->ui, true, transfer->error, sizeof(transfer->error)) < 0)
+        return -1;
+    transfer->leased = true;
+    transfer->tty = open("/dev/tty", O_RDWR | O_CLOEXEC | O_NOCTTY | O_NONBLOCK);
+    if (transfer->tty < 0 || tcgetattr(transfer->tty, &transfer->saved) < 0)
+        return snag_errorf(transfer->error, sizeof(transfer->error),
+            "Cannot open transfer terminal: %s", strerror(errno));
+    struct termios mode = transfer->saved;
+    raw_transfer_mode(&mode);
+    if (tcsetattr(transfer->tty, TCSANOW, &mode) < 0)
+        return snag_errorf(transfer->error, sizeof(transfer->error),
+            "Cannot enter transfer mode: %s", strerror(errno));
+    transfer->raw = true;
+    int rc = pthread_create(&transfer->thread, NULL, transfer_owner, transfer);
+    if (rc)
+        return snag_errorf(transfer->error, sizeof(transfer->error),
+            "Cannot start transfer: %s", strerror(rc));
+    transfer->started = true;
+    return 0;
+}
+
+static bool
+transfer_queued(const struct app_state *app, const struct app_transfer *transfer)
+{
+    const char *id = snag_json_string(transfer->pending, "id");
+    for (size_t i = 0u; id && i < json_array_size(app->session.download_queue); ++i)
+        if (!strcmp(id, snag_json_string(json_array_get(app->session.download_queue, i), "id")))
+            return true;
+    return false;
+}
+
+static int
+transfer_finish(struct app_state *app, struct app_transfer *transfer, json_t **result,
+    bool *unavailable)
+{
+    if (transfer->started) pthread_join(transfer->thread, NULL);
+    int rc = transfer->rc;
+    bool restored = true;
+    if (unavailable)
+        *unavailable = rc < 0 && !transfer->fast && transfer->cause == ENOTSUP;
+    if (transfer->leased && transfer_replaced(app, transfer)) {
+        transfer->result.tail_len = 0u;
+        if (transfer->tty >= 0 && tcflush(transfer->tty, TCIFLUSH) < 0) restored = false;
+    }
+    if (transfer->raw && tcsetattr(transfer->tty, TCSANOW, &transfer->saved) < 0)
+        restored = false;
+    if (transfer->tty >= 0) close(transfer->tty);
+    if (transfer->input >= 0) close(transfer->input);
+    if (!restored) {
+        rc = -1;
+        (void)snag_errorf(transfer->error, sizeof(transfer->error),
+            "Cannot restore transfer terminal: %s", strerror(errno));
+    }
+    if (transfer->upload) {
+        if (rc == 0 && !transfer->result.count) rc = 1;
+        if (rc == 0 && prepare_files(app, transfer->stage, &transfer->result,
+                transfer->error, sizeof(transfer->error)) < 0)
+            rc = -1;
+        if (transfer->stage_fd >= 0) {
+            snag_upload_cleanup(transfer->stage_fd, &transfer->result);
+            close(transfer->stage_fd);
+            (void)snag_unlink_at(app->session.dir_fd, transfer->stage, true);
+        }
+    }
+    char error[256] = "";
+    if (transfer->leased && snag_ui_external_replay(&app->ui, transfer->result.tail,
+            transfer->result.tail_len, error, sizeof(error)) < 0)
+        restored = false;
+    if (!restored) {
+        rc = -1;
+        (void)snag_errorf(transfer->error, sizeof(transfer->error),
+            "Cannot restore transfer display: %s", error[0] ? error : strerror(errno));
+    }
+    if (!transfer->upload && rc == 0 && transfer_queued(app, transfer)) {
+        if (snag_app_commit_event(app, "download_removed", json_pack("{s:s,s:s}", "id",
+                snag_json_string(transfer->pending, "id"), "reason", "delivered to wrapped client"),
+                transfer->error, sizeof(transfer->error)) < 0)
+            rc = -1;
+    }
+    app->transfer = NULL;
+    app->attaching = false;
+    int status = 0;
+    if (transfer->upload) {
+        if (rc == 0) {
+            bool handled;
+            status = snag_app_media_command(app, "/attachments", &handled);
+        } else
+            status = snag_ui_text(&app->ui, rc == 1 ? SNAG_UI_HOST : SNAG_UI_ERROR,
+                rc == 1 ? "Upload cancelled; no files attached." : transfer->error);
+    } else {
+        char receipt[SNAG_PATH_MAX_BYTES + 128u];
+        (void)snprintf(receipt, sizeof(receipt), "Download completed: %s%s"
+            "Client acknowledged the file digest and final EXIT.", transfer->result.receipt,
+            transfer->result.receipt[0] ? "\n" : "");
+        json_t *finished = snag_tool_result_terminal(rc == 0, rc == 0 ? receipt : rc == 1 ?
+            "Download cancelled; a partial file may remain on the workstation." :
+            transfer->error[0] ? transfer->error : "Download failed.");
+        if (result) *result = finished;
+        else {
+            status = finished ? snag_ui_text(&app->ui, rc == 0 ? SNAG_UI_HOST : SNAG_UI_ERROR,
+                snag_json_string(finished, "model_text")) : -1;
+            json_decref(finished);
+        }
+        if (result && !finished) status = -1;
+    }
+    free(transfer->source);
+    free(transfer->name);
+    json_decref(transfer->pending);
+    free(transfer);
+    return restored ? status : -1;
+}
+
+static int
+transfer_wait(struct app_state *app, struct app_transfer *transfer, json_t **result,
+    bool *unavailable)
+{
+    uint32_t wait = app->session.default_yield_ms ? app->session.default_yield_ms :
+        app->session.max_wait_ms;
+    if (wait > app->session.max_wait_ms) wait = app->session.max_wait_ms;
+    uint64_t deadline = snag_monotonic_ms() + wait;
+    bool retain_yield = app->tool_active || app->tool_waiting;
+    bool previous_yield = app->yield_requested;
+    app->transfer_waiting = true;
+    while (!atomic_load(&transfer->done)) {
+        int rc = snag_app_active_input_pump(app, 0u);
+        if (rc < 0 || rc == 2 || app->interrupt_requested) {
+            atomic_store(&transfer->cancel, true);
+            break;
+        }
+        if (rc == 1 || app->yield_requested || snag_monotonic_ms() >= deadline) break;
+        (void)snag_sleep_ms(10u);
+    }
+    app->transfer_waiting = false;
+    if (!retain_yield) app->yield_requested = previous_yield;
+    if (atomic_load(&transfer->done)) return transfer_finish(app, transfer, result, unavailable);
+    if (result) {
+        char text[256];
+        (void)snprintf(text, sizeof(text), "Download pending%s%s; transfer continues in the "
+            "background. Delivery requires client digest and final EXIT acknowledgement.%s",
+            transfer->pending ? " " : "",
+            transfer->pending ? snag_json_string(transfer->pending, "id") : "",
+            transfer->pending ? " Use download_queue list to inspect the pending intent." : "");
+        *result = snag_tool_result_terminal(true, text);
+        return *result ? 0 : -1;
+    }
+    return snag_ui_text(&app->ui, SNAG_UI_HOST,
+        "Upload pending; transfer continues in the background. Completed files join the draft.");
+}
+#endif
+
+int
+snag_app_transfer_service(struct app_state *app)
+{
+#ifdef _WIN32
+    (void)app;
+    return 0;
+#else
+    struct app_transfer *transfer = app->transfer;
+    if (!transfer) return 0;
+    if (app->input_closed || app->shutdown_signal || app->interrupt_requested ||
+        transfer_replaced(app, transfer) || (transfer->pending && !transfer_queued(app, transfer)))
+        atomic_store(&transfer->cancel, true);
+    if (app->transfer_waiting || !atomic_load(&transfer->done)) return 0;
+    if (transfer_finish(app, transfer, NULL, NULL) < 0) return -1;
+    return snag_app_context_refresh(app);
+#endif
+}
+
+void
+snag_app_transfer_close(struct app_state *app)
+{
+#ifndef _WIN32
+    if (!app->transfer) return;
+    atomic_store(&app->transfer->cancel, true);
+    (void)transfer_finish(app, app->transfer, NULL, NULL);
+#else
+    (void)app;
+#endif
+}
+
 int
 snag_app_upload_command(struct app_state *app, bool directory)
 {
@@ -177,95 +403,32 @@ snag_app_upload_command(struct app_state *app, bool directory)
 #else
     if (directory)
         return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Directory uploads are unsupported.");
-    struct snag_upload_result result = {0};
-    struct terminal_transfer lease = {.app = app,
-        .attachment = snag_ui_session_attachment(&app->ui)};
-    char error[256] = "upload could not start";
-    char stage[SNAG_ID_HEX_LEN + 8u] = {0};
-    int stage_fd = -1, tty = -1, rc = -1;
-    bool leased = false, raw = false, restored = true;
-    struct termios saved;
-    bool fast = false;
     if (app->attaching)
         return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Attachment preparation is already active.");
-    if (snag_session_persist(&app->store, &app->session, error, sizeof(error)) < 0) goto out;
-    if (json_array_size(app->draft_content) >= SNAG_UPLOAD_FILES_MAX) {
-        (void)snag_errorf(error, sizeof(error),
-                          "At most eight files may be attached to one input.");
-        goto out;
+    char error[256] = "";
+    if (snag_session_persist(&app->store, &app->session, error, sizeof(error)) < 0)
+        return snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
+    if (json_array_size(app->draft_content) >= SNAG_UPLOAD_FILES_MAX)
+        return snag_ui_text(&app->ui, SNAG_UI_ERROR,
+            "At most eight files may be attached to one input.");
+    struct app_transfer *transfer = transfer_new(app, true);
+    if (!transfer) return -1;
+    transfer->slots = SNAG_UPLOAD_FILES_MAX - json_array_size(app->draft_content);
+    transfer->stage_fd = stage_open(app, transfer->stage);
+    if (transfer->stage_fd < 0 || transfer_start(app, transfer) < 0) {
+        if (!transfer->error[0])
+            (void)snag_errorf(transfer->error, sizeof(transfer->error),
+                "Cannot stage upload: %s", strerror(errno));
+        return transfer_finish(app, transfer, NULL, NULL);
     }
-    stage_fd = stage_open(app, stage);
-    if (stage_fd < 0) {
-        (void)snag_errorf(error, sizeof(error), "Cannot stage upload: %s", strerror(errno));
-        goto out;
-    }
-    fast = transfer_fast_client(app);
-    app->attaching = true;
-    if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) goto out;
-    leased = true;
-    tty = open("/dev/tty", O_RDWR | O_CLOEXEC | O_NOCTTY | O_NONBLOCK);
-    if (tty < 0 || tcgetattr(tty, &saved) < 0) {
-        (void)snag_errorf(error, sizeof(error),
-                          "Cannot open transfer terminal: %s", strerror(errno));
-        goto out;
-    }
-    struct termios mode = saved;
-    raw_transfer_mode(&mode);
-    if (tcsetattr(tty, TCSANOW, &mode) < 0) {
-        (void)snag_errorf(error, sizeof(error), "Cannot enter transfer mode: %s", strerror(errno));
-        goto out;
-    }
-    raw = true;
-    rc = snag_upload_receive(tty, stage_fd,
-        SNAG_UPLOAD_FILES_MAX - json_array_size(app->draft_content), directory,
-        app->ui.native ? &app->ui.profile : NULL,
-        !fast, true,
-        transfer_checkpoint, &lease, &result, error, sizeof(error));
-    if (rc == 0 && result.count == 0u) rc = 1; /* No attachment to publish. */
-out:
-    if (leased && transfer_discard_stale_input(&lease, tty, &result) < 0) {
-        restored = false;
-        rc = -1;
-        (void)snag_errorf(error, sizeof(error), "Cannot discard disconnected transfer input: %s",
-                          strerror(errno));
-    }
-    if (raw && tcsetattr(tty, TCSANOW, &saved) < 0) {
-        restored = false;
-        rc = -1;
-        (void)snag_errorf(error, sizeof(error),
-                          "Cannot restore transfer terminal: %s", strerror(errno));
-    }
-    if (tty >= 0) close(tty);
-    char replay_error[256] = {0};
-    if (leased && restored && snag_ui_external_replay(&app->ui, result.tail, result.tail_len,
-                                          replay_error, sizeof(replay_error)) < 0) {
-        restored = false;
-        rc = -1;
-        (void)snag_errorf(error, sizeof(error), "Cannot restore transfer display: %s",
-                          replay_error[0] ? replay_error : strerror(errno));
-    }
-    if (rc == 0 && prepare_files(app, stage, &result, error, sizeof(error)) < 0) rc = -1;
-    if (stage_fd >= 0) {
-        snag_upload_cleanup(stage_fd, &result);
-        close(stage_fd);
-        (void)snag_unlink_at(app->session.dir_fd, stage, true);
-    }
-    app->attaching = false;
-    if (!restored) return -1; /* Uncertain terminal ownership is a runtime failure. */
-    if (rc == 0) {
-        bool handled;
-        return snag_app_media_command(app, "/attachments", &handled);
-    }
-    if (rc == 1)
-        return snag_ui_text(&app->ui, SNAG_UI_HOST, "Upload cancelled; no files attached.");
-    return snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
+    return transfer_wait(app, transfer, NULL, NULL);
 #endif
 }
 
 int
 snag_app_remote_probe(struct app_state *app)
 {
-    if (app->pager || app->execute || !app->ui.opened ||
+    if (app->attaching || app->pager || app->execute || !app->ui.opened ||
         snag_isatty(STDERR_FILENO) != 1) return 0;
     app->remote_attachment = snag_ui_session_attachment(&app->ui);
     if (app->ui.native && !app->remote_attachment) {
@@ -418,35 +581,28 @@ app_download(struct app_state *app, const char *path, const json_t *pending,
     *result = snag_tool_result_terminal(false, "Terminal download is not available on this host.");
     return *result ? 0 : -1;
 #else
-    struct snag_upload_result transfer = {0};
-    struct terminal_transfer lease = {.app = app,
-        .attachment = snag_ui_session_attachment(&app->ui)};
     json_t *asset = NULL;
     char *source = NULL;
     const char *name = NULL;
-    int input = -1, tty = -1, rc = -1;
-    bool leased = false, raw = false, restored = true, owning = false;
-    struct termios saved;
-    bool fast = false;
+    int input = -1;
     snag_file_info info;
-
     if (app->execute || !app->ui.opened || snag_isatty(STDERR_FILENO) != 1) {
         (void)snag_errorf(error, error_size, "Download needs an interactive POSIX terminal.");
-        goto out;
+        goto rejected;
     }
     if (app->attaching) {
         (void)snag_errorf(error, error_size,
                           "A terminal transfer or attachment is already active.");
-        goto out;
+        goto rejected;
     }
     if (!strncmp(path, "asset:", 6u)) {
         if (snag_session_media(&app->session, path, NULL, prepare_checkpoint, app,
-                               &asset, &source, error, error_size) < 0) goto out;
+                               &asset, &source, error, error_size) < 0) goto rejected;
         name = snag_json_string(asset, "name");
     } else {
         source = snag_path_root_len(path) ? strdup(path) : snag_path_join(app->session.cwd, path);
     }
-    if (!source) goto out;
+    if (!source) goto rejected;
     if (!name || !*name) {
         const char *slash = strrchr(source, '/');
         name = slash ? slash + 1u : source;
@@ -455,14 +611,14 @@ app_download(struct app_state *app, const char *path, const json_t *pending,
     if (input < 0 || snag_fstat(input, &info) < 0 || !S_ISREG(info.st_mode)) {
         (void)snag_errorf(error, error_size, "Download requires a readable regular file: %s",
                           input < 0 ? strerror(errno) : "directories are not supported");
-        goto out;
+        goto rejected;
     }
     const char *expected = pending ? snag_json_string(pending, "sha256") : NULL;
     if (pending) {
         if (info.st_size != json_integer_value(json_object_get(pending, "bytes")) ||
             info.st_mtime != json_integer_value(json_object_get(pending, "mtime"))) {
             (void)snag_errorf(error, error_size, "queued source changed; left pending: %s", source);
-            goto out;
+            goto rejected;
         }
         struct snag_sha256 hash;
         snag_sha256_init(&hash);
@@ -470,7 +626,7 @@ app_download(struct app_state *app, const char *path, const json_t *pending,
         for (;;) {
             ssize_t n = read(input, bytes, sizeof(bytes));
             if (n < 0 && errno == EINTR) continue;
-            if (n < 0) goto out;
+            if (n < 0) goto rejected;
             if (!n) break;
             snag_sha256_update(&hash, bytes, (size_t)n);
         }
@@ -479,69 +635,27 @@ app_download(struct app_state *app, const char *path, const json_t *pending,
         if (strcmp(actual, expected)) {
             (void)snag_errorf(error, error_size,
                 "queued source digest changed; left pending: %s", source);
-            goto out;
+            goto rejected;
         }
-        if (lseek(input, 0, SEEK_SET) < 0) goto out;
+        if (lseek(input, 0, SEEK_SET) < 0) goto rejected;
         name = snag_json_string(pending, "name");
     }
-    fast = transfer_fast_client(app);
-    app->attaching = true;
-    owning = true;
-    if (snag_ui_external(&app->ui, true, error, error_size) < 0) goto out;
-    leased = true;
-    tty = open("/dev/tty", O_RDWR | O_CLOEXEC | O_NOCTTY | O_NONBLOCK);
-    if (tty < 0 || tcgetattr(tty, &saved) < 0) {
-        (void)snag_errorf(error, error_size, "Cannot open transfer terminal: %s", strerror(errno));
-        goto out;
-    }
-    struct termios mode = saved;
-    raw_transfer_mode(&mode);
-    if (tcsetattr(tty, TCSANOW, &mode) < 0) {
-        (void)snag_errorf(error, error_size, "Cannot enter transfer mode: %s", strerror(errno));
-        goto out;
-    }
-    raw = true;
-    rc = snag_download_send(tty, input, name, expected, app->ui.native ? &app->ui.profile : NULL,
-                            !fast, allow_legacy,
-                            transfer_checkpoint, &lease,
-                            &transfer, error, error_size);
-    if (unavailable && rc < 0 && !fast && errno == ENOTSUP) *unavailable = true;
-out:
-    if (leased && transfer_discard_stale_input(&lease, tty, &transfer) < 0) {
-        restored = false;
-        rc = -1;
-        (void)snag_errorf(error, error_size, "Cannot discard disconnected transfer input: %s",
-                          strerror(errno));
-    }
-    if (raw && tcsetattr(tty, TCSANOW, &saved) < 0) {
-        restored = false;
-        (void)snag_errorf(error, error_size, "Cannot restore transfer terminal: %s",
-                          strerror(errno));
-    }
-    if (tty >= 0) close(tty);
+    struct app_transfer *transfer = transfer_new(app, false);
+    if (!transfer) goto rejected;
+    transfer->input = input;
+    transfer->source = source;
+    transfer->name = strdup(name);
+    transfer->pending = json_incref((json_t *)pending);
+    transfer->allow_legacy = allow_legacy;
+    json_decref(asset);
+    if (!transfer->name || transfer_start(app, transfer) < 0)
+        return transfer_finish(app, transfer, result, unavailable);
+    return transfer_wait(app, transfer, result, unavailable);
+rejected:
     if (input >= 0) close(input);
-    char replay_error[256] = {0};
-    if (leased && snag_ui_external_replay(&app->ui, transfer.tail, transfer.tail_len,
-                                          replay_error, sizeof(replay_error)) < 0) {
-        (void)snag_errorf(error, error_size, "Cannot restore transfer input: %s", replay_error);
-        restored = false;
-    }
-    if (owning) app->attaching = false;
     free(source);
     json_decref(asset);
-    if (!restored) {
-        if (unavailable) *unavailable = false;
-        return -1;
-    }
-    char receipt[SNAG_PATH_MAX_BYTES + 128u];
-    if (rc == 0 && transfer.receipt[0])
-        (void)snprintf(receipt, sizeof(receipt), "Download completed: %s\n"
-                       "Client acknowledged the file digest and final EXIT.", transfer.receipt);
-    *result = snag_tool_result_terminal(rc == 0, rc == 0 ?
-        transfer.receipt[0] ? receipt :
-        "Download completed: client acknowledged the file digest and final EXIT." : rc == 1 ?
-        "Download cancelled; a partial file may remain on the workstation." :
-        error[0] ? error : "Download failed.");
+    *result = snag_tool_result_terminal(false, error[0] ? error : "Download failed.");
     return *result ? 0 : -1;
 #endif
 }

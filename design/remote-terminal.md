@@ -111,6 +111,21 @@ Its unchanged protocol does not answer the native availability probe; model
 exports with that client remain queued until native attachment or explicit
 operator download and queue removal. This preserves detached-screen safety.
 
+## Transfer handoff
+
+A single transfer worker owns wire I/O and reads immutable source, profile and
+queue metadata. Atomic cancellation and completion flags cross back to the
+engine. The foreground waits for `default_yield_ms`, using `max_wait_ms` when
+the default is zero and capping the wait at that maximum. An admitted `/yield`
+or steer can hand off sooner. Handoff leaves the worker running; subsequent
+provider requests and tools proceed while ordinary terminal output stays suspended.
+
+The engine joins completed workers, restores modes and rendering, then emits
+receipts. Upload preparation completes before keyboard-tail replay. Idle and
+active input service reap background completion; disconnect, queue removal and
+shutdown cancel owned work. Shutdown joins it before freeing the UI or session.
+One terminal transfer runs at a time; further model exports remain queued.
+
 ## Durable outbox
 
 `send_file` first opens and hashes the regular source or accepted session asset,

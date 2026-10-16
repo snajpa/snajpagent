@@ -838,7 +838,9 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         /* Journal the export before touching the terminal so uncertain sends
          * survive interruption and detached sessions never emit file frames. */
         if (snag_app_download_queue(app, path, result, error, error_size) < 0) return -1;
-        if (strcmp(snag_json_string(*result, "status"), "succeeded") || app->pager) return 0;
+        if (strcmp(snag_json_string(*result, "status"), "succeeded") ||
+            app->pager || app->attaching)
+            return 0;
         json_t *item = json_incref(json_array_get(
             app->session.download_queue, json_array_size(app->session.download_queue) - 1u));
         int rc = snag_app_remote_probe(app);
@@ -864,12 +866,6 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                 *result = queued;
             } else {
                 json_decref(queued);
-                if (rc == 0 && !strcmp(snag_json_string(*result, "status"), "succeeded")) {
-                    rc = snag_app_commit_event(app, "download_removed",
-                        json_pack("{s:s,s:s}", "id", snag_json_string(item, "id"), "reason",
-                            "delivered to wrapped client"),
-                        error, error_size);
-                }
                 if (rc == 0)
                     rc = snag_ui_text(&app->ui,
                         !strcmp(snag_json_string(*result, "status"), "succeeded") ? SNAG_UI_HOST

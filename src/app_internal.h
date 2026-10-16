@@ -44,6 +44,7 @@ struct app_voice_import;
 struct app_voice_switch;
 struct app_irc_summary;
 struct app_view_terminal;
+struct app_transfer;
 struct snag_wire_secrets;
 struct snag_output_cache {
     char handle[SNAG_ID_HEX_LEN + 1u];
@@ -77,6 +78,7 @@ struct app_state {
     struct snag_store store;
     json_t *draft_content;
     bool attaching;
+    struct app_transfer *transfer;
     struct snag_session session;
     struct snag_output_cache output_cache;
 
@@ -153,7 +155,7 @@ struct app_state {
     bool steering_requested;
     bool model_switch_requested;
     bool control_requested, applying_controls;
-    bool tool_waiting, yield_requested;
+    bool tool_waiting, transfer_waiting, yield_requested;
     uint64_t input_generation;
     bool interrupt_requested;
     bool goal_armed;
@@ -280,6 +282,8 @@ int snag_app_media_command(struct app_state *app, const char *line, bool *handle
 int snag_app_prepare_attachment(struct app_state *, const char *path, const char *name,
     int (*pump)(void *, unsigned int), json_t **part, char *error, size_t error_size);
 void snag_app_discard_part(struct app_state *, const json_t *part);
+int snag_app_transfer_service(struct app_state *);
+void snag_app_transfer_close(struct app_state *);
 int snag_app_upload_command(struct app_state *app, bool directory);
 int snag_app_download(
     struct app_state *app, const char *path, json_t **result, char *error, size_t error_size);

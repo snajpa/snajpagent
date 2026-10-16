@@ -207,7 +207,11 @@ class TmuxTransfers(unittest.TestCase):
                             os.write(child.master, f"{large}\r".encode())
                         self.wait_started(child, large.stat().st_size)
                         os.write(child.master, b"\x03")
-                        child.until_after(b"cancelled", "›".encode(), 10)
+                        # Wait for the engine receipt, not the wrapper's cancellation
+                        # or a repainted receipt from the previous transfer.
+                        receipt = (b"Download cancelled;" if direction == "download"
+                                   else b"Upload cancelled;")
+                        child.until_after(receipt, "›".encode(), 10)
                         self.assertEqual(list((client / "Downloads").iterdir()), [target])
                         self.assertEqual([path.read_bytes() for path in media.iterdir()],
                                          [upload.read_bytes()])

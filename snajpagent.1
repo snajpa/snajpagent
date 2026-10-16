@@ -1907,14 +1907,30 @@ Each export has a stable ID, source path, byte count, timestamp and SHA256.
 A changed or unavailable source remains pending and reports an error rather
 than exporting different bytes. Ask the model to inspect its download_queue
 with action=list, remove one ID with action=remove, or use action=clear.
-An optional reason records why an export was cancelled. Queue removal changes
-only export intent; source and completed workstation files remain intact.
+An optional reason records why an export was cancelled. Removing an export also
+cancels a matching active transfer; source and completed workstation files remain intact.
 Read-only mode permits inspection and rejects send_file and queue mutations.
 Exports have no automatic age expiry.
+.SS Transfer waits and background completion
+Sends and receives use the configured tool wait: default_yield_ms, capped by
+max_wait_ms. A zero default_yield_ms waits up to max_wait_ms. The defaults are
+10 seconds and 60 seconds respectively. When that wait expires, the agentic run
+continues while the transfer retains its terminal lease. Already-queued operator
+/yield and steering controls can release the foreground wait earlier.
+.PP
+A yielded send_file result reports pending intent and its stable queue ID;
+it does not report delivery. Inspect download_queue with action=list. Acknowledged
+completion removes the intent once and displays the receipt. A failed, cancelled
+or disconnected send remains pending. Additional model exports queue behind the
+active transfer. A yielded /receive retains verified files in the unsent draft
+when its batch completes. File preparation precedes keyboard-tail replay.
+The workspace terminal command stays pending until the transfer ends; its saved
+report includes the final completion or cancellation receipt.
 .SS Cancellation and recovery
 Transfers take exclusive terminal input until completion, cancellation or error.
 Cancel the workstation selector or press Ctrl-C during the transfer. Ordinary
-commands and steering are unavailable while the transfer owns input. Per-frame
+terminal commands and steering are unavailable while the transfer owns input;
+the agentic run and already-admitted controls continue independently. Per-frame
 I/O waits are bounded at 20 seconds; a missing wrapper returns a transfer error.
 Transfers through GNU screen use 1 KiB DATA blocks to keep input frames within
 its terminal input burst capacity; Mosh screen-state uses 256-byte blocks and
@@ -3294,7 +3310,9 @@ identifies the operator as the source of the handoff. Started commands keep
 their handles, pending input and captured output; unstarted calls are marked
 not_run. The handoff sends no signal and does not restart commands. A previously
 requested termination continues in the background and is reported as pending.
-The model can inspect the results and choose its next action.
+The model can inspect the results and choose its next action. During a foreground
+file-transfer wait, an admitted /yield releases that wait while the transfer
+continues; it preserves the pending export or staged upload.
 .PP
 Available in both views while a managed-tool wait owns the foreground,
 including termination waits and prompt transitions, even without a steer
@@ -5705,8 +5723,10 @@ response to start a request on the new model.
 Requires path, a literal cwd-relative or absolute regular-file path without
 symlinks, or asset:ID for an accepted retained file. Journals a workstation
 export in the current session and sends it when a live native wrapper replies.
-Returns a terminal result distinguishing queued intent from delivery; there
-is no managed-process handle to poll. Completion requires the client's digest
+Returns after completion or the configured tool wait, distinguishing queued or
+in-progress intent from delivery. A yielded transfer continues in the background;
+inspect its stable pending ID with download_queue. There is no managed-process
+handle to poll. Completion requires the client's digest
 acknowledgement and final EXIT. Native completion receipts list actual local
 paths. File bytes are outside tool output and never uploaded to the model.
 See Terminal file transfers for setup, destination, cancellation and recovery.
@@ -5714,8 +5734,8 @@ See Terminal file transfers for setup, destination, cancellation and recovery.
 Requires action=list, remove or clear. List returns pending IDs, source paths,
 byte counts and SHA256 digests. Remove also requires the item's id; clear
 removes all pending exports. An optional reason is saved with mutations.
-Stale sources can be removed without opening them. Removing an export changes
-neither its source nor any landed workstation file. Read-only permits list
+Stale sources can be removed without opening them. Removing an export cancels
+its active transfer and preserves its source and any landed workstation file. Read-only permits list
 and rejects remove and clear. Pending state belongs to the existing saved
 remote session and survives resume and checkpoint replay.
 .SS exec_command

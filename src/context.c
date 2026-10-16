@@ -2968,10 +2968,10 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
                     "Existing directory, absolute or relative to current cwd."))) < 0 ||
         json_array_append_new(tools,
             tool_schema("download_queue", "action",
-                "Inspect or manage pending workstation downloads queued while no native wrapped "
-                "client was live. action=list is allowed in read-only turns; action=remove "
+                "Inspect or manage pending workstation downloads, including active background "
+                "transfers. action=list is allowed in read-only turns; action=remove "
                 "needs id and action=clear removes all pending exports. Removing queue items "
-                "never deletes source files or files already downloaded.",
+                "cancels a matching active transfer; source and downloaded files remain intact.",
                 json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}", "action", "type",
                     "string", "description", "One of: list, remove, clear.", "id", "type", "string",
                     "null", "description", "Stable queued item id for remove; omit/null otherwise.",
@@ -2982,8 +2982,9 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
                 "Export one regular file or accepted asset to the workstation. Journals a pending "
                 "download in the existing session before sending. A live native remote wrapper "
                 "permits delivery; otherwise returns queued intent, not delivery. Interactive "
-                "POSIX "
-                "delivery owns the terminal until completion or cancellation and requires digest "
+                "POSIX delivery uses the configured tool wait, then returns pending intent while "
+                "the transfer continues in the background. Terminal input stays leased until "
+                "completion or cancellation. Delivery requires digest "
                 "and final EXIT acknowledgement. Failed or uncertain delivery stays pending. "
                 "File bytes are not tool output; read-only turns cannot export files.",
                 json_pack("{s:{s:s,s:s}}", "path", "type", "string", "description",

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Yield workstation sends and receives after the configured tool wait while
+  their transfer continues in the background. Keep pending exports until digest
+  and final EXIT acknowledgement, and retain completed uploads before replaying
+  keyboard input. Cancellation, disconnect and shutdown release the terminal.
+
 - Keep new turns usable when the saved working directory disappears or becomes
   a file. Retain global and explicit guidance, report the unavailable cwd to the
   model, and allow an absolute `cd` to recover without silently changing paths.

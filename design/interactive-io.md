@@ -205,6 +205,15 @@ After peer hangup, pending display bytes may be discarded to reach terminal
 controls and restore physical modes. Live output is never discarded for this
 purpose, and the frontend never interprets raw transfer bytes as hard escapes.
 
+Send/receive wire I/O runs in one owned worker. The engine services ordinary
+input and managed commands during the bounded foreground wait, then continues
+provider/tool work while that worker retains the terminal lease. Only the engine
+restores terminal modes, admits uploads and journals acknowledged delivery.
+Keyboard-tail replay follows upload retention so an already-visible idle prompt
+cannot submit typeahead before the file is accepted.
+Workspace terminal-command ownership remains pending across the handoff; final
+transfer output joins that command's saved report before the frontend returns.
+
 Exclusive file-transfer input belongs to the attachment that began the exchange.
 Loss or replacement of that attachment cancels an unfinished exchange and clears
 its unread protocol input before the composer reopens. Verified, completed

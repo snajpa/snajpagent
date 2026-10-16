@@ -104,7 +104,8 @@
         Omit the ID to choose a running session.
         Use <code>/receive</code> to select a workstation file, then review
         <code>/attachments</code> before submitting. Use <code>/send PATH</code>
-        to save a remote file under <code>~/Downloads</code>. Transfers preserve the conversation. Detached exports stay queued: fast-stream
+        to save a remote file under <code>~/Downloads</code>. Transfers preserve the conversation and yield after the configured tool wait
+        while the agent continues working. Detached exports stay queued: fast-stream
         reattachment delivers them automatically; on Mosh use <code>/send PATH</code>.
         Receipts identify local paths. The trzsz-go wrapper remains an alternative
         for explicit transfers (<code>brew install trzsz-go</code> on macOS,
