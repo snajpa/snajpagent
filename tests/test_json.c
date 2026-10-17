@@ -2,9 +2,45 @@
 #include "json.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* This test executable owns calloc so canonicalization's scratch allocations
+ * remain visible with both the system and bundled Jansson implementations. */
+static size_t calloc_count;
+
+void *
+calloc(size_t count, size_t size)
+{
+    void *(*volatile allocate)(size_t) = malloc;
+    ++calloc_count;
+    if (size && count > SIZE_MAX / size) { errno = ENOMEM; return NULL; }
+    void *result = allocate(count * size);
+    if (result) memset(result, 0, count * size);
+    return result;
+}
+
+static void
+test_sorted_keys_borrow_existing_storage(void)
+{
+    json_t *sorted = json_pack("{s:i,s:i,s:i}", "a", 1, "b", 2, "c", 3);
+    json_t *unsorted = json_pack("{s:i,s:i,s:i}", "c", 3, "a", 1, "b", 2);
+    struct snag_buf out = {.max = 256u};
+    assert(sorted && unsorted && snag_buf_reserve(&out, 256u) == 0);
+    calloc_count = 0u;
+    assert(snag_json_canonical(sorted, &out) == 0);
+    assert(calloc_count == 0u); /* No allocation or copied scratch-key array. */
+    assert(out.len == 19u && !memcmp(out.data, "{\"a\":1,\"b\":2,\"c\":3}", out.len));
+    out.len = 0u;
+    assert(snag_json_canonical(unsorted, &out) == 0);
+    assert(calloc_count == 1u); /* Unordered inputs still take the checked sort path. */
+    assert(out.len == 19u && !memcmp(out.data, "{\"a\":1,\"b\":2,\"c\":3}", out.len));
+    snag_buf_free(&out);
+    json_decref(unsorted);
+    json_decref(sorted);
+}
 
 static void
 test_object_iteration(void)
@@ -299,6 +335,7 @@ main(void)
     assert(json_integer_value(json_object_get(value, "a")) == 12);
     json_decref(value);
     snag_json_document_free(&document);
+    test_sorted_keys_borrow_existing_storage();
     test_object_iteration();
     test_strict_accepts_wire_json();
     test_arguments_resolve_duplicate_keys_last_wins();
