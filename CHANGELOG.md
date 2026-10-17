@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Publish idle attachment-state changes before the owner metrics sampling deadline,
+  keeping session listings current after semantic controllers attach or detach.
+
 - Cache verified session display metadata for fast listing, name and last-session
   discovery. Rebuild stale metadata for old writers while preserving authoritative
   resume recovery and locking. Draw the interactive monitor immediately, backfill

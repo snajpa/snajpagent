@@ -80,14 +80,16 @@ snag_wakeup_send(snag_wake_fd writer)
     errno = saved;
 }
 
-void
+bool
 snag_wakeup_drain(snag_wake_fd reader)
 {
     int saved = errno;
     char bytes[64];
+    bool notified = false;
 
-    while (recv(reader, bytes, sizeof(bytes), 0) > 0);
+    while (recv(reader, bytes, sizeof(bytes), 0) > 0) notified = true;
     errno = saved;
+    return notified;
 }
 
 int
@@ -149,14 +151,16 @@ snag_wakeup_send(snag_wake_fd writer)
     errno = saved;
 }
 
-void
+bool
 snag_wakeup_drain(snag_wake_fd reader)
 {
     int saved = errno;
     char bytes[64];
+    bool notified = false;
 
-    while (read(reader, bytes, sizeof(bytes)) > 0);
+    while (read(reader, bytes, sizeof(bytes)) > 0) notified = true;
     errno = saved;
+    return notified;
 }
 
 int

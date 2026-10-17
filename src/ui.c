@@ -3132,7 +3132,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
         snag_ui_view_result(ui, ui->view_request, "rejected", 0u, "input was not admitted") < 0)
         return -1;
     for (;;) {
-        snag_wakeup_drain(runtime->actions.wake[0]);
+        bool notified = snag_wakeup_drain(runtime->actions.wake[0]);
         int fatal = atomic_load(&runtime->fatal);
         if (fatal) {
             errno = fatal;
@@ -3179,6 +3179,9 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
             snag_wakeup_send(runtime->commands[1]);
             break;
         }
+        /* Attachment changes wake the engine without queuing input. Return
+         * control so it can publish state instead of sleeping on that wake. */
+        if (notified) return 0;
         uint64_t now = snag_monotonic_ms();
         if (timeout_ms >= 0 && now >= deadline) return 0;
         int remaining = timeout_ms < 0 ? -1 : (int)(deadline - now);
