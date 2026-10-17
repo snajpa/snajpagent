@@ -655,6 +655,8 @@ class RuntimeSkills(SkillsCase):
         entry, = self.run_cli("list")["entries"]
         self.assertTrue(entry["approved"])
         self.assertEqual(entry["root"], review["root"])
+        self.assertEqual(entry["path"], str(Path(review["root"]) / "SKILL.md"))
+        self.assertEqual(entry["source_root"], str(package))
         requests = []
         def respond(handler, request, sequence):
             requests.append(request)
@@ -671,6 +673,7 @@ class RuntimeSkills(SkillsCase):
         result = self.execute("exercise approved skill")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertGreaterEqual(len(requests), 3)
+        self.assertIn(entry["path"], json.dumps(requests[0]["input"]))
         self.assertIn("APPROVED-EXACT-BODY", json.dumps(requests[1]["input"]))
         self.assertNotEqual(requests[0]["prompt_cache_key"], requests[1]["prompt_cache_key"])
         self.assertNotEqual(requests[1]["prompt_cache_key"], requests[2]["prompt_cache_key"])

@@ -9,7 +9,8 @@
   name-wide bans and inspection-only `--all-skills`. Preserve admitted task/goal
   snapshots through retry/resume while applying current local revocations before
   provider requests. Include portable YAML/vendor metadata, literal arguments,
-  native list/show/activate tools and atomic local/Git package management.
+  native list/show/activate tools and atomic local/Git package management. Use
+  retained reviewed-package paths throughout the approved catalog.
 
 - Yield workstation sends and receives after the configured tool wait while
   their transfer continues in the background. Keep pending exports until digest

@@ -845,8 +845,14 @@ scan_directory(struct skill_scan *scan, const char *path, char *error, size_t si
                             rc = json_object_set_new(skill, "state", json_string("changed"));
                         }
                     } else {
-                        rc = json_object_set(skill, "source_root", json_object_get(skill, "root"));
+                        char *snapshot_path = snag_path_join(snapshot, "SKILL.md");
+                        rc = snapshot_path ? json_object_set(skill, "source_root",
+                            json_object_get(skill, "root")) : -1;
                         if (rc == 0) rc = json_object_set_new(skill, "root", json_string(snapshot));
+                        if (rc == 0) {
+                            rc = json_object_set_new(skill, "path", json_string(snapshot_path));
+                        }
+                        free(snapshot_path);
                     }
                     json_decref(checked);
                 }

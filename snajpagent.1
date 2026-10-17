@@ -4432,7 +4432,9 @@ composer, approve exactly the reviewed ID and digest:
 .fi
 .PP
 Only the direct operator command admits approval. The management CLI and model
-skills tool provide no approval action. Inspection and activation recheck the
+skills tool provide no approval action. Approved catalog root and SKILL.md paths
+name the retained reviewed package; the original source root is provenance.
+Inspection and activation recheck the
 complete package manifest against the catalog before returning contents. A package
 changed since discovery is refused; refresh and review the changed version.
 Changed source packages disappear from eligibility until reviewed
@@ -4445,6 +4447,10 @@ The native model skills tool supports list, show and activate; activation pins
 attributed lower-priority instructions to the current task or persistent goal.
 Arguments are literal text. Package scripts use ordinary declared file/process
 tools with the existing permissions, yielding and cancellation behavior.
+Keep retained package contents unchanged and place outputs and caches elsewhere.
+Run Python helpers with python3 \-B or PYTHONDONTWRITEBYTECODE=1 to avoid bytecode
+cache writes. Changes inside a retained package invalidate its manifest at the next
+check.
 .PP
 .nf
 /skills disable my-skill

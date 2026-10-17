@@ -225,7 +225,10 @@ read-only turn. Follow existing explicit approval paths for effects.
 
 Scripts use existing managed commands with normal cwd, environment, yielding,
 output retention and cancellation. Supply immutable absolute package roots so
-resources remain stable without changing session cwd. Report missing interpreters
+resources remain stable without changing session cwd. Approved catalog root and
+instruction path both name the retained reviewed package; source_root records
+provenance. Keep outputs and interpreter caches outside that package because any
+content change invalidates its full manifest. Report missing interpreters
 or resources honestly. No alternate runner, daemon or automatic updater is needed.
 
 Bind exact instructions, rendered arguments, source identity and approved package
