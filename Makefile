@@ -422,6 +422,8 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_ui_input
 	./tests/test_batch_poll
 	python3 tests/test_top.py ./$(BIN)
+	python3 tests/test_session_catalog.py ./$(BIN)
+	python3 tests/test_session_listing.py ./$(BIN)
 	./tests/test_irc
 	./tests/test_irc_address
 	./tests/test_irc_event

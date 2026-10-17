@@ -70,12 +70,26 @@ class TopTests(unittest.TestCase):
         temporary.chmod(0o600)
         temporary.replace(path)
 
-    def top(self, height=24, width=120):
-        top = RemoteProcess(self.root, [str(PRODUCT), 'top', '--dotdir', str(self.state),
-                            '--delay', '1', '--color', 'always'], wrapped=None)
+    def top(self, height=24, width=120, delay='1', wait=True, ignore_sigchld=False):
+        # Keep the controlling PTY alive after top exits so Darwin still exposes
+        # its termios state. Without this parent, exit invalidates the slave.
+        # PENDIN is a kernel retype request, not an application terminal mode.
+        runner = ('import signal,subprocess,sys,termios; before=termios.tcgetattr(0); '
+                  + ('signal.signal(signal.SIGCHLD,signal.SIG_IGN); ' if ignore_sigchld else '') +
+                  'child=subprocess.Popen(sys.argv[1:]); '
+                  'print("TOP_CHILD="+str(child.pid),flush=True); rc=child.wait(); '
+                  'after=termios.tcgetattr(0); mask=getattr(termios,"PENDIN",0); '
+                  'before[3]&=~mask; after[3]&=~mask; '
+                  'assert after==before,(before,after); '
+                  'print("TOP_TERMINAL_RESTORED",flush=True); sys.exit(rc)')
+        top = RemoteProcess(self.root, [sys.executable, '-c', runner,
+                            str(PRODUCT), 'top', '--dotdir', str(self.state),
+                            '--color', 'always', *([] if delay is None else ['--delay', delay])],
+                            wrapped=None)
         self.addCleanup(top.close)
         fcntl.ioctl(top.master, termios.TIOCSWINSZ, struct.pack('HHHH', height, width, 0, 0))
-        self.frame(top)
+        if wait:
+            self.frame(top)
         return top
 
     def frame(self, top, keys=b''):
@@ -85,7 +99,8 @@ class TopTests(unittest.TestCase):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             frame = bytes(top.output).split(b'\033[2J\033[H')[-1]
-            if re.search(rb'TOTAL sessions=[^\r\n]*[\r\n]', frame):
+            if b'loading metadata...' not in frame and re.search(
+                    rb'TOTAL sessions=[^\r\n]*[\r\n]', frame):
                 return frame
             self.assertIsNone(top.process.poll(), bytes(top.output))
             if select.select([top.master], [], [], .05)[0]:
@@ -99,8 +114,103 @@ class TopTests(unittest.TestCase):
 
     def quit(self, top):
         os.write(top.master, b'q')
+        # Drain restoration before wait closes the parent's macOS slave.
+        top.until(b'\033[?25h')
+        top.until(b'TOP_TERMINAL_RESTORED\r\n')
         top.wait(0)
-        self.assertIn(b'\033[?25h', top.output)
+        self.assertNotIn(b"\x00", bytes(top.output))
+
+    def test_inherited_ignored_sigchld_keeps_backfill_waitable(self):
+        store_history.create_legacy(self.state, self.root, 'fake', 'cold')
+        top = self.top(delay=None, ignore_sigchld=True)
+        self.assertIn(b'TOTAL sessions=1', top.output)
+        self.quit(top)
+
+    def test_signal_restores_terminal_and_collects_worker(self):
+        top = self.top(delay=None)
+        match = re.search(rb'TOP_CHILD=([0-9]+)', top.output)
+        self.assertIsNotNone(match, top.output)
+        os.kill(int(match[1]), signal.SIGTERM)
+        top.until(b'TOP_TERMINAL_RESTORED\r\n')
+        top.wait(128 + signal.SIGTERM)
+
+    def test_fractional_delay_validation(self):
+        for delay in ('0', '.199', '0.199', '-.2', 'nan', 'inf', '2e-1', '1.',
+                      '.2000', '86400.001', '9999999999999999999999'):
+            with self.subTest(delay=delay):
+                result = subprocess.run([str(PRODUCT), 'top', '--delay', delay],
+                                        capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        for delay in ('.2', '0.200', '1.025', '86400'):
+            with self.subTest(delay=delay):
+                result = subprocess.run([str(PRODUCT), 'top', '--delay', delay,
+                                         '--dotdir', str(self.state)],
+                                        capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_default_refresh_cadence_and_live_metrics(self):
+        sid, _ = self.session(100)
+        top = self.top(delay=None)
+        samples = []
+        frames = 0
+        deadline = time.monotonic() + 3
+        # Observe actual complete terminal frames, not an internal timer. Six
+        # intervals expose the old one-second floor without a long timing test.
+        while len(samples) < 7 and time.monotonic() < deadline:
+            count = bytes(top.output).count(b'TOTAL sessions=')
+            if count > frames:
+                samples.append(time.monotonic())
+                frames = count
+            if select.select([top.master], [], [], .025)[0]:
+                top.output.extend(os.read(top.master, 65536))
+        self.assertEqual(len(samples), 7, bytes(top.output))
+        intervals = sorted(b - a for a, b in zip(samples, samples[1:]))
+        self.assertGreater(intervals[len(intervals) // 2], .15, intervals)
+        self.assertLess(intervals[len(intervals) // 2], .35, intervals)
+        self.assertIn(b'delay=0.200s', top.output)
+        self.metrics(sid, 987)
+        top.output.clear()
+        top.until(b'process=987 session=987', timeout=1)
+        self.quit(top)
+
+    def test_first_frame_and_quit_do_not_wait_for_cold_verification(self):
+        journal = store_history.create_legacy(self.state, self.root, 'fake', 'cold')
+        # A large canonical record is valid but takes real verification work;
+        # the first frame and quit must not depend on finishing that work.
+        from test_session_listing import append_event
+        append_event(journal, 'session_named', {'name': 'cold', 'padding': 'x' * 2**22})
+        before = hashlib.sha256(journal.read_bytes()).digest()
+        began = time.monotonic()
+        top = self.top(delay=None, wait=False)
+        top.until(b'snajpagent top: loading sessions...', timeout=1)
+        self.assertLess(time.monotonic() - began, 1)
+        self.quit(top)
+        self.assertLess(time.monotonic() - began, 2)
+        self.assertEqual(hashlib.sha256(journal.read_bytes()).digest(), before)
+
+    def test_bad_source_is_not_retried_until_changed_or_requested(self):
+        journal = store_history.create_legacy(self.state, self.root, 'fake', 'bad')
+        original = journal.read_bytes()
+        journal.write_bytes(b'invalid journal\n')
+        watch = -1
+        if sys.platform.startswith('linux'):
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            watch = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+            self.assertGreaterEqual(watch, 0)
+            self.addCleanup(os.close, watch)
+            self.assertGreaterEqual(libc.inotify_add_watch(watch, os.fsencode(journal), 1), 0)
+        top = self.top(delay=None, wait=False)
+        top.until(b'metadata unavailable; press r to retry', timeout=3)
+        if watch >= 0:
+            os.read(watch, 4096)
+            self.assertFalse(select.select([watch], [], [], .65)[0],
+                             'unchanged invalid journal was repeatedly replayed')
+        # Restoring a changed source creates a new generation and a real row.
+        journal.write_bytes(original)
+        top.output.clear()
+        top.until(journal.parent.name[:8].encode(), timeout=3)
+        self.quit(top)
 
     def test_empty_redirected_output(self):
         result = subprocess.run([str(PRODUCT), 'top', '--dotdir', str(self.state),
