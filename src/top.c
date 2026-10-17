@@ -3,8 +3,10 @@
 #include "app.h"
 #include "base.h"
 #include "config.h"
+#include "fs.h"
 #include "metrics.h"
 #include "store.h"
+#include "term.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -12,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -52,6 +55,7 @@ struct top_row {
     uint64_t prefill_rate;
     uint64_t decode_rate;
     uint64_t process_pid;
+    uint64_t process_started_ms;
     int status_rank;
     bool metrics_valid;
 };
@@ -217,6 +221,10 @@ load_rows(struct top_context *context, char *error, size_t error_size)
     json_t *catalog = NULL;
     size_t count;
     struct top_row *rows = NULL;
+    char selected_id[SNAG_ID_HEX_LEN + 1u] = {0};
+
+    if (context->selected < context->row_count)
+        copy_text(selected_id, sizeof(selected_id), context->rows[context->selected].id);
 
     catalog = snag_store_catalog(&context->store, NULL, UINT64_MAX, NULL, NULL, error, error_size);
     if (!catalog) return -1;
@@ -261,6 +269,7 @@ load_rows(struct top_context *context, char *error, size_t error_size)
             rows[i].prefill_rate = view.prefill_microtokens_per_second;
             rows[i].decode_rate = view.decode_microtokens_per_second;
             rows[i].process_pid = view.process_pid;
+            rows[i].process_started_ms = view.process_started_ms;
         }
     }
     json_decref(catalog);
@@ -268,8 +277,13 @@ load_rows(struct top_context *context, char *error, size_t error_size)
     free(context->rows);
     context->rows = rows;
     context->row_count = count;
-    if (context->selected >= count && count) context->selected = count - 1u;
-    if (!count) context->selected = 0u;
+    context->selected = 0u;
+    for (size_t i = 0u; i < count; ++i) {
+        if (!strcmp(rows[i].id, selected_id)) {
+            context->selected = i;
+            break;
+        }
+    }
     return 0;
 }
 
@@ -289,7 +303,36 @@ rate_text(char out[32], uint64_t microtokens)
 }
 
 static int
-append_row(struct snag_buf *out, const struct top_row *row, bool selected, bool color)
+append_line(struct snag_buf *out, const struct snag_buf *line, unsigned int width,
+    bool interactive, bool selected, bool color, bool last)
+{
+    size_t cells = 0u;
+
+    if (color && selected && snag_buf_append(out, "\033[7m", 4u) < 0) return -1;
+    for (size_t i = 0u; i < line->len;) {
+        uint32_t cp;
+        size_t bytes = snag_utf8_decode((const unsigned char *)line->data + i, line->len - i, &cp);
+        const char *text = (const char *)line->data + i;
+        size_t length = bytes ? bytes : 1u;
+
+        if (bytes && (cp == '\n' || cp == '\r' || cp == '\t')) {
+            text = " ";
+            length = 1u;
+        }
+        size_t amount = snag_term_text_width(text, length);
+        if (amount == SIZE_MAX) return -1;
+        if (interactive && amount > width - cells) break;
+        if (snag_term_append_safe(out, text, length) < 0) return -1;
+        cells += amount;
+        i += bytes ? bytes : 1u;
+    }
+    if (color && selected && snag_buf_append(out, "\033[0m", 4u) < 0) return -1;
+    if (!interactive) return snag_buf_putc(out, '\n');
+    return snag_buf_append(out, last ? "\r" : "\r\n", last ? 1u : 2u);
+}
+
+static int
+format_row(struct snag_buf *out, const struct top_row *row)
 {
     char id[9], turn[9], process[32], session[32], prefill[32], decode[32];
 
@@ -299,23 +342,21 @@ append_row(struct snag_buf *out, const struct top_row *row, bool selected, bool 
     snag_format_count(session, sizeof(session), row->session_total);
     rate_text(prefill, row->prefill_rate);
     rate_text(decode, row->decode_rate);
-    if (color && selected && snag_buf_append(out, "\033[7m", 4u) < 0) return -1;
-    if (snag_buf_printf(out, "%-8s %-8s %-20.20s %6llu %-8s %8s %8s %9s %9s",
+    return snag_buf_printf(out, "%-8s %-8s %-20.20s %6llu %-8s %8s %8s %9s %9s",
             id, row->state, row->model, (unsigned long long)row->turns, turn, process,
-            session, prefill, decode) < 0)
-        return -1;
-    if (color && selected && snag_buf_append(out, "\033[0m", 4u) < 0) return -1;
-    return snag_buf_putc(out, '\n');
+            session, prefill, decode);
 }
 
 static int
 render(struct top_context *context, bool interactive, const char *message)
 {
     struct snag_buf out = {.max = 128u * 1024u};
+    struct snag_buf line = {.max = out.max};
     unsigned int height = TOP_DEFAULT_ROWS;
     unsigned int width = TOP_DEFAULT_COLUMNS;
     uint64_t process_total = 0u, session_total = 0u, turns = 0u;
     size_t shown;
+    size_t first = 0u;
     char process[32], session[32];
 
 #ifndef _WIN32
@@ -330,20 +371,27 @@ render(struct top_context *context, bool interactive, const char *message)
     (void)interactive;
 #endif
     if (interactive && snag_buf_append(&out, "\033[2J\033[H", 7u) < 0) goto out;
-    if (snag_buf_printf(&out, "snajpagent top  delay=%us  arrows/jk move  x kill  q quit",
-            context->options.delay_seconds) < 0)
-        goto out;
-    if (message && *message && snag_buf_printf(&out, "  %s", message) < 0) goto out;
+    if (message && *message) {
+        if (snag_buf_printf(&line, "snajpagent top  %s", message) < 0) goto out;
+    } else if (snag_buf_printf(&line, "snajpagent top  delay=%us  arrows/jk move  x kill  q quit",
+                   context->options.delay_seconds) < 0) goto out;
+    if (append_line(&out, &line, width, interactive, false, false, false) < 0) goto out;
+    line.len = 0u;
     {
         const char header[] =
             "SESSION  STATE    MODEL                TURNS ACTIVE   PROCESS  SESSION   "
-            "PREFILL/s  DECODE/s\n";
-        if (snag_buf_putc(&out, '\n') < 0 ||
-            snag_buf_append(&out, header, sizeof(header) - 1u) < 0)
+            "PREFILL/s  DECODE/s";
+        if (snag_buf_append(&line, header, sizeof(header) - 1u) < 0 ||
+            append_line(&out, &line, width, interactive, false, false, false) < 0)
             goto out;
     }
     shown = context->row_count;
-    if (interactive && height > 4u && shown > height - 4u) shown = height - 4u;
+    if (interactive) {
+        size_t available = height > 3u ? height - 3u : 1u;
+
+        if (shown > available) shown = available;
+        if (context->selected >= shown && shown) first = context->selected - shown + 1u;
+    }
     for (size_t i = 0u; i < context->row_count; ++i) {
         turns += context->rows[i].turns;
         if (UINT64_MAX - process_total >= context->rows[i].process_total)
@@ -352,31 +400,35 @@ render(struct top_context *context, bool interactive, const char *message)
         if (UINT64_MAX - session_total >= context->rows[i].session_total)
             session_total += context->rows[i].session_total;
         else session_total = UINT64_MAX;
-        if (i < shown &&
-            append_row(&out, &context->rows[i], i == context->selected, context->color) < 0)
-            goto out;
+        if (i >= first && i - first < shown) {
+            line.len = 0u;
+            if (format_row(&line, &context->rows[i]) < 0 ||
+                append_line(&out, &line, width, interactive, i == context->selected,
+                    context->color, false) < 0)
+                goto out;
+        }
     }
     snag_format_count(process, sizeof(process), process_total);
     snag_format_count(session, sizeof(session), session_total);
     if (interactive) {
         size_t lines = 2u + shown;
         while (lines + 1u < height) {
-            if (snag_buf_putc(&out, '\n') < 0) goto out;
+            if (snag_buf_append(&out, "\r\n", 2u) < 0) goto out;
             ++lines;
         }
     }
-    if (context->color && snag_buf_append(&out, "\033[7m", 4u) < 0) goto out;
-    if (snag_buf_printf(&out, "TOTAL sessions=%zu turns=%llu process=%s session=%s",
+    line.len = 0u;
+    if (snag_buf_printf(&line, "TOTAL sessions=%zu turns=%llu process=%s session=%s",
             context->row_count, (unsigned long long)turns, process, session) < 0)
         goto out;
-    if (context->color && snag_buf_append(&out, "\033[0m", 4u) < 0) goto out;
-    if (snag_buf_putc(&out, '\n') < 0 ||
+    if (append_line(&out, &line, width, interactive, true, context->color, true) < 0 ||
         snag_write_full(STDOUT_FILENO, out.data, out.len) < 0) goto out;
     snag_buf_free(&out);
-    (void)width;
+    snag_buf_free(&line);
     return 0;
 out:
     snag_buf_free(&out);
+    snag_buf_free(&line);
     return -1;
 }
 
@@ -428,31 +480,37 @@ move_selection(struct top_context *context, int direction)
 }
 
 static int
-kill_selected(struct top_context *context, char *message, size_t message_size)
+kill_confirmed(struct top_context *context, const struct top_row *target,
+    char *message, size_t message_size)
 {
-    struct top_row *row;
     struct snag_session session;
     struct snag_metrics_view view;
     char error[256] = {0};
+    int lock_fd = -1;
+    struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
 
-    if (!context->row_count) return 0;
-    row = &context->rows[context->selected];
-    if (row->status_rank >= 3) {
-        (void)snag_strcpy(message, message_size, "stored sessions cannot be killed");
-        return 0;
-    }
-    if (!row->metrics_valid || !row->process_pid) {
-        (void)snag_strcpy(message, message_size, "selected session has no live metrics owner");
+    if (snag_metrics_read(context->store.root_fd, target->id, &view, error,
+            sizeof(error)) < 0 || !view.valid || view.process_pid != target->process_pid ||
+        view.process_started_ms != target->process_started_ms) {
+        (void)snag_strcpy(message, message_size, "session owner changed; select and confirm again");
         return 0;
     }
     snag_session_init(&session);
-    if (snag_session_locate(&context->store, &session, row->id, NULL, NULL, error,
-            sizeof(error)) < 0 || !snag_session_is_live(&session)) {
+    if (snag_session_locate(&context->store, &session, target->id, NULL, NULL, error,
+            sizeof(error)) < 0) {
         snag_session_close(&session);
         (void)snag_strcpy(message, message_size, "selected session is no longer live");
         return 0;
     }
-    view = (struct snag_metrics_view){.valid = true, .process_pid = row->process_pid};
+    lock_fd = snag_open_read_security_at(session.dir_fd, "lock", false);
+    if (lock_fd < 0 || fcntl(lock_fd, F_GETLK, &lock) < 0 || lock.l_type != F_WRLCK ||
+        lock.l_pid <= 0 || (uint64_t)lock.l_pid != view.process_pid) {
+        if (lock_fd >= 0) (void)close(lock_fd);
+        snag_session_close(&session);
+        (void)snag_strcpy(message, message_size, "session lock owner no longer matches metrics");
+        return 0;
+    }
+    (void)close(lock_fd);
     if (snag_metrics_kill(&view, error, sizeof(error)) < 0)
         (void)snag_strcpy(message, message_size, error[0] ? error : "cannot kill selected session");
     else (void)snag_strcpy(message, message_size, "termination requested");
@@ -504,7 +562,7 @@ snag_top_main(int argc, char **argv)
         bool interactive = isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
         char message[256] = {0};
         struct termios saved;
-        bool confirm = false;
+        struct top_row target = {0};
         bool raw = false;
 
         if (!interactive) {
@@ -516,11 +574,13 @@ snag_top_main(int argc, char **argv)
             goto out;
         } else {
             raw = true;
-            (void)write(STDOUT_FILENO, "\033[?25l", 6u);
+            (void)snag_write_full(STDOUT_FILENO, "\033[?25l", 6u);
             for (;;) {
                 int key;
                 struct pollfd input = {STDIN_FILENO, POLLIN, 0};
                 if (load_rows(&context, error, sizeof(error)) < 0) break;
+                if (target.id[0] && !message[0])
+                    (void)snprintf(message, sizeof(message), "kill %.8s? press y/n", target.id);
                 if (render(&context, true, message) < 0) break;
                 message[0] = '\0';
                 if (poll(&input, 1u, context.options.delay_seconds > INT_MAX / 1000
@@ -534,31 +594,35 @@ snag_top_main(int argc, char **argv)
                     rc = 0;
                     break;
                 }
-                if (confirm) {
+                if (target.id[0]) {
                     if (key == 'y' || key == 'Y') {
-                        (void)kill_selected(&context, message, sizeof(message));
-                        confirm = false;
+                        (void)kill_confirmed(&context, &target, message, sizeof(message));
+                        target.id[0] = '\0';
                     } else if (key == 'n' || key == 'N' || key == 27) {
                         (void)snag_strcpy(message, sizeof(message), "kill cancelled");
-                        confirm = false;
+                        target.id[0] = '\0';
                     }
                 } else if (key == 1001 || key == 'k') move_selection(&context, -1);
                 else if (key == 1002 || key == 'j') move_selection(&context, 1);
                 else if (key == 'r' || key == 'R') continue;
                 else if (key == 'x' || key == 'X') {
-                    if (context.row_count && context.rows[context.selected].status_rank >= 3)
+                    if (!context.row_count) continue;
+                    const struct top_row *row = &context.rows[context.selected];
+                    if (row->status_rank >= 3)
                         (void)snag_strcpy(message, sizeof(message),
                             "stored sessions cannot be killed");
-                    else {
+                    else if (!row->metrics_valid || !row->process_pid)
                         (void)snag_strcpy(message, sizeof(message),
-                            "kill selected session? press y/n");
-                        confirm = true;
+                            "selected session has no live metrics owner");
+                    else {
+                        target = *row;
+                        (void)snprintf(message, sizeof(message), "kill %.8s? press y/n", target.id);
                     }
                 }
             }
             if (raw) {
                 (void)tcsetattr(STDIN_FILENO, TCSANOW, &saved);
-                (void)write(STDOUT_FILENO, "\033[0m\033[?25h\n", 12u);
+                (void)snag_write_full(STDOUT_FILENO, "\033[0m\033[?25h\n", 12u);
             }
         }
     }

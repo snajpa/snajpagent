@@ -947,7 +947,9 @@ process total.
 .PP
 In an interactive terminal, Up/Down or
 .B j / k
-moves the selection,
+moves the selection.  Selection stays with its session as rows reorder, and the
+table scrolls to keep the selected row visible.  Terminal rows are clipped to
+the current width without wrapping or interpreting model text as terminal codes.
 .B r
 refreshes immediately, and
 .B q
@@ -955,10 +957,12 @@ exits.  Press
 .B x
 then
 .B y
-to request termination of a live owner; the live session lock is checked
-before the owner process named by its current metrics file receives SIGTERM.
-Stored sessions display their totals but cannot be killed.  The inverted final
-line summarizes all visible rows.
+to request termination of a live owner.  The confirmation names the session and
+stays bound to that owner across refreshes.  A changed process id or process-start
+time cancels the request; the current metrics process must also hold the session's
+writer lock before receiving SIGTERM.  Stored sessions display their totals but
+cannot be killed.  The inverted final line summarizes the complete session table,
+including rows outside the viewport.
 .PP
 Redirected output renders once and ends, which permits simple collection of the
 same file-backed data without a network endpoint.

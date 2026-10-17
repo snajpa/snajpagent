@@ -133,6 +133,22 @@ Name sessions with `-N lead` or `/session name lead`; select them with
 `--attach -N lead` or `--resume -N lead`. Duplicate names require IDs.
 **Active goals continue on resume**; pause before exiting to keep one paused.
 
+### Monitor sessions
+
+Run `snajpagent top` for a live session table with model, turn count, process and
+session token totals, and estimated prefill/decode rates. Use Up/Down or `j`/`k`
+to select a session, `r` to refresh, and `q` to leave. Selection follows the
+session when rows reorder, and the table scrolls to keep it visible.
+
+`x`, then `y`, requests termination of the selected live owner. The confirmation
+names the session; a replaced owner requires a new confirmation. Stored sessions
+cannot be killed. Redirecting output prints a single snapshot instead:
+
+```sh
+snajpagent top --delay 5
+snajpagent top --sort turns --color never > sessions.txt
+```
+
 ### Transfer files through the terminal
 
 Wrap your connection with the native workstation client:

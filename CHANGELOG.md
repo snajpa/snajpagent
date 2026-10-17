@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Complete the interactive `snajpagent top` view: keep selection with its session
+  across refreshes, scroll it into view, and fit terminal rows without wrapping.
+  Bind termination confirmation to the named session and process-start identity;
+  verify the current writer-lock owner before signalling it. Add real PTY and
+  owner-lifecycle regressions, and document the monitor in the getting-started guide.
+
 - Keep workstation clipboard publication exactly once when rapid terminal polls
   repeat an already-accepted background publication request.
 
