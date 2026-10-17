@@ -78,32 +78,48 @@ encode_object(const json_t *value, struct snag_buf *out, unsigned int depth, boo
     void *iter;
     size_t i = 0;
     int rc = -1;
+    bool sorted = true;
+    struct snag_key_ref previous = {0};
 
-    if (count) {
-        if (count > SIZE_MAX / sizeof(*keys)) return snag_errno(EOVERFLOW);
-        keys = calloc(count, sizeof(*keys));
-        if (!keys) return -1;
-    }
     iter = json_object_iter((json_t *)value);
     while (iter) {
         if (i >= count) goto out;
-        keys[i].name = json_object_iter_key(iter);
-        keys[i].len = json_object_iter_key_len(iter);
-        if (!keys[i].name ||
-            !snag_utf8_valid((const unsigned char *)keys[i].name, keys[i].len, true))
+        struct snag_key_ref key = {.name = json_object_iter_key(iter),
+            .len = json_object_iter_key_len(iter)};
+        if (!key.name || !snag_utf8_valid((const unsigned char *)key.name, key.len, true))
             goto out;
+        if (i && snag_key_ref_compare(&previous, &key) >= 0) sorted = false;
+        previous = key;
         ++i;
         iter = json_object_iter_next((json_t *)value, iter);
     }
     if (i != count) goto out;
-    if (count) qsort(keys, count, sizeof(*keys), snag_key_ref_compare);
+    /* Loaded canonical objects already have sorted insertion order. Borrow
+     * their keys instead of allocating and copying an identical sort array. */
+    if (!sorted) {
+        if (count > SIZE_MAX / sizeof(*keys)) return snag_errno(EOVERFLOW);
+        keys = calloc(count, sizeof(*keys));
+        if (!keys) return -1;
+        iter = json_object_iter((json_t *)value);
+        for (i = 0u; i < count; ++i) {
+            keys[i].name = json_object_iter_key(iter);
+            keys[i].len = json_object_iter_key_len(iter);
+            iter = json_object_iter_next((json_t *)value, iter);
+        }
+        qsort(keys, count, sizeof(*keys), snag_key_ref_compare);
+    }
     if (snag_buf_putc(out, '{') < 0) goto out;
+    iter = json_object_iter((json_t *)value);
     for (i = 0; i < count; ++i) {
-        json_t *member = json_object_getn(value, keys[i].name, keys[i].len);
+        const char *name = keys ? keys[i].name : json_object_iter_key(iter);
+        size_t length = keys ? keys[i].len : json_object_iter_key_len(iter);
+        json_t *member = keys ? json_object_getn(value, name, length) :
+            json_object_iter_value(iter);
         if ((i && snag_buf_putc(out, ',') < 0) ||
-            encode_string(out, keys[i].name, keys[i].len) < 0 || snag_buf_putc(out, ':') < 0 ||
+            encode_string(out, name, length) < 0 || snag_buf_putc(out, ':') < 0 ||
             !member || encode_value(member, out, depth + 1u, allow_real) < 0)
             goto out;
+        if (!keys) iter = json_object_iter_next((json_t *)value, iter);
     }
     if (snag_buf_putc(out, '}') < 0) goto out;
     rc = 0;

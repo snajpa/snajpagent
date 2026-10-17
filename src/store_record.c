@@ -132,23 +132,44 @@ static int
 string(struct record_input *input)
 {
     if (take(input) != '"') return snag_errno(EINVAL);
-    uint32_t value;
-    int rc;
-    while ((rc = string_character(input, &value)) > 0) {}
-    return rc;
+    for (;;) {
+        if (peek(input) < 0) return snag_errno(EINVAL);
+        /* Ordinary ASCII payloads need no decoding or per-byte reader calls.
+         * Keep the same canonical escape/UTF-8 checks at every exceptional byte. */
+        size_t start = input->used;
+        while (input->used < input->length) {
+            unsigned char byte = input->bytes[input->used];
+            if (byte < 0x20u || byte >= 0x80u || byte == '"' || byte == '\\') break;
+            ++input->used;
+        }
+        input->position += (int64_t)(input->used - start);
+        if (input->used == input->length) continue;
+        uint32_t value;
+        int rc = string_character(input, &value);
+        if (rc <= 0) return rc;
+    }
 }
 
-static struct record_input
-key_reader(const struct record_input *input, int64_t start, int64_t end)
+static void
+key_reader(struct record_input *key, const struct record_input *input,
+    int64_t start, int64_t end)
 {
-    return (struct record_input){.read = input->read, .opaque = input->opaque,
-        .read_error = input->read_error, .position = start + 1, .end = end};
+    /* peek fills bytes before any access. Zeroing/copying that 8 KiB array for
+     * every member-name comparison amplifies a small metadata scan enormously. */
+    key->read = input->read;
+    key->opaque = input->opaque;
+    key->read_error = input->read_error;
+    key->position = start + 1;
+    key->end = end;
+    key->used = key->length = key->hashed = 0u;
+    key->hash = NULL;
 }
 
 static bool
 key_is(const struct record_input *input, int64_t start, int64_t end, const char *key)
 {
-    struct record_input copy = key_reader(input, start, end);
+    struct record_input copy;
+    key_reader(&copy, input, start, end);
     uint32_t value;
     for (;;) {
         int rc = string_character(&copy, &value);
@@ -163,8 +184,10 @@ ordered_keys(const struct record_input *input, int64_t previous_start,
 {
     /* Compare decoded keys by rereading their spans. Even exceptionally long
      * member names do not accumulate allocations at each nesting level. */
-    struct record_input previous = key_reader(input, previous_start, previous_end);
-    struct record_input current = key_reader(input, start, end);
+    struct record_input previous;
+    struct record_input current;
+    key_reader(&previous, input, previous_start, previous_end);
+    key_reader(&current, input, start, end);
     for (;;) {
         uint32_t a = 0u;
         uint32_t b = 0u;
