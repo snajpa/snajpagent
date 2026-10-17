@@ -1449,7 +1449,11 @@ assert '"--host-cc=${pkgs.stdenv.cc}/bin/cc"' in mac_av
 assert '"--cc=${compiler} --target=${target} -isysroot ${sdk}"' in mac_av
 assert '"--disable-postproc"' not in mac_av  # Removed in pinned FFmpeg 8.
 assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale)"' in macos
-assert 'buildInputs = [ jansson curl av pdf png freetype expat fontconfig jpeg openjpeg xml archive ] ++ voiceRtc.dependencies ++ networkLibraries;' in macos
+assert ('buildInputs = [ libyaml jansson curl av pdf png freetype expat fontconfig '
+        'jpeg openjpeg xml archive ] ++ voiceRtc.dependencies ++ networkLibraries;') in macos
+assert 'libyaml = cmakeLibrary sourcePkgs.libyaml [' in macos
+assert '"YAML_CFLAGS=-I${libyaml}/include"' in macos
+assert '"YAML_LIBS=${libyaml}/lib/libyaml.a"' in macos
 assert "'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'" in macos
 mac_application = macos.split("  application = ", 1)[1]
 assert "'WITH_AUDIO_DEVICE=1'" in mac_application
@@ -1678,7 +1682,7 @@ print("PASS: FreeBSD PDF selects its static C++ runtime and legacy native entrop
 freebsd_archive = freebsd.split("  archive = ", 1)[1].split("  brotli = ", 1)[0]
 assert '"-DLIBMD_LIBRARY=${sdk}/usr/lib/libmd.a"' in freebsd_archive
 assert '] [ zlib iconv ];' in freebsd_archive
-assert 'buildInputs = [ jansson curl av xml archive ]' in freebsd
+assert 'buildInputs = [ libyaml jansson curl av xml archive ]' in freebsd
 assert '"-DLIBXML2_WITH_MODULES=OFF"' in freebsd and '"-DENABLE_TEST=OFF"' in freebsd_archive
 print("PASS: FreeBSD Office readers use static SDK digests and application dependency wiring")
 assert '-Dstatic_assert=_Static_assert' in freebsd
@@ -2208,7 +2212,7 @@ int main(void) {
                     "-o", str(tmp / "wide")], check=True)
     subprocess.run([str(tmp / "wide")], check=True)
 openbsd = (root / "nix/openbsd.nix").read_text()
-assert 'buildInputs = [ jansson curl av xml archive ]' in openbsd
+assert 'buildInputs = [ libyaml jansson curl av xml archive ]' in openbsd
 assert 'lib.optional early ./libarchive-wide-fallbacks.patch' in openbsd
 print("PASS: libarchive shared wide-string helpers preserve Unicode, terminators and searches")
 
@@ -2832,7 +2836,7 @@ assert '"--host-cc=${pkgs.stdenv.cc}/bin/cc"' in netbsd_av
 assert 'lib.optionals early [ ./ffmpeg-legacy-libm.patch ./ffmpeg-openbsd35-hls.patch ]' in netbsd_av
 assert 'lib.optionalString legacy " -Dstatic_assert=_Static_assert"' in netbsd_av
 assert 'lib.optionalString early " -fno-builtin-pow -fno-builtin-powf"' in netbsd_av
-assert 'buildInputs = [ jansson curl av xml archive ]' in netbsd
+assert 'buildInputs = [ libyaml jansson curl av xml archive ]' in netbsd
 assert 'MINIAUDIO_CFLAGS=-isystem ${miniaudio}' in netbsd
 assert 'patch -d "$out" -p1 < ${./miniaudio-openbsd35-headers.patch}' in netbsd
 assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale' in netbsd
