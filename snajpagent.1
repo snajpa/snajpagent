@@ -931,13 +931,29 @@ durable session totals, process id, uptime, response duration, and estimated
 prefill and decode rates.  Process totals cover the current owner process;
 session totals survive resume and owner replacement.
 .PP
-The default refresh interval is 30 seconds.  Set it with
+The monitor redraws every 0.2 seconds. Use
+.B --delay SECONDS
+for an interval from 0.2 through 86400 seconds, with up to three decimal places.
+This controls discovery and display, independently of the owner's metrics sampling.
+Owners publish metrics every 30 seconds by default; set their interval with
 .EX
 [metrics]
 refresh_seconds = 30
 .EE
-or override it for one invocation with
-.B --delay SECONDS .
+Attachment changes publish immediately in current owners. Existing owners retain
+their own sampling interval and executable until they exit.
+.PP
+The first interactive frame appears before historical metadata is loaded. Live
+metrics and saved metadata fill the table as verification finishes in the background.
+First use of an old large journal can take longer than later refreshes; navigation
+and quit remain available during that backfill. Press
+.B r
+to retry unavailable metadata. Redirected output waits for a complete snapshot.
+The monitor uses
+.B --dotdir
+or the default session directory. It accepts
+.B --config PATH
+for command-line compatibility; provider configuration and credentials are unused.
 The command also accepts
 .B --sort total|state|turns|id
 and
@@ -1224,12 +1240,23 @@ must be a nonnegative integer; zero shows running sessions only. Put N immediate
 Each status group sorts by latest saved activity, newest first; equal timestamps
 sort by session ID descending. The count applies to stored sessions only.
 Resume pickers and /session list include all saved sessions.
+Session listings, name selection and last-session discovery reuse private
+.I catalog.json
+metadata beside each journal. An unchanged source requires no journal replay.
+Missing, stale or invalid metadata is reconstructed through the journal reader;
+old writers remain compatible. A wider terminal may rebuild the preview.
+The cache contains names and prompt previews and uses the session's private-file
+protections. Removing it causes a rebuild; it is never a recovery checkpoint.
+The selected session still passes ordinary journal validation, recovery and owner
+locking before resume.
 Only
 .BR \-\-dotdir ,
 .BR \-\-config ,
 color options, Markdown presentation options, and
 .B \-\-update-model-cache
-may accompany it.  Markdown
+may accompany it. Ordinary listing reads saved session data independently of
+provider configuration and credentials; --config applies when
+--update-model-cache explicitly requests the provider refresh. Markdown
 presentation has no useful effect on session-list output. The table has headings
 for session ID, name, model, turn count, status, last prompt and IRC.
 The last two columns share the remaining terminal width equally. Long cells end

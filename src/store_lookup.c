@@ -2,8 +2,10 @@
 #include "store_internal.h"
 #include "media.h"
 #include "base.h"
+#include "context.h"
 #include "fs.h"
 #include "irc.h"
+#include "metrics.h"
 #include "session_host.h"
 
 #include <errno.h>
@@ -244,6 +246,16 @@ matching_snapshot(struct snag_store *store, struct snag_session *snapshot, const
     return -1;
 }
 
+struct catalog_row {
+    json_t *owner;
+    json_t *cells; /* Borrowed from owner. Name may also borrow the open snapshot. */
+    const char *name;
+    uint64_t activity_ms;
+};
+
+static bool load_catalog_row(struct snag_store *, struct snag_session *, const char *,
+    unsigned int, bool (*)(void *), void *, struct snag_sha256 *, struct catalog_row *);
+
 bool
 snag_session_name_valid(const char *name)
 {
@@ -268,8 +280,10 @@ snag_store_find_name(struct snag_store *store, const char *name, char id[SNAG_ID
     if (!dir) return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry, NULL, NULL) < 0) continue;
-        bool match = snapshot.name && !strcmp(snapshot.name, name);
+        struct catalog_row row;
+        if (!load_catalog_row(store, &snapshot, entry, 0u, NULL, NULL, NULL, &row)) continue;
+        bool match = row.name && !strcmp(row.name, name);
+        json_decref(row.owner);
         snag_session_close(&snapshot);
         if (!match) continue;
         if (!matches++) {
@@ -302,8 +316,10 @@ snag_store_find_last(
     if (!dir) return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry, NULL, NULL) < 0) continue;
-        uint64_t last = snapshot.last_time_ms;
+        struct catalog_row row;
+        if (!load_catalog_row(store, &snapshot, entry, 0u, NULL, NULL, NULL, &row)) continue;
+        uint64_t last = row.activity_ms;
+        json_decref(row.owner);
         if (!best[0] || last > best_time || (last == best_time && strcmp(entry, best) > 0)) {
             memcpy(best, entry, sizeof(best));
             best_time = last;
@@ -562,9 +578,10 @@ list_irc_event(void *opaque, const struct snag_session *state, uint64_t seq, con
         if (snag_irc_event_record_read(type, data, &event) < 0) return -1;
         if (!irc->topology_found && event.kind == SNAG_IRC_NICK && !event.historical &&
             (!event.routed || (event.route.kind == SNAG_IRC_CONNECTION_EVENTS && event.local)) &&
-            event.text[0] && strlen(event.text) <= SNAG_CONFIG_IRC_NICK_MAX &&
-            json_array_append(irc->renames, (json_t *)data) < 0)
-            return -1;
+            event.text[0] && strlen(event.text) <= SNAG_CONFIG_IRC_NICK_MAX) {
+            if (!irc->renames) irc->renames = json_array();
+            if (!irc->renames || json_array_append(irc->renames, (json_t *)data) < 0) return -1;
+        }
         char reference[96];
         (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ", event.stream,
             (unsigned long long)event.sequence);
@@ -584,68 +601,93 @@ list_irc_event(void *opaque, const struct snag_session *state, uint64_t seq, con
 
 static json_t *
 list_cells(
-    struct snag_store *store, struct snag_session *session, const char *state, unsigned int columns)
+    struct snag_session *session, const char *state, unsigned int columns)
 {
     struct list_irc irc = {.prompt = session->last_user,
         .preview = {.max = SNAG_MAX_DIRECT_PROMPT},
-        .endpoints = {.max = SNAG_MAX_IRC_SNAPSHOT},
-        .renames = json_array()};
+        .endpoints = {.max = SNAG_MAX_IRC_SNAPSHOT}};
     struct snag_buf cell = {.max = SNAG_MAX_DIRECT_PROMPT};
     json_t *cells = NULL;
     uint64_t before = 0u;
-    char id[SNAG_ID_HEX_LEN + 1u];
     char turns[32];
 
     const char *topology = snag_json_string(session->strings, "irc_snapshot");
-    if (!irc.renames || list_irc_prompt(&irc) < 0) goto out;
+    if (list_irc_prompt(&irc) < 0) goto out;
     irc.topology_found = topology && !*topology;
     const json_t *recent = json_object_get(session->checkpoint_context, "recent");
-    for (size_t i = 0u; i < json_array_size(recent); ++i) {
-        const json_t *entry = json_array_get(recent, i);
-        const char *type = snag_json_string(entry, "type");
-        if (type && !strcmp(type, "irc_snapshot")) {
-            irc.checkpoint_seq = session->checkpoint_seq;
-            break;
+    const json_t *history = json_object_get(session->checkpoint_context, "history_sources");
+    bool captured = snag_context_capture_seam(session, &recent, &history) == 0;
+    if (captured && !irc.topology_found) {
+        bool topology_covered = false;
+        for (size_t i = 0u; i < json_array_size(recent); ++i) {
+            const char *type = snag_json_string(json_array_get(recent, i), "type");
+            if (type && !strcmp(type, "irc_snapshot")) topology_covered = true;
+        }
+        if (!topology_covered) {
+            captured = false;
+            recent = json_object_get(session->checkpoint_context, "recent");
         }
     }
-    if (irc.topology_found) irc.checkpoint_seq = session->checkpoint_seq;
-    if (!irc.topology_found || !irc.prompt_found) {
+    if (captured) {
+        /* Native admission already materialized the current lookup closure.
+         * Rewalking the journal here duplicates recovery and can read gigabytes. */
+        for (size_t i = json_array_size(recent);
+             i && (!irc.topology_found || !irc.prompt_found);) {
+            const json_t *entry = json_array_get(recent, --i);
+            const char *type = snag_json_string(entry, "type");
+            if (type && list_irc_event(&irc, NULL, 0u, type,
+                    json_object_get(entry, "data"), NULL, 0u) < 0) goto out;
+        }
+        for (size_t i = json_array_size(history); !irc.prompt_found && i; ) {
+            const json_t *entry = json_array_get(history, --i);
+            const char *type = snag_json_string(entry, "type");
+            if (type && list_irc_event(&irc, NULL, 0u, type,
+                    json_object_get(entry, "data"), NULL, 0u) < 0) goto out;
+        }
+    }
+    if (!captured) {
+        for (size_t i = 0u; i < json_array_size(recent); ++i) {
+            const json_t *entry = json_array_get(recent, i);
+            const char *type = snag_json_string(entry, "type");
+            if (type && !strcmp(type, "irc_snapshot")) {
+                irc.checkpoint_seq = session->checkpoint_seq;
+                break;
+            }
+        }
+        if (irc.topology_found) irc.checkpoint_seq = session->checkpoint_seq;
+        if (!irc.topology_found || !irc.prompt_found) {
+            (void)snag_session_each_event_reverse(
+                session, 0u, SIZE_MAX, list_irc_event, &irc, &before, NULL, 0u);
+        }
+        if (irc.checkpoint_seq) {
+            /* Apply fresh suffix events before the verified recent checkpoint data.
+             * The snapshot boundary keeps old or unrelated renames out of the list. */
+            irc.checkpoint_seq = 0u;
+            for (size_t i = json_array_size(recent);
+                 i && (!irc.topology_found || !irc.prompt_found);) {
+                const json_t *entry = json_array_get(recent, --i);
+                const char *type = snag_json_string(entry, "type");
+                if (type && list_irc_event(&irc, NULL, 0u, type,
+                        json_object_get(entry, "data"), NULL, 0u) < 0)
+                    goto out;
+            }
+            if (before && (!irc.topology_found || !irc.prompt_found)) {
+                (void)snag_session_each_event_reverse(
+                    session, before, SIZE_MAX, list_irc_event, &irc, &before, NULL, 0u);
+            }
+        }
+    } else if (!irc.topology_found || !irc.prompt_found) {
         (void)snag_session_each_event_reverse(
             session, 0u, SIZE_MAX, list_irc_event, &irc, &before, NULL, 0u);
     }
-    if (irc.checkpoint_seq) {
-        /* Apply fresh suffix events before the verified recent checkpoint data.
-         * The snapshot boundary keeps old or unrelated renames out of the list. */
-        irc.checkpoint_seq = 0u;
-        for (size_t i = json_array_size(recent); i && (!irc.topology_found || !irc.prompt_found);) {
-            const json_t *entry = json_array_get(recent, --i);
-            const char *type = snag_json_string(entry, "type");
-            if (type &&
-                list_irc_event(&irc, NULL, 0u, type, json_object_get(entry, "data"), NULL, 0u) < 0)
-                goto out;
-        }
-        if (before && (!irc.topology_found || !irc.prompt_found)) {
-            (void)snag_session_each_event_reverse(
-                session, before, SIZE_MAX, list_irc_event, &irc, &before, NULL, 0u);
-        }
-    }
     if (!irc.topology_found && topology) {
-        /* A damaged historical prefix still permits the last cached topology. */
         json_array_clear(irc.renames);
         if (list_irc_topology(&irc, topology) < 0) goto out;
     }
     if (snag_buf_terminate(&irc.preview) < 0 || snag_buf_terminate(&irc.endpoints) < 0) goto out;
-    /* Expand collisions, including stored/trash sessions outside this filter,
-     * so the displayed selector resolves through every session entry point. */
-    for (size_t length = 8u; length <= SNAG_ID_HEX_LEN; ++length) {
-        struct resolved_session target;
-        memcpy(id, session->id, length);
-        id[length] = '\0';
-        if (resolve_prefix(store, id, &target, true, NULL, NULL, NULL, 0u) == 0 || errno != EEXIST)
-            break;
-    }
     (void)snprintf(turns, sizeof(turns), "%llu", (unsigned long long)session->turn_count);
-    const char *values[] = {id, session->name ? session->name : "-", session->default_model, turns,
+    const char *values[] = {session->id, session->name ? session->name : "-",
+        session->default_model, turns,
         state, irc.preview.len ? (const char *)irc.preview.data : session->last_user,
         irc.endpoints.len ? (const char *)irc.endpoints.data : "-"};
     cells = json_array();
@@ -663,6 +705,206 @@ out:
     snag_buf_free(&irc.preview);
     snag_buf_free(&irc.endpoints);
     return cells;
+}
+
+/* A catalog is disposable display metadata, never a recovery checkpoint. */
+/* The terminal size protocol has 16-bit columns. Keep enough preview for any
+ * supported terminal, without copying an entire multi-megabyte direct prompt. */
+#define CATALOG_COLUMNS UINT16_MAX
+#define CATALOG_MAX ((7u * SNAG_MAX_DIRECT_PROMPT + SNAG_PATH_MAX_BYTES) * 6u + 2048u)
+
+static void
+catalog_source(const snag_file_info *info, json_int_t values[8])
+{
+    long modified = 0;
+    long changed = 0;
+    int64_t change_seconds = 0;
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    modified = info->st_mtimespec.tv_nsec;
+    changed = info->st_ctimespec.tv_nsec;
+    change_seconds = info->st_ctime;
+#elif defined(_WIN32)
+    modified = info->mtime_nsec;
+#else
+    modified = info->st_mtim.tv_nsec;
+    changed = info->st_ctim.tv_nsec;
+    change_seconds = info->st_ctime;
+#endif
+    values[0] = (json_int_t)info->st_dev;
+    values[1] = (json_int_t)info->st_ino;
+    values[2] = (json_int_t)info->st_size;
+    values[3] = (json_int_t)info->st_mode;
+    values[4] = (json_int_t)info->st_mtime;
+    values[5] = (json_int_t)modified;
+    values[6] = (json_int_t)change_seconds;
+    values[7] = (json_int_t)changed;
+}
+
+static json_t *
+catalog_read(int directory, const char *id, const snag_file_info *source, unsigned int columns)
+{
+    int fd = snag_open_read_security_at(directory, "catalog.json", false);
+    snag_file_info info;
+    json_t *row = NULL;
+    if (fd < 0) return NULL;
+    if (snag_store_verify_private_fd(fd, false, "session catalog", NULL, 0u) == 0 &&
+        snag_fstat(fd, &info) == 0 && info.st_size > 0 && info.st_size <= CATALOG_MAX) {
+        unsigned char *bytes = malloc((size_t)info.st_size);
+        if (bytes && snag_pread(fd, bytes, (size_t)info.st_size, 0) == info.st_size)
+            row = snag_json_load_strict(bytes, (size_t)info.st_size, CATALOG_MAX, NULL, 0u);
+        free(bytes);
+    }
+    (void)close(fd);
+    uint64_t version;
+    uint64_t activity;
+    uint64_t width;
+    const char *saved_id = json_string_value(
+        json_array_get(json_object_get(row, "cells"), 0u));
+    const char *name = snag_json_string(row, "name");
+    const json_t *cells = json_object_get(row, "cells");
+    bool valid = snag_json_integer_u64(row, "version", &version) == 0 && version == 2u &&
+        snag_json_integer_u64(row, "columns", &width) == 0 &&
+        width >= columns && width <= CATALOG_COLUMNS &&
+        saved_id && !strcmp(saved_id, id) && name && strlen(name) <= SNAG_PATH_MAX_BYTES &&
+        json_string_length(json_object_get(row, "name")) == strlen(name) &&
+        snag_json_integer_u64(row, "activity_ms", &activity) == 0 &&
+        json_is_array(cells) && json_array_size(cells) == 7u;
+    for (size_t i = 0u; valid && i < 7u; ++i) {
+        const char *text = json_string_value(json_array_get(cells, i));
+        valid = text && json_string_length(json_array_get(cells, i)) == strlen(text) &&
+            strlen(text) <= SNAG_MAX_DIRECT_PROMPT;
+    }
+    const json_t *saved_source = json_object_get(row, "source");
+    valid = valid && json_is_array(saved_source) && json_array_size(saved_source) == 8u;
+    for (size_t i = 0u; valid && i < 8u; ++i)
+        valid = json_is_integer(json_array_get(saved_source, i));
+    if (valid && source) {
+        json_int_t values[8];
+        catalog_source(source, values);
+        for (size_t i = 0u; valid && i < 8u; ++i)
+            valid = values[i] == json_integer_value(json_array_get(saved_source, i));
+    }
+    if (valid) return row;
+    json_decref(row);
+    return NULL;
+}
+
+static int
+catalog_emit(const char *bytes, size_t length, void *opaque)
+{
+    return snag_write_full(*(int *)opaque, bytes, length);
+}
+
+static void
+catalog_write(struct snag_session *session, json_t *cells,
+    const snag_file_info *before, unsigned int columns)
+{
+    snag_file_info after;
+    char random[SNAG_ID_HEX_LEN + 1u];
+    char temporary[sizeof(".catalog-") + SNAG_ID_HEX_LEN];
+    if (!cells || session->dir_fd < 0 || session->log_fd < 0 ||
+        snag_fstat(session->log_fd, &after) < 0 || !snag_file_unchanged(before, &after) ||
+        snag_random_id(random) < 0) return;
+    (void)snprintf(temporary, sizeof(temporary), ".catalog-%s", random);
+    int fd = snag_create_private_at(session->dir_fd, temporary, true);
+    if (fd < 0) return;
+    char metadata[512];
+    int length = snprintf(metadata, sizeof(metadata),
+        "{\"version\":2,\"columns\":%u,\"activity_ms\":%llu,\"name\":",
+        columns, (unsigned long long)session->last_time_ms);
+    bool written = length > 0 && (size_t)length < sizeof(metadata) &&
+        snag_write_full(fd, metadata, (size_t)length) == 0;
+    const json_t *name = json_object_get(session->strings, "name");
+    size_t flags = JSON_COMPACT | JSON_ENSURE_ASCII | JSON_ENCODE_ANY;
+    written = written && (name ? json_dump_callback(name, catalog_emit, &fd, flags) == 0 :
+        snag_write_full(fd, "\"\"", 2u) == 0);
+    written = written && snag_write_full(fd, ",\"cells\":", 9u) == 0 &&
+        json_dump_callback(cells, catalog_emit, &fd, flags) == 0;
+    json_int_t values[8];
+    catalog_source(&after, values);
+    length = snprintf(metadata, sizeof(metadata),
+        ",\"source\":[%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld]}",
+        (long long)values[0], (long long)values[1], (long long)values[2],
+        (long long)values[3], (long long)values[4], (long long)values[5],
+        (long long)values[6], (long long)values[7]);
+    written = written && length > 0 && (size_t)length < sizeof(metadata) &&
+        snag_write_full(fd, metadata, (size_t)length) == 0;
+    if (close(fd) < 0) written = false;
+    /* A power-loss miss rebuilds disposable metadata from the synced journal.
+     * Stream borrowed cells; do not allocate another row or serialized copy. */
+    if (written && snag_fstat(session->log_fd, &after) == 0 &&
+        snag_file_unchanged(before, &after))
+        (void)snag_rename_at(session->dir_fd, temporary, session->dir_fd, "catalog.json");
+    (void)snag_unlink_at(session->dir_fd, temporary, false);
+}
+
+static bool
+load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const char *id,
+    unsigned int columns, bool (*cancel)(void *), void *cancel_opaque,
+    struct snag_sha256 *pending, struct catalog_row *summary)
+{
+    if (!columns) columns = 80u;
+    if (strlen(id) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) return false;
+    snag_session_init(snapshot);
+    /* Metadata and lock checks need only the private directory descriptor. Full
+     * snapshot admission below constructs paths only when replay is necessary. */
+    snapshot->dir_fd = snag_open_read_security_at(store->sessions_fd, id, true);
+    if (snapshot->dir_fd < 0 || snag_store_verify_private_fd(snapshot->dir_fd, true,
+            "session directory", NULL, 0u) < 0) goto fail;
+    snapshot->log_fd = snag_open_read_security_at(snapshot->dir_fd, "journal.bin", false);
+    if (snapshot->log_fd < 0 && errno == ENOENT)
+        snapshot->log_fd = snag_open_read_security_at(snapshot->dir_fd, "events.jsonl", false);
+    snag_file_info before;
+    if (snapshot->log_fd < 0 ||
+        snag_store_verify_private_fd(snapshot->log_fd, false, "journal", NULL, 0u) < 0 ||
+        snag_fstat(snapshot->log_fd, &before) < 0) goto fail;
+    json_t *row = catalog_read(snapshot->dir_fd, id, &before, columns);
+    if (row) goto cached;
+    json_decref(row);
+    if (pending) {
+        json_int_t source[8];
+        catalog_source(&before, source);
+        snag_sha256_update(pending, id, SNAG_ID_HEX_LEN);
+        snag_sha256_update(pending, source, sizeof(source));
+        /* A monitor may show the last metadata from an append-only owner while
+         * its worker verifies the new boundary. Replacements never reuse it. */
+        row = catalog_read(snapshot->dir_fd, id, NULL, columns);
+        const json_t *stamp = json_object_get(row, "source");
+        if (row && json_integer_value(json_array_get(stamp, 0u)) == (json_int_t)before.st_dev &&
+            json_integer_value(json_array_get(stamp, 1u)) == (json_int_t)before.st_ino &&
+            json_integer_value(json_array_get(stamp, 2u)) <= before.st_size) goto cached;
+        json_decref(row);
+        struct snag_metrics_view metrics;
+        if (snag_metrics_read(store->root_fd, id, &metrics, NULL, 0u) == 0 && metrics.valid) {
+            char turns[32];
+            (void)snprintf(turns, sizeof(turns), "%llu", (unsigned long long)metrics.turns);
+            json_t *cells = json_pack("[s,s,s,s,s,s,s]", id, "-", metrics.model,
+                turns, "stored", "-", "-");
+            if (!cells) goto fail;
+            *summary = (struct catalog_row){.owner = cells, .cells = cells};
+            return true;
+        }
+        goto fail;
+    }
+    snag_session_close(snapshot);
+    if (matching_snapshot(store, snapshot, id, cancel, cancel_opaque) < 0) return false;
+    snag_file_info after;
+    if (snag_fstat(snapshot->log_fd, &after) < 0 ||
+        !snag_file_unchanged(&before, &after)) goto fail;
+    json_t *cells = list_cells(snapshot, "stored", columns);
+    if (!cells) goto fail;
+    catalog_write(snapshot, cells, &before, columns);
+    *summary = (struct catalog_row){.owner = cells, .cells = cells,
+        .name = snapshot->name, .activity_ms = snapshot->last_time_ms};
+    return true;
+cached:
+    *summary = (struct catalog_row){.owner = row,
+        .cells = json_object_get(row, "cells"), .name = snag_json_string(row, "name"),
+        .activity_ms = (uint64_t)json_integer_value(json_object_get(row, "activity_ms"))};
+    return true;
+fail:
+    snag_session_close(snapshot);
+    return false;
 }
 
 static size_t
@@ -683,9 +925,10 @@ list_text_width(const char *text)
 
 struct session_list_row {
     json_t *cells;
+    json_t *id; /* Retain the original cell while replacing its visible prefix. */
     uint64_t time_ms;
     unsigned int status;
-    char id[SNAG_ID_HEX_LEN + 1u];
+    unsigned char prefix;
 };
 
 static int
@@ -697,6 +940,65 @@ compare_list_rows(const void *left, const void *right)
     if (a->time_ms != b->time_ms) return a->time_ms > b->time_ms ? -1 : 1;
     return strcmp(json_string_value(json_array_get(b->cells, 0u)),
         json_string_value(json_array_get(a->cells, 0u)));
+}
+
+static int
+compare_ids(const void *left, const void *right)
+{
+    const struct session_list_row *a = left;
+    const struct session_list_row *b = right;
+    return strcmp(json_string_value(a->id), json_string_value(b->id));
+}
+
+static void
+extend_prefix(struct session_list_row *row, const char *id)
+{
+    const char *row_id = json_string_value(row->id);
+    size_t same = 0u;
+    while (same < SNAG_ID_HEX_LEN && id[same] == row_id[same]) ++same;
+    if (same < SNAG_ID_HEX_LEN && same >= row->prefix)
+        row->prefix = (unsigned char)(same + 1u);
+}
+
+static int
+shorten_catalog_ids(struct snag_store *store, struct session_list_row *rows, size_t count)
+{
+    /* Only the adjacent listed IDs can share the longest prefix with an entry.
+     * Stream all selectors, including trash and unreadable sessions, without a
+     * second ID array or one directory traversal per displayed row. */
+    qsort(rows, count, sizeof(*rows), compare_ids);
+    for (size_t i = 0u; i < count; ++i) rows[i].prefix = 8u;
+    for (unsigned int trash = 0u; trash < 2u; ++trash) {
+        struct snag_directory *dir = open_store_dir(store, trash ? "trash" : "sessions",
+            "session selectors", NULL, 0u);
+        if (!dir) return -1;
+        const char *entry;
+        while ((entry = snag_directory_next(dir))) {
+            char trash_id[SNAG_ID_HEX_LEN + 1u];
+            const char *id = entry;
+            if (trash) {
+                if (!snag_store_trash_id(entry, trash_id)) continue;
+                id = trash_id;
+            } else if (strlen(entry) != SNAG_ID_HEX_LEN ||
+                !snag_hex_is_lower(entry, SNAG_ID_HEX_LEN)) continue;
+            size_t low = 0u;
+            size_t high = count;
+            while (low < high) {
+                size_t middle = low + (high - low) / 2u;
+                if (strcmp(json_string_value(rows[middle].id), id) < 0) low = middle + 1u;
+                else high = middle;
+            }
+            if (low) extend_prefix(&rows[low - 1u], id);
+            if (low < count && !strcmp(json_string_value(rows[low].id), id)) ++low;
+            if (low < count) extend_prefix(&rows[low], id);
+        }
+        if (finish_directory(dir, NULL, 0u) < 0) return -1;
+    }
+    for (size_t i = 0u; i < count; ++i) {
+        if (json_array_set_new(rows[i].cells, 0u,
+                json_stringn(json_string_value(rows[i].id), rows[i].prefix)) < 0) return -1;
+    }
+    return 0;
 }
 
 static int
@@ -757,7 +1059,8 @@ out:
 static int
 list_sessions(struct snag_store *store, const struct snag_session *owned, uint64_t stored_limit,
     unsigned int columns, snag_store_emit_fn emit, void *opaque, json_t *catalog,
-    bool (*cancel)(void *), void *cancel_opaque, char *error, size_t error_size)
+    bool (*cancel)(void *), void *cancel_opaque, struct snag_sha256 *pending,
+    char *error, size_t error_size)
 {
     struct snag_directory *dir = open_sessions_dir(store, error, error_size);
     const char *entry;
@@ -771,7 +1074,9 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
     if (!snapshot) goto out;
     while ((entry = snag_directory_next(dir)) != NULL) {
         if (cancel && cancel(cancel_opaque)) goto canceled;
-        if (matching_snapshot(store, snapshot, entry, cancel, cancel_opaque) < 0) {
+        struct catalog_row summary;
+        if (!load_catalog_row(
+                store, snapshot, entry, columns, cancel, cancel_opaque, pending, &summary)) {
             if (cancel && cancel(cancel_opaque)) goto canceled;
             continue;
         }
@@ -779,15 +1084,21 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
         bool live = owned && owned->lock_fd >= 0 && !strcmp(owned->id, entry);
         if (!live) live = snag_session_is_live(snapshot);
         if (!stored_limit && !live) {
+            json_decref(summary.owner);
             snag_session_close(snapshot);
             continue;
         }
-        int attachment =
-            live ? snag_session_endpoint_status(snapshot->dir_fd, snapshot->dir_path) : -1;
-        unsigned int status = !live ? 3u : attachment > 0 ? 0u : attachment == 0 ? 1u : 2u;
+        struct snag_metrics_view metrics;
+        unsigned int status = live ? 2u : 3u;
+        if (live && snag_metrics_read(store->root_fd, entry, &metrics, NULL, 0u) == 0) {
+            if (!strcmp(metrics.state, "attached")) status = 0u;
+            else if (!strcmp(metrics.state, "detached")) status = 1u;
+        }
         static const char *const states[] = {"attached", "detached", "running", "stored"};
-        uint64_t time_ms = snapshot->last_time_ms;
-        json_t *cells = list_cells(store, snapshot, states[status], columns);
+        uint64_t time_ms = summary.activity_ms;
+        json_t *cells = json_incref(summary.cells);
+        if (cells) (void)json_array_set_new(cells, 4u, json_string(states[status]));
+        json_decref(summary.owner);
         snag_session_close(snapshot);
         if (cancel && cancel(cancel_opaque)) {
             json_decref(cells);
@@ -808,7 +1119,7 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
         }
         rows[count] =
             (struct session_list_row){.cells = cells, .time_ms = time_ms, .status = status};
-        memcpy(rows[count].id, entry, sizeof(rows[count].id));
+        rows[count].id = json_incref(json_array_get(cells, 0u));
         ++count;
     }
     if (cancel && cancel(cancel_opaque)) goto canceled;
@@ -818,6 +1129,7 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
     if (!count) {
         if (!catalog) (void)snag_errorf(error, error_size, "no matching sessions");
     } else {
+        if (shorten_catalog_ids(store, rows, count) < 0) { rc = -1; goto out; }
         qsort(rows, count, sizeof(*rows), compare_list_rows);
         size_t visible = 0u;
         uint64_t stored = 0u;
@@ -827,8 +1139,9 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
         }
         if (catalog) {
             for (size_t i = 0u; i < visible; ++i) {
-                json_t *row = json_pack("{s:s,s:I,s:i,s:O}", "id", rows[i].id, "activity_ms",
-                    (json_int_t)rows[i].time_ms, "status_rank", (int)rows[i].status, "cells",
+                json_t *row = json_pack("{s:s,s:I,s:i,s:O}", "id",
+                    json_string_value(rows[i].id), "activity_ms", (json_int_t)rows[i].time_ms,
+                    "status_rank", (int)rows[i].status, "cells",
                     rows[i].cells);
                 if (!row || json_array_append_new(catalog, row) < 0) {
                     rc = -1;
@@ -844,7 +1157,10 @@ canceled:
     rc = snag_fail(error, error_size, ECANCELED, "session list loading canceled");
 out:
     if (dir) (void)snag_directory_close(dir);
-    for (size_t row = 0u; row < count; ++row) json_decref(rows[row].cells);
+    for (size_t row = 0u; row < count; ++row) {
+        json_decref(rows[row].cells);
+        json_decref(rows[row].id);
+    }
     free(rows);
     free(snapshot);
     if (rc < 0 && error_size && !error[0])
@@ -854,10 +1170,11 @@ out:
 
 int
 snag_store_list(struct snag_store *store, const struct snag_session *owned, uint64_t stored_limit,
-    unsigned int columns, snag_store_emit_fn emit, void *opaque, char *error, size_t error_size)
+    unsigned int columns, snag_store_emit_fn emit, void *opaque, char *error,
+    size_t error_size)
 {
-    return list_sessions(
-        store, owned, stored_limit, columns, emit, opaque, NULL, NULL, NULL, error, error_size);
+    return list_sessions(store, owned, stored_limit, columns, emit, opaque, NULL, NULL,
+        NULL, NULL, error, error_size);
 }
 
 json_t *
@@ -867,9 +1184,53 @@ snag_store_catalog(struct snag_store *store, const struct snag_session *owned,
 {
     json_t *rows = json_array();
     if (rows && list_sessions(store, owned, stored_limit, 0u, NULL, NULL, rows, cancel,
-                    cancel_opaque, error, error_size) < 0) {
+                    cancel_opaque, NULL, error, error_size) < 0) {
         json_decref(rows);
         rows = NULL;
     }
     return rows;
+}
+
+json_t *
+snag_store_catalog_cached(
+    struct snag_store *store, char pending[SNAG_SHA256_HEX_LEN + 1u],
+    char *error, size_t error_size)
+{
+    struct snag_sha256 source;
+    snag_sha256_init(&source);
+    pending[0] = '\0';
+    json_t *rows = json_array();
+    if (rows && list_sessions(store, NULL, UINT64_MAX, 0u, NULL, NULL, rows, NULL,
+            NULL, &source, error, error_size) < 0) {
+        json_decref(rows);
+        return NULL;
+    }
+    if (source.bit_count) snag_sha256_final_hex(&source, pending);
+    return rows;
+}
+
+int
+snag_store_catalog_refresh(struct snag_store *store, bool (*cancel)(void *), void *opaque,
+    char *error, size_t error_size)
+{
+    struct snag_directory *directory = open_sessions_dir(store, error, error_size);
+    if (!directory) return -1;
+    struct snag_session *snapshot = malloc(sizeof(*snapshot));
+    if (!snapshot) { (void)snag_directory_close(directory); return -1; }
+    const char *id;
+    int rc = 0;
+    while ((id = snag_directory_next(directory))) {
+        if (cancel && cancel(opaque)) {
+            rc = snag_fail(error, error_size, ECANCELED, "catalog refresh canceled");
+            break;
+        }
+        struct catalog_row row;
+        if (load_catalog_row(store, snapshot, id, 0u, cancel, opaque, NULL, &row)) {
+            json_decref(row.owner);
+            snag_session_close(snapshot);
+        }
+    }
+    free(snapshot);
+    int closed = finish_directory(directory, error, error_size);
+    return rc < 0 ? rc : closed;
 }

@@ -16,12 +16,14 @@
 #ifndef _WIN32
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 #endif
 
-#define TOP_DEFAULT_DELAY 30u
+#define TOP_DEFAULT_DELAY 200u
 #define TOP_MAX_DELAY 86400u
 #define TOP_DEFAULT_ROWS 24u
 #define TOP_DEFAULT_COLUMNS 120u
@@ -34,11 +36,9 @@ enum top_sort {
 };
 
 struct top_options {
-    const char *config_path;
     const char *dotdir;
     enum top_sort sort;
-    unsigned int delay_seconds;
-    bool delay_set;
+    unsigned int delay_ms;
     bool color_always;
     bool color_never;
 };
@@ -62,13 +62,19 @@ struct top_row {
 
 struct top_context {
     struct top_options options;
-    struct snag_config config;
     struct snag_store store;
     char *dotdir;
     struct top_row *rows;
     size_t row_count;
     size_t selected;
     bool color;
+    bool cache_only;
+    char catalog_pending[SNAG_SHA256_HEX_LEN + 1u];
+#ifndef _WIN32
+    pid_t catalog_pid;
+    char catalog_attempt[SNAG_SHA256_HEX_LEN + 1u];
+    bool catalog_failed;
+#endif
 };
 
 static void
@@ -80,23 +86,34 @@ usage(void)
 }
 
 static int
-parse_uint(const char *text, unsigned int *value)
+parse_delay(const char *text, unsigned int *value)
 {
-    char *end;
-    unsigned long parsed;
-
+    uint64_t seconds = 0u;
+    unsigned int fraction = 0u;
+    unsigned int scale = 100u;
     if (!text || !*text) return -1;
-    errno = 0;
-    parsed = strtoul(text, &end, 10);
-    if (errno || *end || parsed > UINT_MAX) return -1;
-    *value = (unsigned int)parsed;
+    while (*text >= '0' && *text <= '9') {
+        seconds = seconds * 10u + (unsigned int)(*text++ - '0');
+        if (seconds > TOP_MAX_DELAY) return -1;
+    }
+    if (*text == '.') {
+        ++text;
+        if (!*text) return -1;
+        while (*text >= '0' && *text <= '9' && scale) {
+            fraction += (unsigned int)(*text++ - '0') * scale;
+            scale /= 10u;
+        }
+    }
+    uint64_t milliseconds = seconds * 1000u + fraction;
+    if (*text || milliseconds < 200u || milliseconds > TOP_MAX_DELAY * 1000u) return -1;
+    *value = (unsigned int)milliseconds;
     return 0;
 }
 
 static int
 parse_options(struct top_options *options, int argc, char **argv)
 {
-    *options = (struct top_options){.sort = TOP_SORT_TOTAL, .delay_seconds = TOP_DEFAULT_DELAY};
+    *options = (struct top_options){.sort = TOP_SORT_TOTAL, .delay_ms = TOP_DEFAULT_DELAY};
     for (int i = 0; i < argc; ++i) {
         const char *argument = argv[i];
         const char *value = NULL;
@@ -113,7 +130,7 @@ parse_options(struct top_options *options, int argc, char **argv)
             value = argv[i];
         } else if (!strncmp(argument, "--config=", 9u)) {
             value = argument + 9u;
-            options->config_path = value;
+            if (!*value) return -1;
             continue;
         } else if (!strncmp(argument, "--dotdir=", 9u)) {
             value = argument + 9u;
@@ -121,9 +138,8 @@ parse_options(struct top_options *options, int argc, char **argv)
             continue;
         } else if (!strncmp(argument, "--delay=", 8u)) {
             value = argument + 8u;
-            if (parse_uint(value, &delay) < 0 || !delay || delay > TOP_MAX_DELAY) return -1;
-            options->delay_seconds = delay;
-            options->delay_set = true;
+            if (parse_delay(value, &delay) < 0) return -1;
+            options->delay_ms = delay;
             continue;
         } else if (!strncmp(argument, "--sort=", 7u)) {
             value = argument + 7u;
@@ -146,12 +162,11 @@ parse_options(struct top_options *options, int argc, char **argv)
             return -1;
         }
         if (!value || !*value) return -1;
-        if (!strcmp(argument, "--config")) options->config_path = value;
+        if (!strcmp(argument, "--config")) continue;
         else if (!strcmp(argument, "--dotdir")) options->dotdir = value;
         else if (!strcmp(argument, "--delay") || !strcmp(argument, "-d")) {
-            if (parse_uint(value, &delay) < 0 || !delay || delay > TOP_MAX_DELAY) return -1;
-            options->delay_seconds = delay;
-            options->delay_set = true;
+            if (parse_delay(value, &delay) < 0) return -1;
+            options->delay_ms = delay;
         } else if (!strcmp(argument, "--sort")) {
             if (!strcmp(value, "total")) options->sort = TOP_SORT_TOTAL;
             else if (!strcmp(value, "state")) options->sort = TOP_SORT_STATE;
@@ -183,16 +198,16 @@ status_name(int status)
 }
 
 static int
-compare_rows(const struct top_row *a, const struct top_row *b, const struct top_options *options)
+compare_rows(const struct top_row *a, const struct top_row *b, enum top_sort sort)
 {
     int order = 0;
 
     if (a->status_rank != b->status_rank)
         return a->status_rank < b->status_rank ? -1 : 1;
-    if (options->sort == TOP_SORT_STATE) order = strcmp(a->state, b->state);
-    else if (options->sort == TOP_SORT_TURNS)
+    if (sort == TOP_SORT_STATE) order = strcmp(a->state, b->state);
+    else if (sort == TOP_SORT_TURNS)
         order = a->turns == b->turns ? 0 : a->turns > b->turns ? -1 : 1;
-    else if (options->sort == TOP_SORT_TOTAL)
+    else if (sort == TOP_SORT_TOTAL)
         order = a->process_total == b->process_total ? 0 :
             a->process_total > b->process_total ? -1 : 1;
     else order = strcmp(a->id, b->id);
@@ -200,19 +215,36 @@ compare_rows(const struct top_row *a, const struct top_row *b, const struct top_
     return strcmp(a->id, b->id);
 }
 
+static int
+compare_total(const void *left, const void *right)
+{
+    return compare_rows(left, right, TOP_SORT_TOTAL);
+}
+
+static int
+compare_state(const void *left, const void *right)
+{
+    return compare_rows(left, right, TOP_SORT_STATE);
+}
+
+static int
+compare_turns(const void *left, const void *right)
+{
+    return compare_rows(left, right, TOP_SORT_TURNS);
+}
+
+static int
+compare_id(const void *left, const void *right)
+{
+    return compare_rows(left, right, TOP_SORT_ID);
+}
+
 static void
 sort_rows(struct top_row *rows, size_t count, const struct top_options *options)
 {
-    for (size_t i = 1u; i < count; ++i) {
-        struct top_row current = rows[i];
-        size_t position = i;
-
-        while (position && compare_rows(&current, &rows[position - 1u], options) < 0) {
-            rows[position] = rows[position - 1u];
-            --position;
-        }
-        rows[position] = current;
-    }
+    int (*const compare[])(const void *, const void *) = {
+        compare_total, compare_state, compare_turns, compare_id};
+    qsort(rows, count, sizeof(*rows), compare[options->sort]);
 }
 
 static int
@@ -226,7 +258,9 @@ load_rows(struct top_context *context, char *error, size_t error_size)
     if (context->selected < context->row_count)
         copy_text(selected_id, sizeof(selected_id), context->rows[context->selected].id);
 
-    catalog = snag_store_catalog(&context->store, NULL, UINT64_MAX, NULL, NULL, error, error_size);
+    catalog = context->cache_only ? snag_store_catalog_cached(
+        &context->store, context->catalog_pending, error, error_size) :
+        snag_store_catalog(&context->store, NULL, UINT64_MAX, NULL, NULL, error, error_size);
     if (!catalog) return -1;
     count = json_array_size(catalog);
     if (count) {
@@ -255,8 +289,8 @@ load_rows(struct top_context *context, char *error, size_t error_size)
         copy_text(rows[i].state, sizeof(rows[i].state), status_name(rows[i].status_rank));
         copy_text(rows[i].model, sizeof(rows[i].model),
             json_string_value(json_array_get(cells, 2u)));
-        if (json_is_integer(json_array_get(cells, 3u)))
-            rows[i].turns = (uint64_t)json_integer_value(json_array_get(cells, 3u));
+        const char *turns = json_string_value(json_array_get(cells, 3u));
+        if (turns) rows[i].turns = strtoull(turns, NULL, 10);
         if (snag_metrics_read(context->store.root_fd, id, &view, metrics_error,
                 sizeof(metrics_error)) == 0 && view.valid) {
             rows[i].metrics_valid = true;
@@ -373,8 +407,11 @@ render(struct top_context *context, bool interactive, const char *message)
     if (interactive && snag_buf_append(&out, "\033[2J\033[H", 7u) < 0) goto out;
     if (message && *message) {
         if (snag_buf_printf(&line, "snajpagent top  %s", message) < 0) goto out;
-    } else if (snag_buf_printf(&line, "snajpagent top  delay=%us  arrows/jk move  x kill  q quit",
-                   context->options.delay_seconds) < 0) goto out;
+    } else if (snag_buf_printf(&line,
+                   "snajpagent top  delay=%u.%03us  arrows/jk move  x kill  q quit",
+                   context->options.delay_ms / 1000u, context->options.delay_ms % 1000u) < 0) {
+        goto out;
+    }
     if (append_line(&out, &line, width, interactive, false, false, false) < 0) goto out;
     line.len = 0u;
     {
@@ -519,6 +556,47 @@ kill_confirmed(struct top_context *context, const struct top_row *target,
 }
 #endif
 
+#ifndef _WIN32
+static volatile sig_atomic_t top_signal;
+
+static void
+top_interrupted(int number)
+{
+    top_signal = number;
+}
+
+static int
+request_catalog(struct top_context *context, char *error, size_t error_size)
+{
+    if (context->catalog_pid) {
+        int status;
+        pid_t result = waitpid(context->catalog_pid, &status, WNOHANG);
+        if (!result) return 0;
+        if (result < 0 && errno == EINTR) return 0;
+        context->catalog_pid = 0;
+        if (result < 0) return snag_errorf(error, error_size, "cannot collect catalog reader");
+        context->catalog_failed = !WIFEXITED(status) || WEXITSTATUS(status) != 0;
+    }
+    if (!context->catalog_pending[0] ||
+        !strcmp(context->catalog_pending, context->catalog_attempt)) return 0;
+    copy_text(context->catalog_attempt, sizeof(context->catalog_attempt), context->catalog_pending);
+    context->catalog_failed = false;
+    /* main dispatches top before initializing providers or other threads. The
+     * sole child owns slow verification; the monitor never waits for it to draw. */
+    pid_t child = fork();
+    if (child < 0) return snag_errorf(error, error_size, "cannot start catalog reader");
+    if (!child) {
+        (void)close(STDIN_FILENO);
+        (void)close(STDOUT_FILENO);
+        (void)close(STDERR_FILENO);
+        int rc = snag_store_catalog_refresh(&context->store, NULL, NULL, NULL, 0u);
+        _exit(rc < 0 ? 1 : 0);
+    }
+    context->catalog_pid = child;
+    return 0;
+}
+#endif
+
 int
 snag_top_main(int argc, char **argv)
 {
@@ -526,35 +604,36 @@ snag_top_main(int argc, char **argv)
     char error[256] = {0};
     int option_rc;
     int rc = 2;
+#ifndef _WIN32
+    const int signals[] = {SIGINT, SIGTERM, SIGHUP, SIGCHLD};
+    const size_t signal_count = sizeof(signals) / sizeof(signals[0]);
+    struct sigaction saved_signals[sizeof(signals) / sizeof(signals[0])];
+    size_t installed_signals = 0u;
+    top_signal = 0;
+#endif
 
     memset(&context, 0, sizeof(context));
-    snag_config_init(&context.config);
     snag_store_init(&context.store);
     option_rc = parse_options(&context.options, argc, argv);
     if (option_rc > 0) {
-        snag_config_free(&context.config);
         return 0;
     }
     if (option_rc < 0) {
         usage();
-        snag_config_free(&context.config);
         return 2;
     }
     context.dotdir = snag_app_dotdir(context.options.dotdir, error, sizeof(error));
-    if (!context.dotdir || snag_config_load(&context.config, context.options.config_path,
-            context.dotdir, error, sizeof(error)) < 0 ||
+    if (!context.dotdir ||
         snag_store_open(&context.store, context.dotdir, error, sizeof(error)) < 0)
         goto out;
-    if (!context.options.delay_set && context.config.metrics_refresh_seconds)
-        context.options.delay_seconds = context.config.metrics_refresh_seconds;
 #ifndef _WIN32
     context.color = context.options.color_always ||
         (!context.options.color_never && isatty(STDOUT_FILENO));
 #else
     context.color = false;
 #endif
-    if (load_rows(&context, error, sizeof(error)) < 0) goto out;
 #ifdef _WIN32
+    if (load_rows(&context, error, sizeof(error)) < 0) goto out;
     if (render(&context, false, NULL) < 0) goto out;
     rc = 0;
 #else
@@ -566,25 +645,54 @@ snag_top_main(int argc, char **argv)
         bool raw = false;
 
         if (!interactive) {
+            if (load_rows(&context, error, sizeof(error)) < 0) goto out;
             if (render(&context, false, NULL) < 0) goto out;
             rc = 0;
-        } else if (enter_raw(&saved) < 0) {
-            (void)snag_errorf(error, sizeof(error),
-                "cannot enter top terminal mode: %s", strerror(errno));
-            goto out;
         } else {
+            struct sigaction action = {0};
+            (void)sigemptyset(&action.sa_mask);
+            for (; installed_signals < signal_count; ++installed_signals) {
+                /* Keep owned children waitable even if our launcher ignored SIGCHLD. */
+                action.sa_handler = signals[installed_signals] == SIGCHLD ?
+                    SIG_DFL : top_interrupted;
+                if (sigaction(signals[installed_signals], &action,
+                        &saved_signals[installed_signals]) < 0) {
+                    (void)snag_errorf(error, sizeof(error),
+                        "cannot install terminal signal handler");
+                    goto out;
+                }
+            }
+            if (enter_raw(&saved) < 0) {
+                (void)snag_errorf(error, sizeof(error),
+                    "cannot enter top terminal mode: %s", strerror(errno));
+                goto out;
+            }
             raw = true;
-            (void)snag_write_full(STDOUT_FILENO, "\033[?25l", 6u);
+            static const char loading[] =
+                "\033[?25l\033[2J\033[Hsnajpagent top: loading sessions...\r\n";
+            (void)snag_write_full(STDOUT_FILENO, loading, sizeof(loading) - 1u);
+            context.cache_only = true;
             for (;;) {
+                if (top_signal) { rc = 128 + top_signal; break; }
+                uint64_t deadline = snag_monotonic_ms() + context.options.delay_ms;
                 int key;
                 struct pollfd input = {STDIN_FILENO, POLLIN, 0};
                 if (load_rows(&context, error, sizeof(error)) < 0) break;
+                if (request_catalog(&context, error, sizeof(error)) < 0)
+                    break;
                 if (target.id[0] && !message[0])
                     (void)snprintf(message, sizeof(message), "kill %.8s? press y/n", target.id);
-                if (render(&context, true, message) < 0) break;
+                const char *notice = message;
+                if (!*notice && context.catalog_failed)
+                    notice = "metadata refresh failed; press r to retry";
+                else if (!*notice && context.catalog_pending[0] && !context.row_count)
+                    notice = context.catalog_pid ? "loading metadata..." :
+                        "metadata unavailable; press r to retry";
+                if (render(&context, true, notice) < 0) break;
                 message[0] = '\0';
-                if (poll(&input, 1u, context.options.delay_seconds > INT_MAX / 1000
-                        ? INT_MAX : (int)(context.options.delay_seconds * 1000u)) < 0) {
+                uint64_t now = snag_monotonic_ms();
+                int wait_ms = deadline > now ? (int)(deadline - now) : 0;
+                if (poll(&input, 1u, wait_ms) < 0) {
                     if (errno == EINTR) continue;
                     break;
                 }
@@ -604,7 +712,7 @@ snag_top_main(int argc, char **argv)
                     }
                 } else if (key == 1001 || key == 'k') move_selection(&context, -1);
                 else if (key == 1002 || key == 'j') move_selection(&context, 1);
-                else if (key == 'r' || key == 'R') continue;
+                else if (key == 'r' || key == 'R') context.catalog_attempt[0] = '\0';
                 else if (key == 'x' || key == 'X') {
                     if (!context.row_count) continue;
                     const struct top_row *row = &context.rows[context.selected];
@@ -622,16 +730,32 @@ snag_top_main(int argc, char **argv)
             }
             if (raw) {
                 (void)tcsetattr(STDIN_FILENO, TCSANOW, &saved);
-                (void)snag_write_full(STDOUT_FILENO, "\033[0m\033[?25h\n", 12u);
+                (void)snag_write_full(STDOUT_FILENO, "\033[0m\033[?25h\n", 11u);
             }
         }
     }
 #endif
 out:
+#ifndef _WIN32
+    if (context.catalog_pid) {
+        pid_t result;
+        do { result = waitpid(context.catalog_pid, NULL, WNOHANG); }
+        while (result < 0 && errno == EINTR);
+        if (!result) {
+            /* SIGCHLD stays default until collection. This unreaped PID cannot
+             * be reused; only our read-only backfill child receives the signal. */
+            (void)kill(context.catalog_pid, SIGKILL);
+            while (waitpid(context.catalog_pid, NULL, 0) < 0 && errno == EINTR) {}
+        }
+    }
+    while (installed_signals) {
+        --installed_signals;
+        (void)sigaction(signals[installed_signals], &saved_signals[installed_signals], NULL);
+    }
+#endif
     if (rc != 0 && error[0]) (void)fprintf(stderr, "snajpagent top: %s\n", error);
     free(context.rows);
     snag_store_close(&context.store);
     free(context.dotdir);
-    snag_config_free(&context.config);
     return rc;
 }

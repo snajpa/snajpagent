@@ -95,6 +95,7 @@ struct app_state {
     uint64_t last_response_output_tokens;
     uint64_t metrics_started_ms;
     uint64_t metrics_last_write_ms;
+    bool metrics_attached;
     struct snag_ui ui;
     bool attachment_history_pending;
     char remote_nonce[10];

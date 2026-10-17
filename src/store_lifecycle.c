@@ -187,7 +187,10 @@ remove_view_reports(int dir_fd, char *error, size_t error_size)
             if (errno) rc = -1;
             break;
         }
-        if (strcmp(name, ".view-presentation.snb") && strcmp(name, ".view-reports.jsonl") &&
+        bool catalog_temporary = !strncmp(name, ".catalog-", 9u) &&
+            strlen(name + 9u) == SNAG_ID_HEX_LEN && snag_hex_is_lower(name + 9u, SNAG_ID_HEX_LEN);
+        if (!catalog_temporary && strcmp(name, ".view-presentation.snb") &&
+            strcmp(name, ".view-reports.jsonl") &&
             (strncmp(name, ".view-report-", 13u) || strlen(name + 13u) != SNAG_ID_HEX_LEN ||
                 !snag_hex_is_lower(name + 13u, SNAG_ID_HEX_LEN)))
             continue;
@@ -233,6 +236,7 @@ remove_deleted_session(
      * trash name remains the deletion marker after the final log unlink. */
     if (unlink_expected_file(session->dir_fd, "prompt_history", true, error, error_size) < 0 ||
         unlink_expected_file(session->dir_fd, "meta.json", true, error, error_size) < 0 ||
+        unlink_expected_file(session->dir_fd, "catalog.json", true, error, error_size) < 0 ||
         unlink_expected_file(session->dir_fd, "events.jsonl", true, error, error_size) < 0 ||
         unlink_expected_file(session->dir_fd, "journal.bin", true, error, error_size) < 0 ||
         unlink_expected_file(session->dir_fd, "checkpoint.0", true, error, error_size) < 0 ||
@@ -283,7 +287,10 @@ verify_delete_remnants(int dir_fd, char *error, size_t error_size)
     while ((name = snag_directory_next(dir)) != NULL) {
         if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
         if (strcmp(name, "lock") && strcmp(name, "meta.json") && strcmp(name, "checkpoint.0") &&
-            strcmp(name, "checkpoint.1") && strcmp(name, "history.idx")) {
+            strcmp(name, "checkpoint.1") && strcmp(name, "history.idx") &&
+            strcmp(name, "catalog.json") &&
+            (strncmp(name, ".catalog-", 9u) || strlen(name + 9u) != SNAG_ID_HEX_LEN ||
+                !snag_hex_is_lower(name + 9u, SNAG_ID_HEX_LEN))) {
             rc =
                 snag_fail(error, error_size, EINVAL, "unexpected content in deleted-session trash");
             break;

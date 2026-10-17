@@ -99,18 +99,17 @@ refresh_metrics(struct app_state *app, bool force)
 
     if (!app || app->store.root_fd < 0 || !app->session.id[0] || !app->config) return 0;
     now = snag_monotonic_ms();
+    bool attached = app->ui.opened && (!app->ui.native || app->ui.direct ||
+        snag_ui_session_attachment(&app->ui));
     interval = (uint64_t)app->config->metrics_refresh_seconds * 1000u;
-    if (!force && app->metrics_last_write_ms && now - app->metrics_last_write_ms < interval)
-        return 0;
+    if (!force && app->metrics_last_write_ms && attached == app->metrics_attached &&
+        now - app->metrics_last_write_ms < interval) return 0;
     provider = app->turn_provider ? app->turn_provider->name : app->session.default_provider;
     model = app->turn_model && *app->turn_model
                 ? app->turn_model
                 : app->session.active_turn_model[0] ? app->session.active_turn_model
                                                      : app->session.default_model;
-    state = app->ui.opened && (!app->ui.native || app->ui.direct ||
-                                   snag_ui_session_attachment(&app->ui))
-                ? "attached"
-                : "detached";
+    state = attached ? "attached" : "detached";
     sample = (struct snag_metrics_sample){
         .session = &app->session,
         .program_usage = &app->program_usage,
@@ -130,6 +129,7 @@ refresh_metrics(struct app_state *app, bool force)
         .response_open = app->session.response_open};
     if (snag_metrics_write(app->store.root_fd, &sample, error, sizeof(error)) < 0) return 0;
     app->metrics_last_write_ms = now;
+    app->metrics_attached = attached;
     return 0;
 }
 
@@ -340,6 +340,7 @@ service_attachment(struct app_state *app, bool external)
             rc = snag_ui_public_continue(&app->ui, app->execute ? STDERR_FILENO : STDOUT_FILENO);
     }
     if (generation && snag_ui_session_ready(&app->ui, generation) < 0 && errno != ESTALE) return -1;
+    (void)refresh_metrics(app, false);
     return rc;
 }
 
@@ -8296,9 +8297,38 @@ run_session(const struct snag_cli *cli, const char *program)
     return rc;
 }
 
+static int
+write_session_list(void *opaque, const char *text, size_t length)
+{
+    (void)opaque;
+    return snag_write_full(STDOUT_FILENO, text, length);
+}
+
+static int
+list_saved_sessions(const struct snag_cli *cli, const char *program)
+{
+    struct snag_store store;
+    char error[256] = {0};
+    int rc = 3;
+    snag_store_init(&store);
+    char *dotdir = snag_app_dotdir(cli->dotdir, error, sizeof(error));
+    if (!snag_text_locale_init()) {
+        (void)snag_errorf(error, sizeof(error), "a UTF-8 locale is required");
+    } else if (dotdir && snag_store_open(&store, dotdir, error, sizeof(error)) == 0) {
+        unsigned int columns = snag_isatty(STDOUT_FILENO) == 1 ? snag_term_host_columns() : 0u;
+        if (snag_store_list(&store, NULL, cli->list_stored, columns,
+                write_session_list, NULL, error, sizeof(error)) == 0) rc = 0;
+    }
+    if (rc) (void)fprintf(stderr, "%s: %s\n", program, error[0] ? error : strerror(errno));
+    snag_store_close(&store);
+    free(dotdir);
+    return rc;
+}
+
 int
 snag_app_run(const struct snag_cli *cli, const char *program)
 {
+    if (cli->list && !cli->update_model_cache) return list_saved_sessions(cli, program);
     if (!cli->resume || cli->execute || !snag_session_host_supported() ||
         !snag_isatty(STDIN_FILENO) || !snag_isatty(STDOUT_FILENO) || !snag_isatty(STDERR_FILENO) ||
         !snag_text_locale_init()) {

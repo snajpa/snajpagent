@@ -377,6 +377,13 @@ int snag_store_list(struct snag_store *store, const struct snag_session *owned,
  * activity_ms, status_rank and seven display cells. Empty stores return []. */
 json_t *snag_store_catalog(struct snag_store *, const struct snag_session *owned,
     uint64_t stored_limit, bool (*cancel)(void *), void *cancel_opaque, char *, size_t);
+/* Nonblocking metadata-only monitor snapshot. May show the last catalog across
+ * a same-file append; absent rows with metrics can appear before backfill. */
+/* pending identifies the source boundary still needing verification, or is empty. */
+json_t *snag_store_catalog_cached(struct snag_store *,
+    char pending[SNAG_SHA256_HEX_LEN + 1u], char *, size_t);
+int snag_store_catalog_refresh(
+    struct snag_store *, bool (*cancel)(void *), void *, char *, size_t);
 int snag_session_delete(struct snag_store *store, struct snag_session *session,
     const char *confirmed_prefix, uint64_t *written_seq, char *error, size_t error_size);
 int snag_session_complete_delete(

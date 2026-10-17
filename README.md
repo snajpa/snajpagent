@@ -138,14 +138,16 @@ Name sessions with `-N lead` or `/session name lead`; select them with
 Run `snajpagent top` for a live session table with model, turn count, process and
 session token totals, and estimated prefill/decode rates. Use Up/Down or `j`/`k`
 to select a session, `r` to refresh, and `q` to leave. Selection follows the
-session when rows reorder, and the table scrolls to keep it visible.
+session when rows reorder, and the table scrolls to keep it visible. The view
+redraws every 0.2 seconds; owner metrics retain their configured sampling interval.
+Cold metadata fills in the background while navigation and quit remain available.
 
 `x`, then `y`, requests termination of the selected live owner. The confirmation
 names the session; a replaced owner requires a new confirmation. Stored sessions
 cannot be killed. Redirecting output prints a single snapshot instead:
 
 ```sh
-snajpagent top --delay 5
+snajpagent top --delay 0.2
 snajpagent top --sort turns --color never > sessions.txt
 ```
 
