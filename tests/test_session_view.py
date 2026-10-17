@@ -1314,8 +1314,11 @@ class ContextMeterTests(unittest.TestCase):
             self.owner.config.chmod(0o600)
             self.command('/configure', 'configuration reloaded:')
             self.wait_meter(peer, lambda value: value.startswith('~'))
+            unmeasured_seq = max(e['seq'] for e in read_events(self.owner.journal))
             self.owner.initial.output.clear()
             os.write(self.owner.initial.master, b'response with no measured input\r')
+            # The peer can still hold an idle state from the preceding response.
+            self.owner.wait_event('turn_completed', after_seq=unmeasured_seq)
             peer.until('state', lambda message: not message['state']['prompt']['active'])
             completed = [e for e in read_events(self.owner.journal)
                          if e['type'] == 'response_completed']
@@ -1630,7 +1633,9 @@ class ContextMeterTests(unittest.TestCase):
             self.assertGreaterEqual(len(self.provider.requests), 2)
             self.assertTrue(any(followup_text.decode() in json.dumps(request['body'])
                                 for request in self.provider.requests))
-            followup_meter = peer.until('state', lambda message:
+            # Read the current snapshot, not an earlier queued active preview.
+            observer = self.owner.view()
+            followup_meter = observer.until('state', lambda message:
                 message['state']['prompt']['active'] and
                 message['state']['prompt']['values'][5].startswith('~'))[
                     'state']['prompt']['values'][5]
@@ -2404,10 +2409,11 @@ class ContextMeterTests(unittest.TestCase):
         self.owner.finish(self.owner.initial, b'/exit')
         self.owner.status('stored')
         before = self.owner.journal.read_bytes()
+        # An empty -e reads stdin before opening the resumed session.
         result = subprocess.run([*self.owner.prefix, '--resume', self.owner.sid,
                                  '-m', 'fake/standard-model/medium', '-e'],
-                                env={**os.environ, **self.owner.env}, capture_output=True,
-                                timeout=5)
+                                env={**os.environ, **self.owner.env}, input=b'',
+                                capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn(b'exceeds the advertised maximum', result.stderr)
         self.assertEqual(self.owner.journal.read_bytes(), before)
@@ -2449,8 +2455,8 @@ class ContextMeterTests(unittest.TestCase):
         self.owner.finish(self.owner.initial, b'/exit')
         self.owner.status('stored')
         once = subprocess.run([*self.owner.prefix, '--resume', self.owner.sid, '-e'],
-                              env={**os.environ, **self.owner.env}, capture_output=True,
-                              timeout=5)
+                              env={**os.environ, **self.owner.env}, input=b'',
+                              capture_output=True, timeout=5)
         self.assertEqual(once.returncode, 2, once.stderr)
         self.assertNotIn(b'retrying after error', once.stderr)
         resumed = self.owner.start(['--resume', self.owner.sid])
