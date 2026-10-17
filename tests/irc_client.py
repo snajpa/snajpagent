@@ -54,10 +54,11 @@ class IRCClient:
 
     def drain(self, duration=0.25):
         end = time.monotonic() + duration
-        while time.monotonic() < end:
-            ready, _, _ = select.select(
-                [self.sock], [], [], min(0.05, end - time.monotonic())
-            )
+        while True:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            ready, _, _ = select.select([self.sock], [], [], min(0.05, remaining))
             if not ready:
                 continue
             try:
