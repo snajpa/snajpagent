@@ -63,15 +63,18 @@ through replay and paired checkpoints without creating local calls or processes.
 ## Discovery and display catalog
 
 Each session may have a private `catalog.json` containing its full name, activity
-coordinate and seven sanitized list cells. A source witness includes journal
+coordinate and seven sanitized list cells. Identity-only discovery stores just the
+full ID cell with a zero preview width; a later display fills the remaining cells. A source witness includes journal
 device, inode, size, mode and nanosecond modification/change timestamps. A preview
 width witness lets wider displays rebuild without materializing a maximum-width
 preview for every narrow request. Both native and legacy readers use the same
 cache; journal commits and acknowledged durability are unchanged.
 
 A cache hit validates private-file custody, schema, identity and the exact source
-witness without reading journal contents. A miss uses the existing read-only
-snapshot admission and formatter. Publication streams borrowed cells into an
+witness without reading journal contents. A fixed source prefix rejects stale
+metadata before JSON parsing. A miss reuses its open private descriptors for
+read-only snapshot admission. Name/last discovery publishes identity metadata;
+only display requests run the prompt/IRC formatter. Publication streams borrowed cells into an
 exclusive private `.catalog-ID` temporary file, rechecks the source and renames it
 atomically. Source changes during construction suppress publication. The cache is
 disposable: it adds no journal fsync, recovery format or migration requirement.
@@ -83,7 +86,8 @@ strict authoritative journal recovery and locking. The interactive monitor draws
 before discovery and uses metadata-only scans on its terminal loop. A sole owned
 child backfills misses. A source-generation digest suppresses repeated replay of
 unchanged unreadable histories; changed sources and explicit refresh retry them.
-Quit terminates and joins only that child. Old append-only owners can temporarily
+Quit terminates and joins only that child. Failed backfill or cache publication
+is reported in the monitor; explicit refresh retries the same source generation. Old append-only owners can temporarily
 show their previous verified display cells while current counters come from the
 existing private metrics files. Replaced journals never reuse the previous cells.
 A redirected monitor or ordinary listing waits for a complete verified snapshot.

@@ -206,55 +206,31 @@ snag_session_open(struct snag_store *store, struct snag_session *session, const 
 }
 
 static int
-open_snapshot(struct snag_store *store, struct snag_session *session, const char *id, char *error,
-    size_t error_size)
+read_snapshot(struct snag_session *session, bool native)
 {
-    if (snag_store_open_session_directory(store, session, id, error, error_size) < 0) return -1;
-    bool native = true;
-    session->log_fd = snag_open_read_security_at(session->dir_fd, "journal.bin", false);
-    if (session->log_fd < 0 && errno == ENOENT) {
-        native = false;
-        session->log_fd = snag_open_read_security_at(session->dir_fd, "events.jsonl", false);
-    }
-    if (session->log_fd < 0) return -1;
-    if (snag_store_verify_private_fd(session->log_fd, false, "event log", error, error_size) < 0)
-        return -1;
     session->snapshot_read_only = true;
-    if (native) return snag_store_load_binary_session(session, SNAG_TAIL_IGNORE, error, error_size);
+    if (native)
+        return snag_store_load_binary_session(session, SNAG_TAIL_IGNORE, NULL, 0u);
     session->log_end = snag_seek(session->log_fd, 0, SEEK_END);
     if (session->log_end < 0) return -1;
-    int rc = snag_store_scan_log(session, SNAG_TAIL_IGNORE, error, error_size);
+    int rc = snag_store_scan_log(session, SNAG_TAIL_IGNORE, NULL, 0u);
     session->snapshot_read_only = true;
     return rc;
 }
 
-/* On success the caller owns the snapshot; no selected-field copies. */
-static int
-matching_snapshot(struct snag_store *store, struct snag_session *snapshot, const char *id,
-    bool (*cancel)(void *), void *cancel_opaque)
-{
-    char error[128];
-
-    snag_session_init(snapshot);
-    snapshot->history_cancel = cancel;
-    snapshot->history_cancel_opaque = cancel_opaque;
-    if (strlen(id) == SNAG_ID_HEX_LEN && snag_hex_is_lower(id, SNAG_ID_HEX_LEN) &&
-        open_snapshot(store, snapshot, id, error, sizeof(error)) == 0 &&
-        !snapshot->delete_requested)
-        return 0;
-    snag_session_close(snapshot);
-    return -1;
-}
+enum catalog_content { CATALOG_IDENTITY, CATALOG_CELLS };
 
 struct catalog_row {
     json_t *owner;
     json_t *cells; /* Borrowed from owner. Name may also borrow the open snapshot. */
     const char *name;
     uint64_t activity_ms;
+    bool published;
 };
 
 static bool load_catalog_row(struct snag_store *, struct snag_session *, const char *,
-    unsigned int, bool (*)(void *), void *, struct snag_sha256 *, struct catalog_row *);
+    unsigned int, enum catalog_content, bool (*)(void *), void *,
+    struct snag_sha256 *, struct catalog_row *);
 
 bool
 snag_session_name_valid(const char *name)
@@ -281,7 +257,8 @@ snag_store_find_name(struct snag_store *store, const char *name, char id[SNAG_ID
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
         struct catalog_row row;
-        if (!load_catalog_row(store, &snapshot, entry, 0u, NULL, NULL, NULL, &row)) continue;
+        if (!load_catalog_row(store, &snapshot, entry, 0u, CATALOG_IDENTITY,
+                NULL, NULL, NULL, &row)) continue;
         bool match = row.name && !strcmp(row.name, name);
         json_decref(row.owner);
         snag_session_close(&snapshot);
@@ -317,7 +294,8 @@ snag_store_find_last(
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
         struct catalog_row row;
-        if (!load_catalog_row(store, &snapshot, entry, 0u, NULL, NULL, NULL, &row)) continue;
+        if (!load_catalog_row(store, &snapshot, entry, 0u, CATALOG_IDENTITY,
+                NULL, NULL, NULL, &row)) continue;
         uint64_t last = row.activity_ms;
         json_decref(row.owner);
         if (!best[0] || last > best_time || (last == best_time && strcmp(entry, best) > 0)) {
@@ -740,6 +718,17 @@ catalog_source(const snag_file_info *info, json_int_t values[8])
     values[7] = (json_int_t)changed;
 }
 
+static int
+catalog_source_header(const snag_file_info *source, char *text, size_t size)
+{
+    json_int_t values[8];
+    catalog_source(source, values);
+    return snprintf(text, size, "{\"source\":[%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld],",
+        (long long)values[0], (long long)values[1], (long long)values[2],
+        (long long)values[3], (long long)values[4], (long long)values[5],
+        (long long)values[6], (long long)values[7]);
+}
+
 static json_t *
 catalog_read(int directory, const char *id, const snag_file_info *source, unsigned int columns)
 {
@@ -750,8 +739,16 @@ catalog_read(int directory, const char *id, const snag_file_info *source, unsign
     if (snag_store_verify_private_fd(fd, false, "session catalog", NULL, 0u) == 0 &&
         snag_fstat(fd, &info) == 0 && info.st_size > 0 && info.st_size <= CATALOG_MAX) {
         unsigned char *bytes = malloc((size_t)info.st_size);
-        if (bytes && snag_pread(fd, bytes, (size_t)info.st_size, 0) == info.st_size)
-            row = snag_json_load_strict(bytes, (size_t)info.st_size, CATALOG_MAX, NULL, 0u);
+        if (bytes && snag_pread(fd, bytes, (size_t)info.st_size, 0) == info.st_size) {
+            char header[256];
+            int length = source ? catalog_source_header(source, header, sizeof(header)) : 0;
+            /* Reject stale generations before the JSON parser copies their text.
+             * A cache predating this layout is disposable and rebuilt once. */
+            if (length >= 0 && (size_t)length < sizeof(header) &&
+                (size_t)length <= (size_t)info.st_size &&
+                (!length || !memcmp(bytes, header, (size_t)length)))
+                row = snag_json_load_strict(bytes, (size_t)info.st_size, CATALOG_MAX, NULL, 0u);
+        }
         free(bytes);
     }
     (void)close(fd);
@@ -768,8 +765,9 @@ catalog_read(int directory, const char *id, const snag_file_info *source, unsign
         saved_id && !strcmp(saved_id, id) && name && strlen(name) <= SNAG_PATH_MAX_BYTES &&
         json_string_length(json_object_get(row, "name")) == strlen(name) &&
         snag_json_integer_u64(row, "activity_ms", &activity) == 0 &&
-        json_is_array(cells) && json_array_size(cells) == 7u;
-    for (size_t i = 0u; valid && i < 7u; ++i) {
+        json_is_array(cells) && (json_array_size(cells) == 7u ||
+            (!width && json_array_size(cells) == 1u));
+    for (size_t i = 0u; valid && i < json_array_size(cells); ++i) {
         const char *text = json_string_value(json_array_get(cells, i));
         valid = text && json_string_length(json_array_get(cells, i)) == strlen(text) &&
             strlen(text) <= SNAG_MAX_DIRECT_PROMPT;
@@ -795,65 +793,78 @@ catalog_emit(const char *bytes, size_t length, void *opaque)
     return snag_write_full(*(int *)opaque, bytes, length);
 }
 
-static void
+static bool
 catalog_write(struct snag_session *session, json_t *cells,
     const snag_file_info *before, unsigned int columns)
 {
     snag_file_info after;
     char random[SNAG_ID_HEX_LEN + 1u];
     char temporary[sizeof(".catalog-") + SNAG_ID_HEX_LEN];
-    if (!cells || session->dir_fd < 0 || session->log_fd < 0 ||
+    if (session->dir_fd < 0 || session->log_fd < 0 ||
         snag_fstat(session->log_fd, &after) < 0 || !snag_file_unchanged(before, &after) ||
-        snag_random_id(random) < 0) return;
+        snag_random_id(random) < 0) return false;
     (void)snprintf(temporary, sizeof(temporary), ".catalog-%s", random);
     int fd = snag_create_private_at(session->dir_fd, temporary, true);
-    if (fd < 0) return;
+    if (fd < 0) return false;
     char metadata[512];
-    int length = snprintf(metadata, sizeof(metadata),
-        "{\"version\":2,\"columns\":%u,\"activity_ms\":%llu,\"name\":",
-        columns, (unsigned long long)session->last_time_ms);
+    int length = catalog_source_header(before, metadata, sizeof(metadata));
     bool written = length > 0 && (size_t)length < sizeof(metadata) &&
+        snag_write_full(fd, metadata, (size_t)length) == 0;
+    length = snprintf(metadata, sizeof(metadata),
+        "\"version\":2,\"columns\":%u,\"activity_ms\":%llu,\"name\":",
+        columns, (unsigned long long)session->last_time_ms);
+    written = written && length > 0 && (size_t)length < sizeof(metadata) &&
         snag_write_full(fd, metadata, (size_t)length) == 0;
     const json_t *name = json_object_get(session->strings, "name");
     size_t flags = JSON_COMPACT | JSON_ENSURE_ASCII | JSON_ENCODE_ANY;
-    written = written && (name ? json_dump_callback(name, catalog_emit, &fd, flags) == 0 :
-        snag_write_full(fd, "\"\"", 2u) == 0);
-    written = written && snag_write_full(fd, ",\"cells\":", 9u) == 0 &&
-        json_dump_callback(cells, catalog_emit, &fd, flags) == 0;
-    json_int_t values[8];
-    catalog_source(&after, values);
-    length = snprintf(metadata, sizeof(metadata),
-        ",\"source\":[%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld]}",
-        (long long)values[0], (long long)values[1], (long long)values[2],
-        (long long)values[3], (long long)values[4], (long long)values[5],
-        (long long)values[6], (long long)values[7]);
-    written = written && length > 0 && (size_t)length < sizeof(metadata) &&
-        snag_write_full(fd, metadata, (size_t)length) == 0;
+    const char *text = json_string_value(name);
+    if (text && snag_session_name_valid(text) && !strpbrk(text, "\"\\")) {
+        /* Valid unescaped names can be written directly from the snapshot. */
+        written = written && snag_write_full(fd, "\"", 1u) == 0 &&
+            snag_write_full(fd, text, json_string_length(name)) == 0 &&
+            snag_write_full(fd, "\"", 1u) == 0;
+    } else {
+        written = written && (name ? json_dump_callback(name, catalog_emit, &fd, flags) == 0 :
+            snag_write_full(fd, "\"\"", 2u) == 0);
+    }
+    written = written && snag_write_full(fd, ",\"cells\":", 9u) == 0;
+    if (cells) {
+        written = written && json_dump_callback(cells, catalog_emit, &fd, flags) == 0;
+    } else {
+        written = written && snag_write_full(fd, "[\"", 2u) == 0 &&
+            snag_write_full(fd, session->id, SNAG_ID_HEX_LEN) == 0 &&
+            snag_write_full(fd, "\"]", 2u) == 0;
+    }
+    written = written && snag_write_full(fd, "}", 1u) == 0;
     if (close(fd) < 0) written = false;
     /* A power-loss miss rebuilds disposable metadata from the synced journal.
      * Stream borrowed cells; do not allocate another row or serialized copy. */
-    if (written && snag_fstat(session->log_fd, &after) == 0 &&
-        snag_file_unchanged(before, &after))
-        (void)snag_rename_at(session->dir_fd, temporary, session->dir_fd, "catalog.json");
+    bool published = written && snag_fstat(session->log_fd, &after) == 0 &&
+        snag_file_unchanged(before, &after) &&
+        snag_rename_at(session->dir_fd, temporary, session->dir_fd, "catalog.json") == 0;
     (void)snag_unlink_at(session->dir_fd, temporary, false);
+    return published;
 }
 
 static bool
 load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const char *id,
-    unsigned int columns, bool (*cancel)(void *), void *cancel_opaque,
-    struct snag_sha256 *pending, struct catalog_row *summary)
+    unsigned int columns, enum catalog_content content, bool (*cancel)(void *),
+    void *cancel_opaque, struct snag_sha256 *pending, struct catalog_row *summary)
 {
-    if (!columns) columns = 80u;
+    if (!columns && content == CATALOG_CELLS) columns = 80u;
     if (strlen(id) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) return false;
     snag_session_init(snapshot);
-    /* Metadata and lock checks need only the private directory descriptor. Full
-     * snapshot admission below constructs paths only when replay is necessary. */
+    /* Discovery and read-only recovery need only private descriptors. Reuse
+     * these same descriptors on a miss instead of reopening the source. */
     snapshot->dir_fd = snag_open_read_security_at(store->sessions_fd, id, true);
     if (snapshot->dir_fd < 0 || snag_store_verify_private_fd(snapshot->dir_fd, true,
             "session directory", NULL, 0u) < 0) goto fail;
+    bool native = true;
     snapshot->log_fd = snag_open_read_security_at(snapshot->dir_fd, "journal.bin", false);
-    if (snapshot->log_fd < 0 && errno == ENOENT)
+    if (snapshot->log_fd < 0 && errno == ENOENT) {
+        native = false;
         snapshot->log_fd = snag_open_read_security_at(snapshot->dir_fd, "events.jsonl", false);
+    }
     snag_file_info before;
     if (snapshot->log_fd < 0 ||
         snag_store_verify_private_fd(snapshot->log_fd, false, "journal", NULL, 0u) < 0 ||
@@ -886,21 +897,32 @@ load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const 
         }
         goto fail;
     }
-    snag_session_close(snapshot);
-    if (matching_snapshot(store, snapshot, id, cancel, cancel_opaque) < 0) return false;
+    memcpy(snapshot->id, id, sizeof(snapshot->id));
+    snapshot->history_cancel = cancel;
+    snapshot->history_cancel_opaque = cancel_opaque;
+    if (read_snapshot(snapshot, native) < 0 || snapshot->delete_requested) goto fail;
     snag_file_info after;
     if (snag_fstat(snapshot->log_fd, &after) < 0 ||
         !snag_file_unchanged(&before, &after)) goto fail;
+    *summary = (struct catalog_row){.name = snapshot->name,
+        .activity_ms = snapshot->last_time_ms};
+    /* Identity-only discovery retains the source witness and full name, with
+     * no preview/history formatting. A later display fills the other cells. */
+    if (content == CATALOG_IDENTITY) {
+        summary->published = catalog_write(snapshot, NULL, &before, 0u);
+        return true;
+    }
     json_t *cells = list_cells(snapshot, "stored", columns);
     if (!cells) goto fail;
-    catalog_write(snapshot, cells, &before, columns);
-    *summary = (struct catalog_row){.owner = cells, .cells = cells,
-        .name = snapshot->name, .activity_ms = snapshot->last_time_ms};
+    summary->owner = cells;
+    summary->cells = cells;
+    summary->published = catalog_write(snapshot, cells, &before, columns);
     return true;
 cached:
     *summary = (struct catalog_row){.owner = row,
         .cells = json_object_get(row, "cells"), .name = snag_json_string(row, "name"),
-        .activity_ms = (uint64_t)json_integer_value(json_object_get(row, "activity_ms"))};
+        .activity_ms = (uint64_t)json_integer_value(json_object_get(row, "activity_ms")),
+        .published = true};
     return true;
 fail:
     snag_session_close(snapshot);
@@ -1076,7 +1098,8 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
         if (cancel && cancel(cancel_opaque)) goto canceled;
         struct catalog_row summary;
         if (!load_catalog_row(
-                store, snapshot, entry, columns, cancel, cancel_opaque, pending, &summary)) {
+                store, snapshot, entry, columns, CATALOG_CELLS,
+                cancel, cancel_opaque, pending, &summary)) {
             if (cancel && cancel(cancel_opaque)) goto canceled;
             continue;
         }
@@ -1097,7 +1120,9 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
         static const char *const states[] = {"attached", "detached", "running", "stored"};
         uint64_t time_ms = summary.activity_ms;
         json_t *cells = json_incref(summary.cells);
-        if (cells) (void)json_array_set_new(cells, 4u, json_string(states[status]));
+        const char *state = json_string_value(json_array_get(cells, 4u));
+        if (cells && (!state || strcmp(state, states[status])))
+            (void)json_array_set_new(cells, 4u, json_string(states[status]));
         json_decref(summary.owner);
         snag_session_close(snapshot);
         if (cancel && cancel(cancel_opaque)) {
@@ -1225,9 +1250,15 @@ snag_store_catalog_refresh(struct snag_store *store, bool (*cancel)(void *), voi
             break;
         }
         struct catalog_row row;
-        if (load_catalog_row(store, snapshot, id, 0u, cancel, opaque, NULL, &row)) {
+        if (strlen(id) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) continue;
+        if (load_catalog_row(store, snapshot, id, 0u, CATALOG_CELLS,
+                cancel, opaque, NULL, &row)) {
+            if (!row.published)
+                rc = snag_fail(error, error_size, EIO, "cannot publish session metadata");
             json_decref(row.owner);
             snag_session_close(snapshot);
+        } else {
+            rc = snag_fail(error, error_size, EIO, "cannot read session metadata");
         }
     }
     free(snapshot);

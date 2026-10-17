@@ -1244,7 +1244,9 @@ Session listings, name selection and last-session discovery reuse private
 .I catalog.json
 metadata beside each journal. An unchanged source requires no journal replay.
 Missing, stale or invalid metadata is reconstructed through the journal reader;
-old writers remain compatible. A wider terminal may rebuild the preview.
+old writers remain compatible. Name and last-session discovery cache identity
+fields without constructing display previews. A later display fills those
+previews; a wider terminal may rebuild them.
 The cache contains names and prompt previews and uses the session's private-file
 protections. Removing it causes a rebuild; it is never a recovery checkpoint.
 The selected session still passes ordinary journal validation, recovery and owner

@@ -11,7 +11,8 @@
   discovery. Rebuild stale metadata for old writers while preserving authoritative
   resume recovery and locking. Draw the interactive monitor immediately, backfill
   cold metadata off the terminal loop, and support a 0.2-second redraw interval
-  independently of owner metrics sampling.
+  independently of owner metrics sampling. Report failed metadata publication
+  and retry it on explicit refresh.
 
 - Complete the interactive `snajpagent top` view: keep selection with its session
   across refreshes, scroll it into view, and fit terminal rows without wrapping.
