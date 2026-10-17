@@ -8,8 +8,8 @@ from pathlib import Path
 
 from irc_client import IRCClient
 from tmux_terminal import (
-    FakeResponses, TmuxTerminal, event_list, fixture_terminal, free_loopback_port,
-    irc_workspace, read_events, wait_event_count, wait_irc_idle,
+    FakeResponses, MACHINE_HOSTNAME, TmuxTerminal, event_list, fixture_terminal, free_loopback_port,
+    irc_workspace, read_events, wait_event_count, wait_idle_prompt_at_bottom, wait_irc_idle,
 )
 
 
@@ -175,7 +175,7 @@ def run_irc_attention_case(binary, root):
     try:
         with fixture_terminal(TmuxTerminal(root / "terminal", binary, workspace, state,
                 config, 150, 24, args=args, environment=environment), root / "screen.txt") as term:
-            term.wait("hostop@")
+            wait_idle_prompt_at_bottom(term, f"hostop@{MACHINE_HOSTNAME} :")
             term.submit("/rollout")
             term.wait("host-model/medium")
             term.submit("operator-task-kept")
@@ -421,7 +421,9 @@ def run_irc_attention_case(binary, root):
         with fixture_terminal(TmuxTerminal(root / "resumed", binary, workspace, state, config,
                 150, 24, args=("--resume", session), environment=environment),
                 root / "resumed-screen.txt") as term:
-            term.wait("hostop@")
+            # History can repaint the old prompt before resumed connections are ready.
+            term.wait("@hostop connected · resumed")
+            wait_idle_prompt_at_bottom(term, f"hostop@{MACHINE_HOSTNAME} :")
             term.submit("/rollout")
             term.wait("host-model/medium")
             peer = IRCClient(port, "resumedpeer")
