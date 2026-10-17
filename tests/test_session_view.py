@@ -820,6 +820,18 @@ class SessionViewTests(unittest.TestCase):
         self.assertFalse(select.select([bound.peer], [], [], .5)[0])
         self.assertLess(cpu_time() - before, .3, 'idle semantic controller spins its owner')
 
+    def test_idle_attachment_status_precedes_metrics_sampling(self):
+        self.detach()
+        # No prompt, model event or sampling deadline should be needed to
+        # publish either edge of an idle semantic attachment.
+        for _ in range(2):
+            peer = self.view(bind=True)
+            self.status('attached')
+            peer.send(type='detach', generation=peer.generation)
+            peer.until('detached')
+            self.status('detached')
+        self.assertEqual(self.identity(), self.owner_identity)
+
     def test_detach_and_quit_have_distinct_owner_lifetimes(self):
         self.detach()
         peer = self.view(bind=True)
