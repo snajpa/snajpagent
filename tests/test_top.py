@@ -201,7 +201,7 @@ class TopTests(unittest.TestCase):
             self.addCleanup(os.close, watch)
             self.assertGreaterEqual(libc.inotify_add_watch(watch, os.fsencode(journal), 1), 0)
         top = self.top(delay=None, wait=False)
-        top.until(b'metadata unavailable; press r to retry', timeout=3)
+        top.until(b'metadata refresh failed; press r to retry', timeout=3)
         if watch >= 0:
             os.read(watch, 4096)
             self.assertFalse(select.select([watch], [], [], .65)[0],
@@ -210,6 +210,26 @@ class TopTests(unittest.TestCase):
         journal.write_bytes(original)
         top.output.clear()
         top.until(journal.parent.name[:8].encode(), timeout=3)
+        self.quit(top)
+
+    def test_failed_cache_publication_is_reported_and_retryable(self):
+        sid, _ = self.session()
+        catalog = self.state / 'sessions' / sid / 'catalog.json'
+        catalog.mkdir(mode=0o700)
+        marker = catalog / 'unrelated'
+        marker.write_bytes(b'preserved')
+        top = self.top(delay=None)
+        top.until(b'metadata refresh failed; press r to retry', timeout=3)
+        self.assertEqual(marker.read_bytes(), b'preserved')
+        self.assertFalse(list(catalog.parent.glob('.catalog-*')))
+        marker.unlink()
+        catalog.rmdir()
+        os.write(top.master, b'r')
+        top.output.clear()
+        deadline = time.monotonic() + 3
+        while not catalog.is_file() and time.monotonic() < deadline:
+            self.frame(top)
+        self.assertTrue(catalog.is_file())
         self.quit(top)
 
     def test_empty_redirected_output(self):

@@ -15,6 +15,7 @@ import unittest
 
 from store_history import create_legacy
 from test_session_listing import append_event, canonical
+from tmux_terminal import FakeResponses, write_irc_config
 
 
 PRODUCT = Path(sys.argv.pop(1)).resolve()
@@ -53,6 +54,58 @@ class CatalogTests(unittest.TestCase):
                                  '--config', str(config), '-l', '--update-model-cache'],
                                 env=self.env, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_name_and_last_discovery_do_not_build_display_rows(self):
+        provider = FakeResponses()
+        self.addCleanup(provider.close)
+        provider.runtime_handler = lambda handler, request, sequence: provider.reply(
+            handler, provider.response_body(1, 'saved').encode())
+        config = self.root / 'native.ini'
+        write_irc_config(config, provider.port, 'host-model')
+        state = self.root / 'native-state'
+        prefix = [str(PRODUCT), '--dotdir', str(state), '--config', str(config)]
+        env = dict(self.env, SNAJPAGENT_IRC_UI_KEY='irc-ui-secret')
+
+        def run(*args):
+            result = subprocess.run(prefix + list(args), env=env, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result
+
+        run('-N', 'other', '-e', '--', 'unselected')
+        other, = (state / 'sessions').iterdir()
+        name = 'named \"雪\\trail'
+        run('-N', name, '-e', '--', 'alpha')
+        session, = [entry for entry in (state / 'sessions').iterdir() if entry != other]
+        catalog = session / 'catalog.json'
+        self.assertFalse(catalog.exists())
+        run('--resume', '-N', name, '-e', '--', 'beta')
+        identity = json.loads(catalog.read_bytes())
+        self.assertEqual(identity['cells'], [session.name])
+        self.assertEqual(identity['columns'], 0)
+        self.assertEqual(identity['name'], name)
+        # The unselected session is now durably cached by identity alone.
+        other_catalog = other / 'catalog.json'
+        saved = other_catalog.stat().st_mtime_ns
+        watch = -1
+        if sys.platform.startswith('linux'):
+            libc = ctypes.CDLL(None, use_errno=True)
+            watch = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+            self.assertGreaterEqual(watch, 0)
+            self.addCleanup(os.close, watch)
+            self.assertGreaterEqual(libc.inotify_add_watch(
+                watch, os.fsencode(other / 'journal.bin'), 1), 0)
+        run('--resume', '-N', name, '-e', '--', 'delta')
+        if watch >= 0:
+            with self.assertRaises(BlockingIOError):
+                os.read(watch, 4096)
+        self.assertEqual(other_catalog.stat().st_mtime_ns, saved)
+        catalog.write_bytes(b'invalid derived metadata')
+        catalog.chmod(0o600)
+        run('--resume', '--last', '-e', '--', 'gamma')
+        self.assertEqual(json.loads(catalog.read_bytes())['cells'], [session.name])
+        listed = run('-l').stdout
+        self.assertEqual(json.loads(catalog.read_bytes())['cells'][3], '4')
+        self.assertEqual(run('-l').stdout, listed)
 
     def test_unchanged_catalog_never_replays_journal(self):
         before = self.journal.read_bytes()
