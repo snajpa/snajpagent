@@ -189,7 +189,8 @@ compare_rows(const struct top_row *a, const struct top_row *b, const struct top_
     else if (options->sort == TOP_SORT_TURNS)
         order = a->turns == b->turns ? 0 : a->turns > b->turns ? -1 : 1;
     else if (options->sort == TOP_SORT_TOTAL)
-        order = a->process_total == b->process_total ? 0 : a->process_total > b->process_total ? -1 : 1;
+        order = a->process_total == b->process_total ? 0 :
+            a->process_total > b->process_total ? -1 : 1;
     else order = strcmp(a->id, b->id);
     if (order) return order;
     return strcmp(a->id, b->id);
@@ -335,7 +336,8 @@ render(struct top_context *context, bool interactive, const char *message)
     if (message && *message && snag_buf_printf(&out, "  %s", message) < 0) goto out;
     {
         const char header[] =
-            "SESSION  STATE    MODEL                TURNS ACTIVE   PROCESS  SESSION   PREFILL/s  DECODE/s\n";
+            "SESSION  STATE    MODEL                TURNS ACTIVE   PROCESS  SESSION   "
+            "PREFILL/s  DECODE/s\n";
         if (snag_buf_putc(&out, '\n') < 0 ||
             snag_buf_append(&out, header, sizeof(header) - 1u) < 0)
             goto out;
@@ -350,7 +352,8 @@ render(struct top_context *context, bool interactive, const char *message)
         if (UINT64_MAX - session_total >= context->rows[i].session_total)
             session_total += context->rows[i].session_total;
         else session_total = UINT64_MAX;
-        if (i < shown && append_row(&out, &context->rows[i], i == context->selected, context->color) < 0)
+        if (i < shown &&
+            append_row(&out, &context->rows[i], i == context->selected, context->color) < 0)
             goto out;
     }
     snag_format_count(process, sizeof(process), process_total);
@@ -367,7 +370,8 @@ render(struct top_context *context, bool interactive, const char *message)
             context->row_count, (unsigned long long)turns, process, session) < 0)
         goto out;
     if (context->color && snag_buf_append(&out, "\033[0m", 4u) < 0) goto out;
-    if (snag_buf_putc(&out, '\n') < 0 || snag_write_full(STDOUT_FILENO, out.data, out.len) < 0) goto out;
+    if (snag_buf_putc(&out, '\n') < 0 ||
+        snag_write_full(STDOUT_FILENO, out.data, out.len) < 0) goto out;
     snag_buf_free(&out);
     (void)width;
     return 0;
@@ -507,7 +511,8 @@ snag_top_main(int argc, char **argv)
             if (render(&context, false, NULL) < 0) goto out;
             rc = 0;
         } else if (enter_raw(&saved) < 0) {
-            (void)snag_errorf(error, sizeof(error), "cannot enter top terminal mode: %s", strerror(errno));
+            (void)snag_errorf(error, sizeof(error),
+                "cannot enter top terminal mode: %s", strerror(errno));
             goto out;
         } else {
             raw = true;

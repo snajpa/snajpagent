@@ -149,9 +149,11 @@ snag_metrics_write(int root_fd, const struct snag_metrics_sample *sample, char *
         metric_typed_u64(&text, "snajpagent_session_process_responses_total",
             "Responses reported during this owner process.", "counter", process->responses) < 0 ||
         metric_typed_u64(&text, "snajpagent_session_process_input_tokens_total",
-            "Input tokens reported during this owner process.", "counter", process->input_tokens) < 0 ||
+            "Input tokens reported during this owner process.", "counter",
+            process->input_tokens) < 0 ||
         metric_typed_u64(&text, "snajpagent_session_process_output_tokens_total",
-            "Output tokens reported during this owner process.", "counter", process->output_tokens) < 0 ||
+            "Output tokens reported during this owner process.", "counter",
+            process->output_tokens) < 0 ||
         metric_typed_u64(&text, "snajpagent_session_process_reasoning_tokens_total",
             "Reasoning tokens reported during this owner process.", "counter",
             process->reasoning_tokens) < 0 ||
@@ -165,7 +167,8 @@ snag_metrics_write(int root_fd, const struct snag_metrics_sample *sample, char *
         metric_typed_u64(&text, "snajpagent_session_output_tokens_total",
             "Output tokens accumulated by this session.", "counter", session->output_tokens) < 0 ||
         metric_typed_u64(&text, "snajpagent_session_reasoning_tokens_total",
-            "Reasoning tokens accumulated by this session.", "counter", session->reasoning_tokens) < 0 ||
+            "Reasoning tokens accumulated by this session.", "counter",
+            session->reasoning_tokens) < 0 ||
         metric_typed_u64(&text, "snajpagent_session_total_tokens_total",
             "Total tokens accumulated by this session.", "counter",
             snag_metrics_usage_total(session)) < 0 ||
@@ -295,7 +298,8 @@ snag_metrics_read(int root_fd, const char *session_id, struct snag_metrics_view 
     (void)snprintf(path, sizeof(path), "%s.prom", session_id);
     input = snag_open_read_security_at(metrics_fd, path, false);
     if (input < 0) goto out;
-    if (snag_fstat(input, &info) < 0 || info.st_size < 0 || (uint64_t)info.st_size > SNAG_METRICS_FILE_MAX)
+    if (snag_fstat(input, &info) < 0 || info.st_size < 0 ||
+        (uint64_t)info.st_size > SNAG_METRICS_FILE_MAX)
         goto out;
     text = malloc((size_t)info.st_size + 1u);
     if (!text) goto out;
@@ -313,45 +317,65 @@ snag_metrics_read(int root_fd, const char *session_id, struct snag_metrics_view 
                        sizeof(view->active_turn_id))) < 0 ||
             (parsed = info_label(line, "state", view->state, sizeof(view->state))) < 0)
             goto out;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_turns_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_turns_total",
+                &value)) < 0) goto out;
         if (parsed) view->turns = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_responses_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_responses_total",
+                &value)) < 0) goto out;
         if (parsed) view->process_responses = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_input_tokens_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_input_tokens_total",
+                &value)) < 0) goto out;
         if (parsed) view->process_input_tokens = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_output_tokens_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_output_tokens_total",
+                &value)) < 0) goto out;
         if (parsed) view->process_output_tokens = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_reasoning_tokens_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_reasoning_tokens_total",
+                &value)) < 0) goto out;
         if (parsed) view->process_reasoning_tokens = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_total_tokens_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_total_tokens_total",
+                &value)) < 0) goto out;
         if (parsed) view->process_total_tokens = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_responses_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_responses_total",
+                &value)) < 0) goto out;
         if (parsed) view->session_responses = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_input_tokens_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_input_tokens_total",
+                &value)) < 0) goto out;
         if (parsed) view->session_input_tokens = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_output_tokens_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_output_tokens_total",
+                &value)) < 0) goto out;
         if (parsed) view->session_output_tokens = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_reasoning_tokens_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_reasoning_tokens_total",
+                &value)) < 0) goto out;
         if (parsed) view->session_reasoning_tokens = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_total_tokens_total", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_total_tokens_total",
+                &value)) < 0) goto out;
         if (parsed) view->session_total_tokens = value;
-        if ((parsed = parse_rate_metric(line, "snajpagent_session_prefill_tokens_per_second", &value)) < 0) goto out;
+        if ((parsed = parse_rate_metric(line, "snajpagent_session_prefill_tokens_per_second",
+                &value)) < 0) goto out;
         if (parsed) view->prefill_microtokens_per_second = value;
-        if ((parsed = parse_rate_metric(line, "snajpagent_session_decode_tokens_per_second", &value)) < 0) goto out;
+        if ((parsed = parse_rate_metric(line, "snajpagent_session_decode_tokens_per_second",
+                &value)) < 0) goto out;
         if (parsed) view->decode_microtokens_per_second = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_last_response_duration_ms", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_last_response_duration_ms",
+                &value)) < 0) goto out;
         if (parsed) view->last_response_ms = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_started_ms", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_started_ms",
+                &value)) < 0) goto out;
         if (parsed) view->process_started_ms = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_uptime_ms", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_uptime_ms",
+                &value)) < 0) goto out;
         if (parsed) view->process_uptime_ms = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_observed_ms", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_observed_ms",
+                &value)) < 0) goto out;
         if (parsed) view->observed_ms = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_pid", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_process_pid",
+                &value)) < 0) goto out;
         if (parsed) view->process_pid = value;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_turn_active", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_turn_active",
+                &value)) < 0) goto out;
         if (parsed) view->turn_active = value != 0u;
-        if ((parsed = parse_u64_metric(line, "snajpagent_session_response_open", &value)) < 0) goto out;
+        if ((parsed = parse_u64_metric(line, "snajpagent_session_response_open",
+                &value)) < 0) goto out;
         if (parsed) view->response_open = value != 0u;
         if (next && *next) line = next;
         else break;
@@ -372,14 +396,16 @@ snag_metrics_kill(const struct snag_metrics_view *view, char *error, size_t erro
 {
 #ifdef _WIN32
     (void)view;
-    return snag_fail(error, error_size, ENOTSUP, "killing sessions from top is unavailable on Windows");
+    return snag_fail(error, error_size, ENOTSUP,
+            "killing sessions from top is unavailable on Windows");
 #else
     if (!view || !view->valid || !view->process_pid)
         return snag_fail(error, error_size, ESRCH, "session has no live owner process");
     if (view->process_pid > (uint64_t)INT_MAX)
         return snag_fail(error, error_size, EINVAL, "session owner process id is invalid");
     if (kill((pid_t)view->process_pid, SIGTERM) < 0)
-        return snag_errorf(error, error_size, "cannot terminate session owner: %s", strerror(errno));
+        return snag_errorf(error, error_size,
+            "cannot terminate session owner: %s", strerror(errno));
     return 0;
 #endif
 }

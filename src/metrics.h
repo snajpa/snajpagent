@@ -58,7 +58,8 @@ struct snag_metrics_view {
 };
 
 int snag_metrics_write(int root_fd, const struct snag_metrics_sample *, char *, size_t);
-int snag_metrics_read(int root_fd, const char *session_id, struct snag_metrics_view *, char *, size_t);
+int snag_metrics_read(int root_fd, const char *session_id, struct snag_metrics_view *,
+    char *, size_t);
 uint64_t snag_metrics_usage_total(const struct snag_usage_totals *);
 int snag_metrics_kill(const struct snag_metrics_view *, char *, size_t);
 
