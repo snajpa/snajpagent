@@ -183,6 +183,9 @@ let
     cxxFlags = "${cflags} -stdlib=libstdc++ -pthread -fno-builtin-pow -fno-builtin-powf -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}${lib.optionalString early " -include ${./bsd-legacy-cxx.h}"}";
     cxxLibraries = "${ldflags} -L${cxx}/lib";
   };
+  libyaml = cmakeLibrary sourcePkgs.libyaml [
+    "-DBUILD_SHARED_LIBS=OFF" "-DBUILD_TESTING=OFF"
+  ] [];
   jansson = cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF" "-DJANSSON_BUILD_DOCS=OFF"
     "-DJANSSON_WITHOUT_TESTS=ON" "-DJANSSON_EXAMPLES=OFF"
@@ -409,7 +412,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl av xml archive ] ++ voiceRtc.dependencies ++ networkLibraries ++ [ regex ]
+      buildInputs = [ libyaml jansson curl av xml archive ] ++ voiceRtc.dependencies ++ networkLibraries ++ [ regex ]
         ++ [ pdf png freetype expat fontconfig jpeg openjpeg ] ++ lib.optional legacy cxx;
       enableParallelBuilding = true;
       dontConfigure = true;
@@ -435,6 +438,8 @@ in {
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
           'CFLAGS=-std=c11 ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=${ldflags} ${lib.optionalString legacy "-Wl,-mllvm,-emulated-tls"} ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
+          "YAML_CFLAGS=-I${libyaml}/include"
+          "YAML_LIBS=${libyaml}/lib/libyaml.a"
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"

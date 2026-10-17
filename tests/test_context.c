@@ -1751,7 +1751,7 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
                 "irc_state", "irc_topic", "irc_nick", "irc_connect", "irc_host", "irc_disconnect",
                 "irc_sleep", "irc_compact", "create_goal", "update_goal", "timer",
                 "defer_steering"};
-            assert(json_array_size(ts) == (config.allow_model_change ? 38u : 37u));
+            assert(json_array_size(ts) == (config.allow_model_change ? 39u : 38u));
             assert(
                 (item_by_field(ts, "name", "select_model") != NULL) == config.allow_model_change);
             for (size_t k = 0u; k < sizeof(unconditional) / sizeof(unconditional[0]); ++k)
@@ -6941,7 +6941,7 @@ main(int argc, char **argv)
     assert_string(projection.count_request.value, "model", SNAJPAGENT_MODEL);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
-        assert(json_array_size(tools) == 37u);
+        assert(json_array_size(tools) == 38u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert_context_tool_schemas(tools, NULL, 60000u, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
@@ -7038,7 +7038,7 @@ main(int argc, char **argv)
         json_t *gate;
         const char *gate_text;
         assert(json_is_array(tools));
-        assert(json_array_size(tools) == 37u);
+        assert(json_array_size(tools) == 38u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
@@ -7081,7 +7081,7 @@ main(int argc, char **argv)
                    sizeof(error), NULL) == 0);
         tools = json_object_get(projection.create_request.value, "tools");
         input = json_object_get(projection.create_request.value, "input");
-        assert(json_array_size(tools) == 37u);
+        assert(json_array_size(tools) == 38u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert(item_by_field(tools, "name", "irc_send"));
         assert(item_by_field(tools, "name", "irc_state"));
@@ -7140,7 +7140,7 @@ main(int argc, char **argv)
                 "function_call_output");
         const char *historical_text;
 
-        assert(json_array_size(tools) == 37u);
+        assert(json_array_size(tools) == 38u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert_context_tool_schemas(tools, NULL, 60000u, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
@@ -7199,7 +7199,7 @@ main(int argc, char **argv)
         tools = json_object_get(projection.create_request.value, "tools");
         semantic = json_object_get(projection.model_input.value, "items");
         harness = message_matching(semantic, "When IRC chat mode is active,");
-        assert(json_array_size(tools) == 37u);
+        assert(json_array_size(tools) == 38u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert_context_tool_schemas(tools, NULL, network_config.max_wait_ms, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "irc_send") != NULL);
@@ -7245,7 +7245,7 @@ main(int argc, char **argv)
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         json_t *semantic = json_object_get(projection.model_input.value, "items");
 
-        assert(json_array_size(tools) == 37u);
+        assert(json_array_size(tools) == 38u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert_context_tool_schemas(tools, NULL, 60000u, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);

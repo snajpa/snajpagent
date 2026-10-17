@@ -2,6 +2,14 @@
 
 # Implementation status
 
+Native skills development uses operator-curated dotdir roots, exact full-package
+review snapshots, direct terminal digest approval and persistent name-wide bans.
+Unapproved metadata is excluded from model catalogs and `--all-skills` is limited
+to operator inspection. Store/context and real CLI/terminal transport fixtures
+exercise approval, revocation and resume. Whole delivery remains in progress:
+additional lifecycle/UI coverage, documentation review, production-build
+qualification and explicitly approved Luna workflows are still required.
+
 Saved working directories that disappear remain recorded while new turns load
 global and explicit instruction roots. Context reports the unavailable path so
 the model can recover with an absolute `cd`; successful recovery is durable.

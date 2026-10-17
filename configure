@@ -199,6 +199,19 @@ pc_exists() {
 	[ "$have_pc" = yes ] && "$PKG_CONFIG" --exists "$@" 2>/dev/null
 }
 
+# Native skill metadata uses libyaml on every build profile.
+yaml_cflags=${YAML_CFLAGS:-}
+yaml_libs=${YAML_LIBS:--lyaml}
+if pc_exists yaml-0.1; then
+	yaml_cflags=${YAML_CFLAGS:-$("$PKG_CONFIG" --cflags yaml-0.1)}
+	yaml_libs=${YAML_LIBS:-$("$PKG_CONFIG" --libs yaml-0.1)}
+fi
+printf '#include <yaml.h>\nint main(void) { yaml_parser_t p; if (!yaml_parser_initialize(&p)) return 1; yaml_parser_delete(&p); return 0; }\n' > "$tmpd/yaml.c"
+if ! $CC ${CPPFLAGS:-} $yaml_cflags -o "$tmpd/yaml" "$tmpd/yaml.c" \
+	${LDFLAGS:-} $yaml_libs >/dev/null 2>&1; then
+	die 'libyaml headers and library are required; install libyaml-dev/yaml-devel or set YAML_CFLAGS and YAML_LIBS for the target'
+fi
+
 # --- linked audio/video (FFmpeg) ----------------------------------------
 WITH_AV=0
 av_note='not found'

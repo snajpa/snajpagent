@@ -2312,6 +2312,47 @@ out:
 }
 
 static bool
+skill_byte(unsigned char ch)
+{
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+        (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '@';
+}
+
+static int
+complete_skill(struct snag_term *term, bool *handled)
+{
+    *handled = false;
+    if (term->chat || !term->skills_catalog) return 0;
+    size_t start = term->cursor;
+    size_t end = start;
+    while (start && skill_byte(term->draft.data[start - 1u])) --start;
+    bool reference = start && term->draft.data[start - 1u] == '$';
+    bool command = term->draft.len >= 8u && !memcmp(term->draft.data, "/skills ", 8u) &&
+        start > 8u;
+    if (!reference && !command) return 0;
+    while (end < term->draft.len && skill_byte(term->draft.data[end])) ++end;
+    *handled = true;
+    struct completion matches = {0};
+    snag_buf_init(&matches.names, SNAG_MAX_DIRECT_PROMPT);
+    json_t *entries = json_object_get(term->skills_catalog, "entries");
+    int rc = -1;
+    for (size_t i = 0; i < json_array_size(entries); ++i) {
+        const json_t *entry = json_array_get(entries, i);
+        const char *id = snag_json_string(entry, "id");
+        if (id && completion_add(&matches, id, strlen(id), term->draft.data + start,
+            term->cursor - start) < 0) goto done;
+        const char *name = snag_json_string(entry, "name");
+        if (name && json_is_true(json_object_get(entry, "selected")) &&
+            completion_add(&matches, name, strlen(name), term->draft.data + start,
+                term->cursor - start) < 0) goto done;
+    }
+    rc = finish_completion(term, &matches, start, end);
+done:
+    snag_buf_free(&matches.names);
+    return rc;
+}
+
+static bool
 nick_byte(unsigned char c)
 {
     return c >= 0x80u || snag_irc_nick_char(c);
@@ -2907,6 +2948,8 @@ snag_term_feed_byte(
             int rc = complete_command_name(term, &handled);
 
             if (rc < 0 || handled) return rc;
+            rc = complete_skill(term, &handled);
+            if (rc < 0 || handled) return rc;
             rc = complete_mention(term, &handled);
             if (rc < 0 || handled) return rc;
         }
@@ -3134,6 +3177,7 @@ snag_term_close(struct snag_term *term)
     free(term->search_original);
     free(term->destinations);
     json_decref(term->irc_names);
+    json_decref(term->skills_catalog);
     snag_buf_free(&term->search_label);
     snag_buf_free(&term->search_query);
     snag_buf_free(&term->draft);

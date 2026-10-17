@@ -165,7 +165,7 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ musl.buildPackages.pkg-config ];
-    buildInputs = [ staticFixed.jansson curl av pdf staticFixed.libpng archive
+    buildInputs = [ staticFixed.libyaml staticFixed.jansson curl av pdf staticFixed.libpng archive
       staticFixed.libxml2 alsa pulse voice.rtc voice.juice voice.opus voice.srtp voice.speex
       staticFixed.usrsctp tls ];
     enableParallelBuilding = true;
@@ -199,6 +199,8 @@ in {
         'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString clockFallback " -DSNAJPAGENT_LEGACY_LINUX_CLOCK"}'
         'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else "-Os -g -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
         'LDFLAGS=${if musl.stdenv.hostPlatform.isx86_32 then "-static -no-pie" else "-static-pie"} ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections${pkgs.lib.optionalString clockFallback ",--wrap=clock_gettime"}${pkgs.lib.optionalString musl.stdenv.hostPlatform.isAarch32 " -Wl,-Bstatic,--no-dynamic-linker,-z,text"}${pkgs.lib.optionalString musl.stdenv.hostPlatform.isRiscV " -Wl,--exclude-libs,ALL"}'
+        "YAML_CFLAGS=$($PKG_CONFIG --cflags yaml-0.1)"
+        "YAML_LIBS=$($PKG_CONFIG --static --libs yaml-0.1)"
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
         "LDLIBS=$($PKG_CONFIG --static --libs jansson)${pkgs.lib.optionalString atomicFallback " -latomic"}"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"

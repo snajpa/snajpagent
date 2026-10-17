@@ -519,3 +519,36 @@ snag_mcp_command(struct snag_mcp *client, const char *command, struct snag_buf *
     return snag_buf_printf(report, "usage: /mcp list|status|tools|reload|login|logout SERVER; "
         "pending [DIGEST]; approve|deny DIGEST\n");
 }
+
+json_t *
+snag_mcp_requirement(const struct snag_mcp *client, const json_t *requirement)
+{
+    const char *type = snag_json_string(requirement, "type");
+    const char *name = snag_json_string(requirement, "value");
+    const char *url = snag_json_string(requirement, "url");
+    const char *transport = snag_json_string(requirement, "transport");
+    if (!transport) transport = snag_json_string(requirement, "transport_type");
+    const char *state = "missing";
+    const char *binding = "";
+    uint64_t generation = 0;
+    if (!type || strcmp(type, "mcp") || (transport && strcmp(transport, "streamable_http") &&
+        strcmp(transport, "streamable-http") && strcmp(transport, "http"))) {
+        state = "unsupported";
+    } else for (size_t i = 0; client && name && i < client->count; ++i) {
+        const struct snag_mcp_server *server = &client->servers[i];
+        if (strcmp(name, server->name)) continue;
+        const char *endpoint = snag_json_string(server->config, "url");
+        if (url && (!endpoint || strcmp(url, endpoint))) state = "endpoint_mismatch";
+        else if (server->auth_failed || server->force_refresh) state = "unauthorized";
+        else if (!server->enabled) state = "disabled";
+        else if (server->catalog && !*server->error) state = "available";
+        else if (*server->error) state = "unavailable";
+        else state = "configured";
+        binding = server->binding;
+        generation = server->generation;
+        break;
+    }
+    return json_pack("{s:O,s:s,s:s,s:I,s:s}", "requirement", requirement,
+        "state", state, "binding", binding, "generation", (json_int_t)generation,
+        "action", "Use normal MCP status/configuration/authentication and exact tool approval");
+}

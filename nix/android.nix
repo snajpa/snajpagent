@@ -88,6 +88,9 @@ let
           (lib.concatMapStringsSep ":" (dep: "${dep}/lib/pkgconfig") dependencies)}
       '';
     };
+  libyaml = cmakeLibrary sourcePkgs.libyaml [
+    "-DBUILD_SHARED_LIBS=OFF" "-DBUILD_TESTING=OFF"
+  ] [];
   jansson = cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF" "-DJANSSON_BUILD_DOCS=OFF"
     "-DJANSSON_WITHOUT_TESTS=ON" "-DJANSSON_EXAMPLES=OFF"
@@ -172,7 +175,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl regex ] ++ networkLibraries;
+      buildInputs = [ libyaml jansson curl regex ] ++ networkLibraries;
       enableParallelBuilding = true;
       dontConfigure = true;
       dontStrip = true;
@@ -184,7 +187,7 @@ in {
           sed -E 's/([0-9]+)/\1,/g' > build/ca_bundle.inc
         export PKG_CONFIG_PATH=
         export PKG_CONFIG_LIBDIR=${lib.escapeShellArg
-          (lib.concatMapStringsSep ":" (dep: "${dep}/lib/pkgconfig") ([ jansson curl ] ++ networkLibraries))}
+          (lib.concatMapStringsSep ":" (dep: "${dep}/lib/pkgconfig") ([ libyaml jansson curl ] ++ networkLibraries))}
         makeFlagsArray+=(
           'DEBUG=${if debug then "1" else "0"}'
           ${lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
@@ -195,6 +198,8 @@ in {
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -I${regex}/include -I${unistring}/include -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
           'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else cflags + " -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=-pie ${ldflags} ${lib.optionalString (!debug) "-flto -Wl,--gc-sections"}'
+          "YAML_CFLAGS=-I${libyaml}/include"
+          "YAML_LIBS=${libyaml}/lib/libyaml.a"
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=$(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"

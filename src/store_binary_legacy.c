@@ -172,7 +172,8 @@ hosted_search_kind(enum snag_binary_kind kind)
 static bool
 legacy_kind(enum snag_binary_kind kind)
 {
-    return hosted_search_kind(kind) || metadata_kind(kind) || timer_kind(kind) ||
+    return kind == SNAG_BINARY_SKILLS_UPDATED || hosted_search_kind(kind) ||
+        metadata_kind(kind) || timer_kind(kind) ||
         goal_kind(kind) || rule_voice_kind(kind) ||
         control_kind(kind) || download_kind(kind) || context_kind(kind) ||
         kind == SNAG_BINARY_RESPONSE_STARTED || kind == SNAG_BINARY_RESPONSE_OUTPUT ||
@@ -2156,7 +2157,11 @@ snag_binary_legacy_encode(struct snag_buf *out, const char *type, const json_t *
     if (canonical_data(data) < 0) return -1;
     struct snag_buf scratch = {.max = SNAG_MAX_EVENT_LINE};
     int rc;
-    if (metadata_kind(event.kind)) rc = read_metadata(data, &event, &scratch);
+    if (event.kind == SNAG_BINARY_SKILLS_UPDATED) {
+        rc = snag_binary_rule_value_encode(&scratch, data);
+        if (rc == 0) rc = snag_binary_rule_value_decode(scratch.data, scratch.len,
+            &event.data.skills_updated);
+    } else if (metadata_kind(event.kind)) rc = read_metadata(data, &event, &scratch);
     else if (timer_kind(event.kind)) rc = read_timer(data, &event);
     else if (goal_kind(event.kind)) rc = read_goal(data, &event);
     else if (control_kind(event.kind)) rc = read_control(data, &event);
@@ -3654,6 +3659,10 @@ snag_binary_legacy_decode(const struct snag_binary_record *record, const char **
     struct snag_binary_event event;
     int rc = snag_binary_event_decode(record, &event);
     if (rc < 0) return -1;
+    if (rc == 0 && event.kind == SNAG_BINARY_SKILLS_UPDATED) {
+        *type = "skills_updated";
+        return snag_binary_rule_value_json(&event.data.skills_updated, data);
+    }
     if (rc != 0 || !legacy_kind(event.kind)) return unsupported();
     json_t *result = json_object();
     if (!result) {

@@ -216,6 +216,7 @@ struct snag_config {
     uint32_t display_output_bytes;
     uint32_t output_cache_bytes;
     struct snag_rules *rules;
+    json_t *skills_roots; /* NULL selects only dotdir/skills; [] disables lookup. */
     json_t *mcp_servers; /* Named native MCP configurations. */
     json_t *mcp_credentials; /* Runtime redaction values; never serialized to config. */
     struct snag_secret_source *secrets;

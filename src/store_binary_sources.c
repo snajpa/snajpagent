@@ -155,6 +155,7 @@ static int
 update_sources(struct snag_binary_checkpoint_sources *sources, const struct snag_session *state,
     uint64_t sequence, enum snag_binary_kind kind, const json_t *data)
 {
+    if (kind == SNAG_BINARY_SKILLS_UPDATED) sources->skills = sequence;
     if (kind == SNAG_BINARY_SESSION_OPTIONS) sources->resume_options = sequence;
     if (!json_object_get(state->strings, "resume_options")) sources->resume_options = 0u;
     if (kind == SNAG_BINARY_RESPONSE_STARTED) {

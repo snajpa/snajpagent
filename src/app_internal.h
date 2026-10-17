@@ -56,6 +56,7 @@ struct snag_output_cache {
 struct app_state {
     const char *program;
     struct snag_mcp *mcp;
+    bool retry_skill_binding;
     /* Informational output from one command is shown in one pager invocation. */
     struct snag_buf *command_report;
     struct app_view_terminal *view_terminal;
@@ -323,6 +324,11 @@ int snag_app_input_command(struct app_state *, const char *, bool, bool *, bool 
  * confirmed (or not presentable), -1 on error. */
 int snag_app_consent(struct app_state *app, const char *reason, char *error, size_t error_size);
 int snag_app_sync_destinations(struct app_state *app);
+int snag_app_skills_command(struct app_state *, const char *, bool *);
+int snag_app_skills_refresh(struct app_state *, char *, size_t);
+int snag_app_skills_begin(struct app_state *, const char *, bool, bool, char *, size_t);
+int snag_app_skills_tool(struct app_state *, const struct snag_response_item *, json_t **,
+    char *, size_t);
 int snag_app_commit_event(
     struct app_state *app, const char *type, json_t *data, char *error, size_t error_size);
 bool snag_app_measured_input(struct app_state *app, uint64_t *tokens);

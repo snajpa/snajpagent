@@ -1934,11 +1934,10 @@ snag_child_spawn_terminal(struct snag_child *child, const char *executable, cons
 #endif
 
 int
-snag_child_spawn_host(struct snag_child *child, const char *const *argv)
+snag_child_spawn_host_env(struct snag_child *child, const char *const *argv, char **environment)
 {
     if (!argv || !argv[0] || !snag_path_root_len(argv[0])) return snag_errno(EINVAL);
     char *directory = snag_realpath(".");
-    char **environment = snag_environment_entries();
     int rc = -1;
     if (directory && environment) {
 #ifdef _WIN32
@@ -1949,6 +1948,16 @@ snag_child_spawn_host(struct snag_child *child, const char *const *argv)
     }
     int error = errno;
     free(directory);
+    errno = error;
+    return rc;
+}
+
+int
+snag_child_spawn_host(struct snag_child *child, const char *const *argv)
+{
+    char **environment = snag_environment_entries();
+    int rc = environment ? snag_child_spawn_host_env(child, argv, environment) : -1;
+    int error = errno;
     snag_environment_entries_free(environment);
     errno = error;
     return rc;

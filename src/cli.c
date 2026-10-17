@@ -217,6 +217,7 @@ parse_options(
         {"--no-client", 0, false, NULL, &cli->irc_no_client},
         {NULL, 'e', false, NULL, &cli->execute},
         {NULL, 'l', true, NULL, &cli->list},
+        {"--all-skills", 0, false, NULL, &cli->all_skills},
         {"--help", 'h', false, NULL, &cli->help},
         {"--update-model-cache", 0, false, NULL, &cli->update_model_cache},
         {NULL, 'V', false, NULL, &cli->version},
@@ -467,6 +468,7 @@ snag_cli_usage(int fd)
         "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n"
         "       " SNAJPAGENT_NAME " -l [N] [OPTIONS]\n"
         "       " SNAJPAGENT_NAME " vm [--dotdir DIR] [-N NAME|--resume WORKSPACE|--last|-l [N]]\n"
+        "       " SNAJPAGENT_NAME " skills [--dotdir DIR] COMMAND [ARGS] (see skills --help)\n"
         "       " SNAJPAGENT_NAME " convert [--dotdir DIR] [--jobs N]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login [PROVIDER] [AUTH_OPTION]\n"
         "       AUTH_OPTION: --openai-device-auth | --meta-device-auth |\n"
@@ -476,6 +478,7 @@ snag_cli_usage(int fd)
         "       " SNAJPAGENT_NAME " [OPTIONS] logout [PROVIDER]\n"
         "  -s, --listen[=ENDPOINT]      host the IRC server on ENDPOINT\n"
         "  -c, --client[=ENDPOINT]      connect to IRC; repeatable\n"
+        "      --all-skills  Include unapproved/banned packages in operator skill inspection\n"
         "      --no-listen              suppress the configured listener\n"
         "      --no-client              suppress configured outgoing connections\n"
         "  -n, --model-nick NICK        model nick (default agent0)\n"

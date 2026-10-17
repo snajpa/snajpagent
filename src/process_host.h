@@ -39,6 +39,8 @@ int snag_child_spawn_argv(
     struct snag_child *child, const char *const *argv, const char *directory, char **environment);
 /* Host utility with pipes and inherited cwd/environment/limits. Absolute argv[0]. */
 int snag_child_spawn_host(struct snag_child *child, const char *const *argv);
+/* Host utility with an explicit environment, preserving normal host limits. */
+int snag_child_spawn_host_env(struct snag_child *, const char *const *, char **);
 /* Direct argv in a new controlling terminal, no shell or agent environment. */
 int snag_child_spawn_terminal(
     struct snag_child *child, const char *executable, const char *const *argv);

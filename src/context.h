@@ -19,6 +19,8 @@ int snag_context_codex_compact_request(json_t *request);
 int snag_context_native_compact_parameters(json_t *request, const struct snag_config *config,
     const struct snag_session *session, const struct snag_provider_config *provider,
     const char *effort, const json_t *mcp_tools);
+json_t *snag_context_tool_catalog(const struct snag_config *, const struct snag_session *,
+    const char *provider, const json_t *mcp_tools);
 /* Shared native file/history-reading schemas; NULL outside this capability. */
 json_t *snag_context_read_tool_schema(const char *name);
 struct snag_credential;
@@ -133,6 +135,7 @@ int snag_context_build(struct snag_session *session, const char *model, const ch
 /* Model-work identity: stable across resume and independent of turn, cycle or
  * timing. The interface request derives its own namespace from this identity. */
 #define SNAG_CACHE_KEY_LEN 32u
+void snag_context_skills_changed(struct snag_session *session);
 void snag_context_cache_key(const struct snag_session *session, const char *provider,
     const char *model, char out[SNAG_CACHE_KEY_LEN + 1u]);
 int snag_context_compact_request_build(struct snag_session *session, const char *model,

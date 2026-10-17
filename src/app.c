@@ -3871,7 +3871,10 @@ handle_common_command(
     *handled = true;
     *prompt_ready = false;
     {
-        int rc = snag_app_voice_command(app, line, handled);
+        int rc = snag_app_skills_command(app, line, handled);
+        if (*handled) return rc;
+        if (!strncmp(line, "/skills use ", 12u)) return 0;
+        rc = snag_app_voice_command(app, line, handled);
         if (*handled) return rc;
         rc = snag_app_audio_command(app, line, handled);
         if (*handled) return rc;
@@ -4354,7 +4357,7 @@ view_single_command_native(const char *line, bool chained)
     if (snag_string_in(verb,
             "/help /? /status /history /model /fallback /fast /effort /context /retry "
             "/state /goal /steering /banner /configure /compact /yield /verbose /cat "
-            "/attachments /detach "
+            "/attachments /detach /skills "
             "/query /msg /notice /me /chat /join /part /names /topic /connections /whois /nick"))
         return true;
     if (strcmp(verb, "/session") && strcmp(verb, "/s")) {
@@ -5720,6 +5723,8 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
     bool hard_compacted = false;
     unsigned int cyber_clarifications = 0u;
     bool continuing = app->session.active_turn;
+    bool retry_skills = app->retry_skill_binding ||
+        (!continuing && app->session.last_turn_failed && !strcmp(prompt, "/retry"));
     bool fallback_started = false;
     unsigned int next_cycle = continuing ? app->session.active_cycle + 1u : 1u;
     struct snag_credential credential;
@@ -5854,6 +5859,8 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             content, error, sizeof(error)) < 0) {
         goto fail;
     }
+    if (snag_app_skills_begin(app, (goal_turn || timer_turn) ? NULL : prompt,
+        continuing, retry_skills, error, sizeof(error)) < 0) goto fail;
     if (!continuing && queued && !app->execute && render_prompt(app, false, prompt) < 0) {
         report_message = "queued prompt could not be rendered";
         goto output_fail;
@@ -7311,7 +7318,8 @@ submit_idle(
     } else if (retry && !app->session.last_turn_failed && !app->session.active_turn &&
                !app->session.pending_input) {
         (void)app_error(app, "no failed turn to retry");
-    } else if (!retry && !read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
+    } else if (!retry && !read_only && single_line && prompt[0] == '/' && prompt[1] != '/' &&
+               strncmp(prompt, "/skills use ", 12u)) {
         (void)app_error(app, "unknown slash command");
     } else if (!retry && !read_only && input_view == SNAG_RENDER_CHAT) {
         if (send_operator_routed(app, prompt, query, SNAG_IRC_MESSAGE) < 0) return 3;
@@ -7330,7 +7338,9 @@ submit_idle(
             return 0;
         }
         if (snag_app_queue_arm(app, false) < 0) return 3;
+        app->retry_skill_binding = retry;
         rc = run_tracked_turn(app, query, NULL, false, read_only, app->draft_content, false);
+        app->retry_skill_binding = false;
         if (rc == 3 || rc == 6) return rc;
         if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
             (app->session.queue_armed || app->goal_armed || app->session.pending_controls))
@@ -7884,6 +7894,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
                 error, sizeof(error), "cannot publish session attachment: %s", strerror(errno));
         goto fail;
     }
+    if (snag_app_skills_refresh(&app, error, sizeof(error)) < 0) goto fail;
     (void)snag_ui_history_open(&app.ui, dotdir, app.session.dir_path);
     history_warning(&app);
     if (snag_ui_orientation(&app.ui, &app.session, cli->resume) < 0 ||

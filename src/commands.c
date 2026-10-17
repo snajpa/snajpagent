@@ -2,6 +2,8 @@
 #include "commands.h"
 
 const struct snag_term_command snag_commands[] = {
+    {"/skills [list|show ID|use ID -- REQUEST|clear [ID]|refresh|prompt ID]",
+        "browse and invoke reusable task guidance"},
     {"/help", "commands and keys (alias /?)"},
     {"/?", "same as /help"},
     {"/status", "session and next-turn settings"},

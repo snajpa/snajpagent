@@ -3775,6 +3775,7 @@ static const struct archive_schema archive_schemas[] = {
         "queued_ms", "sha256"),
     ARCHIVE_SCHEMA(SNAG_BINARY_DOWNLOAD_REMOVED, "id", "reason"),
     ARCHIVE_SCHEMA(SNAG_BINARY_DOWNLOADS_CLEARED, "reason"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_SKILLS_UPDATED, "active"),
     ARCHIVE_SCHEMA(SNAG_BINARY_RULE_LOG, "chain", "message", "rule"),
     ARCHIVE_SCHEMA(SNAG_BINARY_RULE_TRANSFORM, "call_id", "effective_sha256", "original_sha256",
         "rule"),
@@ -4442,6 +4443,12 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
     if (event->kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED) {
         return encode_voice_adopted(out, &event->data.voice_transfer_adopted);
     }
+    if (event->kind == SNAG_BINARY_SKILLS_UPDATED) {
+        const struct snag_binary_result_value *value = &event->data.skills_updated;
+        struct snag_binary_result_value checked;
+        if (snag_binary_rule_value_decode(value->data, value->size, &checked) < 0) return -1;
+        return snag_buf_append(out, value->data, value->size);
+    }
     if (event->kind == SNAG_BINARY_RULE_LOG) {
         return encode_rule_log(out, &event->data.rule_log);
     }
@@ -4671,6 +4678,7 @@ static const struct {
     {SNAG_BINARY_DOWNLOAD_QUEUED, "download_queued"},
     {SNAG_BINARY_DOWNLOAD_REMOVED, "download_removed"},
     {SNAG_BINARY_DOWNLOADS_CLEARED, "downloads_cleared"},
+    {SNAG_BINARY_SKILLS_UPDATED, "skills_updated"},
     {SNAG_BINARY_RULE_LOG, "rule_log"},
     {SNAG_BINARY_RULE_TRANSFORM, "rule_transform"},
     {SNAG_BINARY_AUDIO_USAGE, "audio_usage"},
@@ -4705,6 +4713,7 @@ snag_binary_event_kind(const char *name, enum snag_binary_kind *out)
 uint16_t
 snag_binary_event_version(enum snag_binary_kind kind)
 {
+    if (kind == SNAG_BINARY_SKILLS_UPDATED) return 2u;
     if (control_kind(kind) ||
         kind == SNAG_BINARY_RULE_LOG || kind == SNAG_BINARY_RULE_TRANSFORM ||
         kind == SNAG_BINARY_AUDIO_USAGE || kind == SNAG_BINARY_VOICE_EVENT ||
@@ -4766,6 +4775,12 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
     }
     if (event->kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED) {
         return decode_voice_adopted(fields, &event->data.voice_transfer_adopted);
+    }
+    if (event->kind == SNAG_BINARY_SKILLS_UPDATED) {
+        if (snag_binary_rule_value_decode(fields->data + fields->offset,
+            fields->size - fields->offset, &event->data.skills_updated) < 0) return false;
+        fields->offset = fields->size;
+        return true;
     }
     if (event->kind == SNAG_BINARY_RULE_LOG) {
         return decode_rule_log(fields, &event->data.rule_log);

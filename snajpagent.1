@@ -4369,6 +4369,138 @@ A malformed snapshot withholds MCP tools for that turn and is reported in status
 Resume sessions that invoked MCP with an MCP-capable binary. Existing sessions
 that have never used MCP keep their storage contracts. No MCP server is configured
 by default. Changing the installed executable leaves running owners in place.
+.SH "Curated skills"
+Current source supports portable SKILL.md packages, Codex agents/openai.yaml
+metadata and the supported Claude invocation fields. Each package contains YAML
+frontmatter with name and description, Markdown instructions and optional scripts,
+references and assets. Inspecting a package parses data and never runs its scripts.
+Unsupported hooks, subagents, model overrides and inline execution prevent activation.
+.SS "Lookup paths and local policy"
+The default lookup root is skills beneath the selected application dotdir.
+Use the normal configuration file to choose the complete ordered root list:
+.PP
+.nf
+[skills]
+roots = ["skills"]
+.fi
+.PP
+Relative paths resolve against the selected dotdir. An empty JSON array disables
+lookup. Workspace directories, documentation roots, HOME/.agents, HOME/.codex,
+PATH and system directories add no implicit skill roots. External collections
+require explicit configuration. Enumerate configured, absolute and canonical paths,
+linked origins, path diagnostics and selected managed packages with /skills paths or:
+.PP
+.nf
+snajpagent skills --dotdir ~/.snajpagent paths --json
+.fi
+.PP
+The private, effective-user-owned dotdir/skills.json holds approvals, bans,
+disabled selections, reviews and installation receipts. Managed versions and
+review snapshots live under dotdir/skills/.store; recursive discovery excludes
+retained storage and selects installed versions through their receipts.
+Configuration and policy are local to each selected dotdir. Apply the same
+curation process separately on each machine. Relative CLI dotdir paths resolve
+against the launch directory.
+.SS "Review and approve an exact package"
+All unapproved package contents are adversarial, including names, descriptions,
+default prompts, scripts, references and assets. Normal catalogs, completion and
+model context expose only eligible approved packages. Installation, validation,
+explicit invocation and enablement grant no approval. To inspect pending or banned
+packages, launch with \-\-all-skills and use operator /skills list or /skills show;
+the standalone skills command accepts the same flag. This flag never widens the
+model catalog or permits activation.
+.PP
+.nf
+snajpagent skills install /absolute/source/my-skill
+snajpagent skills list --all-skills --json
+snajpagent skills review my-skill --json
+.fi
+.PP
+Review prepares a private retained snapshot and returns its qualified ID, full
+manifest and digest. The manifest covers relative paths, kinds, executable bits
+and every file's bytes, including binary assets. Git metadata is excluded.
+Escaping links, cycles, special files and detected concurrent changes are refused;
+permitted internal links are flattened in the snapshot. Read the returned
+instructions and resource files as adversarial data. In the interactive operator
+composer, approve exactly the reviewed ID and digest:
+.PP
+.nf
+/skills approve my-skill@QUALIFIED_ID --digest FULL_SHA256
+.fi
+.PP
+Only the direct operator command admits approval. The management CLI and model
+skills tool provide no approval action. Inspection and activation recheck the
+complete package manifest against the catalog before returning contents. A package
+changed since discovery is refused; refresh and review the changed version.
+Changed source packages disappear from eligibility until reviewed
+and approved again. An active task retains its admitted snapshot while its current
+approval remains valid, even if the original source disappears.
+.SS "Invoke, disable and ban"
+Use $my-skill in a direct task, or /skills use my-skill -- REQUEST, to explicitly
+select an eligible package. Quoted or fenced references remain ordinary text.
+The native model skills tool supports list, show and activate; activation pins
+attributed lower-priority instructions to the current task or persistent goal.
+Arguments are literal text. Package scripts use ordinary declared file/process
+tools with the existing permissions, yielding and cancellation behavior.
+.PP
+.nf
+/skills disable my-skill
+/skills enable my-skill
+/skills ban my-skill
+/skills unban my-skill
+.fi
+.PP
+Enable requires current approval. Ban accepts a name or qualified ID and excludes
+that name across roots and versions, including later installations. An absent
+standard name can be banned. Ban revokes approvals and reviews for that name;
+unban restores neither. Review and approve again to readmit it. Local revocations
+retire active guidance before the next provider request, including after retry,
+compaction and resume. Previously transmitted requests and completed effects
+cannot be retracted. Ban does not automatically kill managed commands.
+.PP
+/skills clear [ID] retires task bindings. /skills refresh reloads policy and the
+catalog. /skills prompt ID places an approved package's default prompt in the
+composer for editing. Read-only turns retain their ordinary tool restrictions.
+.SS "Author and manage packages"
+.nf
+snajpagent skills create /absolute/source/my-skill
+snajpagent skills validate /absolute/source/my-skill
+snajpagent skills install --git https://host/repository.git --ref COMMIT --subdir skills/my-skill
+snajpagent skills update my-skill
+snajpagent skills remove my-skill
+.fi
+.PP
+Create writes a new scaffold without overwriting an existing directory. Strict
+validation checks standard naming, field types and supported metadata. Local inline
+Markdown links outside code spans and fences, and vendor icon paths, must resolve
+inside the package; missing or escaping targets fail validation. External links
+are never fetched. Local and Git imports copy a checked package into private
+staged storage. Git retrieval
+suppresses global filters, hooks and recursive submodules and records the resolved
+commit. Publication is atomic; failed retrieval or validation preserves the selected
+version. Updates require a new review/approval. Removal deselects an installation;
+retained versions preserve active snapshots and rollback data.
+.PP
+Use skills --help for management syntax and --json for machine-readable reports.
+--dotdir selects policy/storage; --config selects the normal configuration file;
+--cwd supplies inspection context and adds no lookup roots. --root DIR explicitly
+overrides lookup roots for that management invocation. The source example
+examples/skills/skill-authoring is available for explicit import and review.
+.SS "Security and recovery"
+Approved skill prose remains subordinate to operator instructions and host policy.
+Dependency and allowed-tools metadata never grants permissions, installs software,
+authenticates services or silently changes the selected model. Inspect actual
+capability diagnostics before a workflow. A model-generated review is evidence,
+not approval. Use ordinary I/O rules and exact approvals for sensitive writes.
+.PP
+Skills curation is an application admission rule, not an operating-system sandbox.
+A model with unrestricted same-user shell/filesystem access can modify files that
+user owns. Protect policy and package storage with the deployment's actual
+permissions and I/O policy. Never treat a filename or root's presence as trust.
+New skills journals use a required native event revision and checkpoint payload;
+older readers refuse unsupported skills semantics rather than silently activating
+guidance without curation. Keep the matching binary when resuming these sessions.
+
 .SH "Configuration"
 The file is UTF-8 INI syntax.  Lines beginning with
 .B #

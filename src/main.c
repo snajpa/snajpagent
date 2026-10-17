@@ -8,6 +8,7 @@
 #include "render.h"
 #include "remote.h"
 #include "snajpagent.h"
+#include "skills.h"
 #include "store_convert.h"
 #include "top.h"
 #include "vm.h"
@@ -27,6 +28,7 @@ run(int argc, char **argv)
     int rc;
 
     snag_ignore_sigpipe();
+    if (argc > 1 && !strcmp(argv[1], "skills")) return snag_skills_main(argc - 2, argv + 2);
     if (argc > 1 && !strcmp(argv[1], "remote")) return snag_remote_main(argc - 2, argv + 2);
     if (argc > 1 && !strcmp(argv[1], "vm")) return snag_vm_main(argc - 2, argv + 2, argv[0]);
     if (argc > 1 && !strcmp(argv[1], "convert")) {

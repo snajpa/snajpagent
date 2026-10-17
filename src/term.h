@@ -122,6 +122,7 @@ struct snag_term {
     char *search_original;
     struct snag_irc_destinations *destinations;
     json_t *irc_names;
+    json_t *skills_catalog;
     struct snag_irc_target destination;
     struct snag_irc_conversation_target conversation;
     bool conversation_tabs, conversation_labels, view_reverse;

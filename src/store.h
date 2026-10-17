@@ -222,6 +222,10 @@ struct snag_session {
     /* The one-file journal checkpoint's persisted provider view is consumed
      * once on resume. Live checkpoint encoding is supplied by context.c. */
     json_t *checkpoint_context, *checkpoint_state;
+    json_t *skills_catalog; /* Derived owner catalog; not checkpointed. */
+    uint64_t skills_revoked_seq;
+    char skills_policy_digest[SNAG_SHA256_HEX_LEN + 1u];
+    json_t *active_skills; /* Exact journal-owned snapshots, including task/goal bindings. */
     json_t *download_queue;    /* Pending workstation downloads, durable in the journal. */
     json_t *irc_conversations; /* Immutable connection/conversation directory, snapshot v3. */
     json_t *irc_activity;      /* Optional derived counters; older checkpoints leave a known gap. */

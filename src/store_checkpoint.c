@@ -5,6 +5,7 @@
 #include "irc.h"
 #include "json.h"
 #include "snajpagent.h"
+#include "skills.h"
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
@@ -381,6 +382,12 @@ encode_state(const struct snag_session *s)
     JSON_FIELD(active_instructions); JSON_FIELD(response_public); JSON_FIELD(download_queue);
     if (s->irc_conversations) JSON_FIELD(irc_conversations);
     if (s->irc_activity) JSON_FIELD(irc_activity);
+    if (s->active_skills) JSON_FIELD(active_skills);
+    if (*s->skills_policy_digest &&
+        json_object_set_new(out, "skills_policy_digest", json_string(s->skills_policy_digest)) < 0)
+        goto fail;
+    if (s->skills_revoked_seq) PUT("skills_revoked_seq",
+        json_integer((json_int_t)s->skills_revoked_seq));
 #undef JSON_FIELD
 #define TEXT_FIELD(f) PUT("has_" #f, json_boolean(s->f != NULL))
     TEXT_FIELD(cwd); TEXT_FIELD(first_user); TEXT_FIELD(last_user);
@@ -472,6 +479,18 @@ decode_state(const json_t *data, struct snag_session *s)
     JSON_FIELD(strings); JSON_FIELD(compact_output); JSON_FIELD(pending_input);
     JSON_FIELD(active_instructions); JSON_FIELD(response_public);
 #undef JSON_FIELD
+    const char *policy_digest = snag_json_string(data, "skills_policy_digest");
+    if (policy_digest && (!snag_strcpy(s->skills_policy_digest,
+        sizeof(s->skills_policy_digest), policy_digest) ||
+        strlen(policy_digest) != SNAG_SHA256_HEX_LEN ||
+        !snag_hex_is_lower(policy_digest, SNAG_SHA256_HEX_LEN))) return -1;
+    if (json_object_get(data, "skills_revoked_seq") &&
+        snag_json_integer_u64(data, "skills_revoked_seq", &s->skills_revoked_seq) < 0) return -1;
+    json_t *skills = json_object_get(data, "active_skills");
+    if (skills) {
+        if (!snag_skill_bindings_valid(skills)) return -1;
+        s->active_skills = json_incref(skills);
+    }
     if (s->strings && !json_is_object(s->strings)) return -1;
     json_t *conversations = json_object_get(data, "irc_conversations");
     if (conversations) {

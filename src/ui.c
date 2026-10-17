@@ -1523,6 +1523,8 @@ view_state(struct snag_ui_display *display, const json_t *state)
         json_decref(copy);
         return -1;
     }
+    json_decref(display->term.skills_catalog);
+    display->term.skills_catalog = json_incref(json_object_get(copy, "skills_catalog"));
     snag_view_server_state(display->view, copy);
     json_decref(display->view_state);
     display->view_state = copy;
@@ -2639,7 +2641,9 @@ view_conversations(const struct snag_session *session, enum snag_irc_conversatio
 int
 snag_ui_view_state(struct snag_ui *ui, const struct snag_session *session)
 {
-    if (!ui->view_listening || ui->view_state_seq == session->next_seq) return 0;
+    /* Classic completion consumes the same catalog as workspace frontends. */
+    if ((!ui->view_listening && !session->skills_catalog) ||
+        ui->view_state_seq == session->next_seq) return 0;
     json_t *state = json_pack("{s:I,s:I,s:s,s:i,s:b,s:s,s:s,s:s,s:s,s:s}", "seq",
         (json_int_t)(session->next_seq - 1u), "end", (json_int_t)session->log_end, "sha256",
         session->prev_sha256, "schema", (int)session->format_version, "active",
@@ -2648,6 +2652,12 @@ snag_ui_view_state(struct snag_ui *ui, const struct snag_session *session)
         session->service_tier ? session->service_tier : "", "name",
         session->name ? session->name : "");
     if (!state) return -1;
+    if ((session->skills_catalog && json_object_set(state, "skills_catalog",
+        session->skills_catalog) < 0) || (session->active_skills &&
+        json_object_set(state, "active_skills", session->active_skills) < 0)) {
+        json_decref(state);
+        return -1;
+    }
 #if SNAJPAGENT_VM
     if (session->irc_activity && json_object_set(state, "irc_activity_after",
                                      json_object_get(session->irc_activity, "after")) < 0) {

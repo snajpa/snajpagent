@@ -29,6 +29,13 @@ Describe the outcome, constraints and repository; press Enter. A persistent
 goal carries implementation, testing and follow-through across turns until
 complete or blocked.
 
+Current source supports operator-curated task skills. Packages default to
+`~/.snajpagent/skills`; inspect effective roots with `/skills paths`. Import and
+review a package, then approve its exact full-package digest with
+`/skills approve ID --digest HASH`. Unapproved metadata stays out of model context.
+`/skills ban NAME` excludes that name across versions; `--all-skills` enables
+operator inspection only. See the manual's **Curated skills** workflow.
+
 New sessions start at `~`. The model manages its working directory and can read
 and edit files and run commands across the filesystem with your OS permissions,
 without per-call approval. Absolute paths and explicit `./` paths are supported.

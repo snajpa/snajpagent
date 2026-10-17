@@ -89,7 +89,7 @@ LIVE_WORKSPACE ?= $(CURDIR)
 LIVE_RESULT_ROOT ?=
 TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
 PLATFORM_SRC = src/base64.c src/base.c src/platform.c src/term_host.c src/tmux.c src/session_host.c src/session_relay.c src/session_client.c src/wake.c src/net.c src/process_host.c
-COMMON_SRC = $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/tools_write.c src/history.c src/history_view.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_irc_attention.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/metrics.c src/top.c src/app.c
+COMMON_SRC = $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/skills.c src/skills_manage.c src/skills_cli.c src/app_skills.c src/json.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/tools_write.c src/history.c src/history_view.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_irc_attention.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/metrics.c src/top.c src/app.c
 COMMON_SRC += src/convert.c src/tools_media.c src/media.c src/tools_document.c src/tools_audio.c src/app_media.c src/app_upload.c src/app_audio.c src/av.c src/pcm.c src/audio_device.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c src/voice.c src/voice_rtc.c src/app_voice.c
 COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c src/remote.c
 COMMON_SRC += src/clipboard.c src/clipboard_transfer.c
@@ -142,7 +142,7 @@ HEADERS += src/vm.h
 HEADERS += src/vm_transcript.h src/vm_document.h
 HEADERS += src/irc_address.h src/commands.h
 FIXTURE_BIN = tests/$(NAME)-fixture
-TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record tests/test_metrics $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire tests/test_clipboard tests/test_clipboard_transfer $(FIXTURE_BIN)
+TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_skills tests/test_credential tests/test_sse tests/test_json tests/test_store_record tests/test_metrics $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire tests/test_clipboard tests/test_clipboard_transfer $(FIXTURE_BIN)
 TEST_BIN += tests/test_json_abi
 BUILD_INPUTS = build/.build-inputs
 TEST_BIN += tests/test_irc_address
@@ -249,6 +249,8 @@ tests/test_credential: $(PLATFORM_SRC) src/credential.c src/secret_source.c test
 
 tests/test_instructions: $(PLATFORM_SRC) src/json.c src/instructions.c tests/test_instructions.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h src/instructions.h
 
+tests/test_skills: $(PLATFORM_SRC) src/json.c src/skills.c tests/test_skills.c src/skills.h src/base.h src/fs.h src/json.h
+
 tests/test_sse: $(PLATFORM_SRC) src/sse.c tests/test_sse.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/sse.h
 
 tests/test_json: $(PLATFORM_SRC) src/json.c tests/test_json.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h
@@ -290,19 +292,19 @@ tests/test_provider_transport: $(COMMON_SRC) tests/test_provider_transport.c $(H
 tests/test_context: CPPFLAGS += $(PDF_CFLAGS)
 
 tests/test_context tests/test_model_cache tests/test_store: $(BINARY_RUNTIME_SRC)
-tests/test_model_cache tests/test_store: src/context.c src/store_binary_context.c
+tests/test_model_cache tests/test_store: src/skills.c src/context.c src/store_binary_context.c
 tests/test_store: src/config.c src/rules.c src/secret_source.c \
     tests/fixture_store_legacy.h tests/fixture_store_history.h
 
 tests/test_vm_reader tests/test_vm_transcript tests/test_vm_workspace: $(BINARY_RUNTIME_SRC)
 tests/test_vm_reader: tests/fixture_store_legacy.h
-tests/test_vm_reader tests/test_vm_transcript tests/test_vm_workspace: src/context.c src/store_binary_context.c src/config.c src/rules.c src/secret_source.c src/wire.c
+tests/test_vm_reader tests/test_vm_transcript tests/test_vm_workspace: src/skills.c src/context.c src/store_binary_context.c src/config.c src/rules.c src/secret_source.c src/wire.c
 
 tests/test_context: tests/fixture_store_binary.h tests/fixture_store_legacy.h $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/json.c src/instructions.c src/context.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_media.c src/tools_document.c src/convert.c src/process_host.c src/av.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c tests/test_context.c $(HEADERS) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ) src/store_binary_context.c src/store_binary_checkpoint_provider.c src/store_binary.c src/store_binary_wire.c src/store_binary_wire.h src/store_binary_event.c src/store_binary_legacy.c src/store_binary_replay.c src/store_binary_import.c src/store_binary_producer.c src/store_binary_sources.c src/store_binary_checkpoint.c src/store_binary_checkpoint_text.c src/store_binary_checkpoint_calls.c src/store_binary_checkpoint_processes.c src/store_binary_checkpoint_inputs.c src/store_binary_checkpoint_payloads.c src/store_binary_checkpoint_core.c tests/test_context_binary.c
 
 tests/test_model_cache: $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/model_cache.c tests/test_model_cache.c $(HEADERS) src/store_binary_checkpoint.c src/store_binary_checkpoint_calls.c src/store_binary_checkpoint_processes.c src/store_binary_checkpoint_inputs.c src/store_binary_checkpoint_payloads.c src/store_binary_checkpoint_core.c src/store_binary_checkpoint_provider.c src/store_binary_replay.c
 
-tests/test_render: $(BINARY_RUNTIME_SRC) src/context.c src/store_binary_context.c \
+tests/test_render: $(BINARY_RUNTIME_SRC) src/skills.c src/context.c src/store_binary_context.c \
     src/config.c src/rules.c src/instructions.c src/media.c src/turn.c src/store.c \
     src/store_record.c src/store_checkpoint.c src/store_lookup.c src/store_lifecycle.c
 
@@ -366,7 +368,7 @@ tests/snajpagent-direct: $(COMMON_OBJ) tests/direct_session.c $(HEADERS)
 		build/direct_session.o $(LDLIBS) $(CURL_LIBS)
 
 tests/test_store: src/store_binary_checkpoint_closure.c src/store_binary_checkpoint_provider.c
-tests/test_context: src/store_binary_checkpoint_closure.c
+tests/test_context: src/skills.c src/store_binary_checkpoint_closure.c
 
 tests/test_store: tests/test_store_binary_image.c
 tests/test_store: src/store_binary_index.c src/store_binary_index.h tests/test_store_binary_index.c
@@ -384,7 +386,7 @@ tests/test_base tests/test_sse tests/test_provider_retry tests/test_upload_wire:
 tests/test_metrics:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^) $(LDLIBS)
 
-tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_write:
+tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_skills tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_write:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c %.o,$^) $(LDLIBS)
 
@@ -410,11 +412,14 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_irc_send
 	python3 tests/test_model_fallback.py ./$(BIN) $(if $(filter 0,$(WITH_VM)),--without-vm,)
 	python3 tests/test_mcp.py ./$(BIN)
+	python3 tests/test_irc_client.py
 	python3 tests/test_irc_queries.py ./$(BIN)
 	python3 tests/test_irc_hosted_channels.py ./$(BIN)
 	python3 tests/test_irc_channels.py ./$(BIN)
 	python3 tests/test_irc_connections.py ./$(BIN)
 	./tests/test_instructions
+	./tests/test_skills
+	SNAJPAGENT_TEST_BIN=./tests/snajpagent-transport python3 tests/skills.py
 	python3 tests/test_cwd_recovery.py ./$(BIN)
 	./tests/test_credential
 	./tests/test_sse

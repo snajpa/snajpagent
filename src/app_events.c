@@ -991,6 +991,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
         .history_orientation = app->history_orientation,
         .goal_recovery_rebase = app->history_recovery_rebase};
 
+    if (snag_app_skills_refresh(app, error, error_size) < 0) return -1;
     if (snag_mcp_prepare(app->mcp, &app->session,
             snag_app_active_input_pump, app) < 0)
         return snag_errorf(error, error_size, "cannot freeze MCP catalog");

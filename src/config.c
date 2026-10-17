@@ -30,6 +30,7 @@ enum section {
     SECTION_TOOL,
     SECTION_RULE,
     SECTION_MCP,
+    SECTION_SKILLS,
     SECTION_COUNT
 };
 
@@ -182,6 +183,7 @@ void
 snag_config_free(struct snag_config *config)
 {
     snag_rules_free(config->rules);
+    json_decref(config->skills_roots);
     json_decref(config->mcp_servers);
     for (size_t i = 0u; i < json_array_size(config->mcp_credentials); ++i) {
         json_t *value = json_array_get(config->mcp_credentials, i);
@@ -677,6 +679,8 @@ set_section(struct parse_state *state, char *name)
         section = SECTION_METRICS;
     else if (strcmp(name, "irc") == 0)
         section = SECTION_IRC;
+    else if (strcmp(name, "skills") == 0)
+        section = SECTION_SKILLS;
     else if (strcmp(name, "tool") == 0)
         section = SECTION_TOOL;
     else {
@@ -984,6 +988,22 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         }
     }
     switch (state->section) {
+    case SECTION_SKILLS:
+        if (!strcmp(key, "roots")) {
+            json_t *roots = snag_json_load_strict((const unsigned char *)value,
+                strlen(value), SNAG_CONFIG_FILE_MAX, NULL, 0u);
+            bool valid = json_is_array(roots);
+            for (size_t i = 0; valid && i < json_array_size(roots); ++i) {
+                const char *path = json_string_value(json_array_get(roots, i));
+                valid = path && *path && !strchr(path, '\n') && !strchr(path, '\r') &&
+                    json_string_length(json_array_get(roots, i)) == strlen(path);
+            }
+            if (!valid) { json_decref(roots); goto invalid; }
+            json_decref(config->skills_roots);
+            config->skills_roots = roots;
+            return 0;
+        }
+        break;
     case SECTION_PROVIDER:
         if (!strcmp(key, "auth")) {
             if (!strcmp(value, "api_key"))

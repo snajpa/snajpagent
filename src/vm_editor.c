@@ -672,6 +672,8 @@ insert_input(struct snag_vm_buffer *buffer, const struct snag_vm_input_event *ev
     term->chat = json_is_object(buffer->route);
     term->conversation_tabs = buffer->connection->buffers &&
         buffer->connection->buffers->next;
+    json_decref(term->skills_catalog);
+    term->skills_catalog = json_incref(json_object_get(state, "skills_catalog"));
     json_decref(term->irc_names);
     term->irc_names = json_incref(json_object_get(buffer->connection->state, "irc_names"));
     if (term->chat && snag_view_conversation_read(buffer->route, &term->conversation) < 0)

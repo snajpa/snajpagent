@@ -35,6 +35,7 @@ struct snag_cli {
     bool manual;
     bool update_model_cache;
     bool version;
+    bool all_skills; /* Operator inspection only; never changes model catalogs. */
     unsigned int verbosity;
     /* Immutable option values borrow argv for the lifetime of the CLI. */
     const char *color, *markdown; /* NULL means use configuration. */

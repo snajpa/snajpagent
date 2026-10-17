@@ -76,6 +76,9 @@ let
     rtcFlags = [ "-DCMAKE_CXX_FLAGS=${"-DJUICE_STATIC "}-DSCTP_STDINT_INCLUDE=\\\"stdint.h\\\"${pkgs.lib.optionalString (pty != null) " -D_WIN32_WINNT=${winver} -DWINVER=${winver} -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}" ];
     rtcPatches = pkgs.lib.optional legacy ./libdatachannel-legacy-ai-flags.patch;
   };
+  libyaml = cmakeLibrary windows.libyaml [
+    "-DBUILD_SHARED_LIBS=OFF" "-DBUILD_TESTING=OFF"
+  ] [];
   jansson = cmakeLibrary windows.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF"
     "-DJANSSON_BUILD_DOCS=OFF"
@@ -271,7 +274,7 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ windows.buildPackages.pkg-config ];
-    buildInputs = [ threads jansson curl regex av png pdf freetype jpeg openjpeg archive xml ] ++ voiceRtc.dependencies ++ networkLibraries
+    buildInputs = [ threads libyaml jansson curl regex av png pdf freetype jpeg openjpeg archive xml ] ++ voiceRtc.dependencies ++ networkLibraries
       ++ pkgs.lib.optionals (pty != null) [ pty.collector pty.cxx pty.unwind ];
     enableParallelBuilding = true;
     dontConfigure = true;
@@ -298,6 +301,8 @@ in {
         'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}'
         'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else "-Os -g -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
         'LDFLAGS=-static -municode ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections${pkgs.lib.optionalString legacy ",--major-os-version,5,--minor-os-version,${if arch == "x86_64" then "2" else "0"},--major-subsystem-version,5,--minor-subsystem-version,${if arch == "x86_64" then "2" else "0"}"}'
+        "YAML_CFLAGS=-I${libyaml}/include -DYAML_DECLARE_STATIC"
+        "YAML_LIBS=${libyaml}/lib/libyaml.a"
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
         "LDLIBS=$($PKG_CONFIG --static --libs jansson) -lsnagregex -lunistring -liconv -ladvapi32 -lntdll -lws2_32 -lwinpthread${pkgs.lib.optionalString (pty != null) " -lsnagpty -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind -luser32 -lshell32"}"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"

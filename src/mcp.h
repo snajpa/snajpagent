@@ -20,6 +20,8 @@ bool snag_mcp_watching(const struct snag_mcp *client);
 int snag_mcp_prepare(struct snag_mcp *client, const struct snag_session *session,
     snag_mcp_pump_fn pump, void *opaque);
 const json_t *snag_mcp_tools(const struct snag_mcp *client);
+/* Read existing configured/authenticated/catalog state without making a connection. */
+json_t *snag_mcp_requirement(const struct snag_mcp *, const json_t *);
 int snag_mcp_call(struct snag_mcp *client, const struct snag_response_item *call,
     snag_mcp_pump_fn pump, void *opaque, json_t **result);
 int snag_mcp_command(struct snag_mcp *client, const char *command, struct snag_buf *report,

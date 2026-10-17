@@ -2,6 +2,16 @@
 
 # Dependency and vendoring inventory
 
+## Skill metadata
+
+Every build profile links libyaml 0.2.5 (MIT license) for data-only parsing of
+`SKILL.md` frontmatter and `agents/openai.yaml`. The application checks field
+types, duplicate keys, aliases and tags after parsing. Skill loading has no
+Python dependency. Install the system development package (`libyaml-dev` or
+`yaml-devel`), or provide target `YAML_CFLAGS` and `YAML_LIBS`. Native builds use
+the `yaml-0.1` pkg-config entry. Production recipes link the pinned static
+library; Windows static consumers define `YAML_DECLARE_STATIC`.
+
 ## Optional Vim workspace
 
 `WITH_VM=1` builds the workspace reader, grid and Unicode helpers. Custom builds

@@ -4,6 +4,7 @@
 #include "fs.h"
 #include "instructions.h"
 #include "irc.h"
+#include "skills.h"
 #include "snajpagent.h"
 #include "store_binary_import.h"
 #include "store_binary_legacy.h"
@@ -252,6 +253,8 @@ free_session_state(struct snag_session *session)
     json_decref(session->response_public);
     json_decref(session->checkpoint_context);
     json_decref(session->checkpoint_state);
+    json_decref(session->skills_catalog);
+    json_decref(session->active_skills);
     json_decref(session->download_queue);
     json_decref(session->irc_conversations);
     json_decref(session->irc_activity);
@@ -1063,7 +1066,23 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
     const char *diag_call = NULL;
     const char *diag_status = NULL;
 
-    if (!strcmp(type, "download_queued")) {
+    if (!strcmp(type, "skills_updated")) {
+        json_t *active = json_object_get(data, "active");
+        if (!snag_skill_bindings_valid(active)) goto invalid;
+        const char *policy = snag_json_string(data, "policy_digest");
+        uint64_t revoked = 0;
+        if (json_object_get(data, "revoked_seq") &&
+            (snag_json_integer_u64(data, "revoked_seq", &revoked) < 0 || revoked > seq)) {
+            goto invalid;
+        }
+        if (policy && *policy && (strlen(policy) != SNAG_SHA256_HEX_LEN ||
+            !snag_hex_is_lower(policy, SNAG_SHA256_HEX_LEN))) goto invalid;
+        session->skills_revoked_seq = revoked;
+        if (policy) (void)snag_strcpy(session->skills_policy_digest,
+            sizeof(session->skills_policy_digest), policy);
+        json_decref(session->active_skills);
+        session->active_skills = json_incref(active);
+    } else if (!strcmp(type, "download_queued")) {
         if (download_queue_add(session, data) < 0) goto invalid;
     } else if (!strcmp(type, "download_removed")) {
         if (download_queue_remove(session, data) < 0) goto invalid;
@@ -4347,6 +4366,8 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->response_public = json_incref(source->response_public);
     staged->checkpoint_context = json_incref(source->checkpoint_context);
     staged->checkpoint_state = json_incref(source->checkpoint_state);
+    staged->skills_catalog = json_incref(source->skills_catalog);
+    staged->active_skills = json_deep_copy(source->active_skills);
     staged->download_queue = json_deep_copy(source->download_queue);
     staged->irc_conversations = json_incref(source->irc_conversations);
     staged->irc_activity = json_incref(source->irc_activity);
@@ -4389,6 +4410,7 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
         staged->process_count = source->process_count;
     }
     return (source->strings && !staged->strings) ||
+                   (source->active_skills && !staged->active_skills) ||
                    (source->download_queue && !staged->download_queue)
                ? -1
                : 0;

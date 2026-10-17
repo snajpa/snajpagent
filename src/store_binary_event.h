@@ -97,7 +97,8 @@ enum snag_binary_kind {
     SNAG_BINARY_VOICE_EVENT = 257,
     SNAG_BINARY_VOICE_TRANSFER_RECORD = 264,
     SNAG_BINARY_VOICE_TRANSFER_SEALED = 265,
-    SNAG_BINARY_VOICE_TRANSFER_ADOPTED = 266
+    SNAG_BINARY_VOICE_TRANSFER_ADOPTED = 266,
+    SNAG_BINARY_SKILLS_UPDATED = 272
 };
 
 enum snag_binary_actor { SNAG_BINARY_USER = 1, SNAG_BINARY_MODEL = 2 };
@@ -935,6 +936,7 @@ struct snag_binary_event {
             struct snag_binary_text reason;
         } download_removed;
         struct snag_binary_text downloads_cleared;
+        struct snag_binary_result_value skills_updated;
         struct snag_binary_compact_start compaction_started;
         struct snag_binary_compact_interrupt compaction_interrupted;
         struct snag_binary_compact_complete compaction_completed;

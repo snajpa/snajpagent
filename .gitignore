@@ -14,6 +14,7 @@
 /tests/test_context
 /tests/test_credential
 /tests/test_instructions
+/tests/test_skills
 /tests/test_irc
 /tests/test_irc_address
 /tests/test_irc_event

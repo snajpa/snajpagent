@@ -744,6 +744,8 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         return snag_app_voice_output(app, call, result, error, error_size);
     if (call && call->name && !strcmp(call->name, "list_goals"))
         return snag_app_goal_list(app, call, result, error, error_size);
+    if (call && call->name && !strcmp(call->name, "skills"))
+        return snag_app_skills_tool(app, call, result, error, error_size);
     if (call && call->name && !strcmp(call->name, "download_queue"))
         return download_queue_tool(app, call, result, error, error_size);
     if (call && call->name &&

@@ -75,7 +75,7 @@ NATIVE_FUNCTION_NAMES = {
     "set_command_shell", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
     "irc_host", "irc_disconnect", "irc_sleep", "irc_compact",
     "create_goal", "update_goal", "timer", "defer_steering",
-    "get_cwd", "cd",
+    "get_cwd", "cd", "skills",
 }
 
 

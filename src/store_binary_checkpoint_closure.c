@@ -385,7 +385,7 @@ collect_roots(struct closure_capture *capture,
     }
     uint64_t fixed[] = {sources->input, sources->compact_start, sources->compact_end,
         sources->active_compact, sources->response_start, sources->response_end,
-        sources->resume_options, state->voice_history.adopted_seq};
+        sources->resume_options, sources->skills, state->voice_history.adopted_seq};
     for (size_t i = 0u; i < sizeof(fixed) / sizeof(fixed[0]); ++i) {
         if (need(capture, &capture->roots, fixed[i]) < 0) return -1;
     }

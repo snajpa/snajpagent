@@ -28,6 +28,7 @@ valid(const struct snag_binary_checkpoint_payloads *view)
 {
     if (!view || view->turn == UINT64_MAX || view->compact_end == UINT64_MAX ||
         view->response_end == UINT64_MAX || view->resume_options == UINT64_MAX ||
+        view->skills == UINT64_MAX ||
         (!!view->compact_start != !!view->compact_end) ||
         (view->compact_end && view->compact_start >= view->compact_end) ||
         (!!view->response_start != !!view->response_end) ||
@@ -51,15 +52,17 @@ snag_binary_checkpoint_payloads_decode(const void *data, size_t size,
     if (!data || !out || size < PAYLOAD_HEADER) return snag_errno(EINVAL);
     const unsigned char *bytes = data;
     uint64_t count = number(bytes + 42u);
-    if (bytes[0] != 1u || bytes[1] || bytes[50] > 1u ||
-        count > (SIZE_MAX - PAYLOAD_HEADER) / 8u ||
-        size != PAYLOAD_HEADER + (size_t)count * 8u) return snag_errno(EINVAL);
+    size_t header = bytes[0] >= 2u ? PAYLOAD_HEADER + 8u : PAYLOAD_HEADER;
+    if ((bytes[0] < 1u || bytes[0] > 3u) || bytes[1] || bytes[50] > 1u ||
+        size < header || count > (SIZE_MAX - header) / 8u ||
+        size != header + (size_t)count * 8u) return snag_errno(EINVAL);
     struct snag_binary_checkpoint_payloads value = {
         .turn = number(bytes + 2u), .compact_start = number(bytes + 10u),
         .compact_end = number(bytes + 18u), .response_start = number(bytes + 26u),
         .response_end = number(bytes + 34u), .download_count = (size_t)count,
-        .downloads_present = bytes[50] != 0u, .downloads = bytes + PAYLOAD_HEADER,
-        .resume_options = number(bytes + 51u)};
+        .downloads_present = bytes[50] != 0u, .downloads = bytes + header,
+        .resume_options = number(bytes + 51u),
+        .skills = bytes[0] >= 2u ? number(bytes + PAYLOAD_HEADER) : 0u};
     if (!valid(&value)) return snag_errno(EINVAL);
     *out = value;
     return 0;
@@ -73,6 +76,7 @@ snag_binary_checkpoint_payloads_encode(struct snag_buf *out,
     json_t *options = json_object_get(state->strings, "resume_options");
     if ((options && !snag_session_options_valid(options)) ||
         (!!options != !!sources->resume_options) ||
+        (!!state->active_skills != !!sources->skills) ||
         sources->download_count != json_array_size(state->download_queue) ||
         (sources->download_count && !sources->downloads) ||
         (state->download_queue && !json_is_array(state->download_queue)) ||
@@ -83,7 +87,13 @@ snag_binary_checkpoint_payloads_encode(struct snag_buf *out,
     uint64_t turn = state->active_instructions ?
         sources->texts.slots[SNAG_BINARY_TEXT_ACTIVE_PROMPT].declaration : 0u;
     if (!!turn != state->active_turn) return snag_errno(EINVAL);
-    unsigned char header[PAYLOAD_HEADER] = {1u};
+    unsigned char header[PAYLOAD_HEADER + 8u] = {1u};
+    size_t header_size = PAYLOAD_HEADER;
+    if (sources->skills) {
+        header[0] = 3u;
+        header_size += 8u;
+        put_number(header + PAYLOAD_HEADER, sources->skills);
+    }
     put_number(header + 2u, turn);
     put_number(header + 10u, sources->compact_start);
     put_number(header + 18u, sources->compact_end);
@@ -93,7 +103,7 @@ snag_binary_checkpoint_payloads_encode(struct snag_buf *out,
     header[50] = state->download_queue != NULL;
     put_number(header + 51u, sources->resume_options);
     struct snag_buf staged = {.max = out->max};
-    int rc = snag_buf_append(&staged, header, sizeof(header));
+    int rc = snag_buf_append(&staged, header, header_size);
     for (size_t i = 0u; rc == 0 && i < sources->download_count; ++i) {
         unsigned char entry[8];
         put_number(entry, sources->downloads[i].receipt);
@@ -115,6 +125,7 @@ snag_binary_checkpoint_payloads_free(struct snag_binary_checkpoint_payloads_stat
     json_decref(value->response_public);
     json_decref(value->downloads);
     json_decref(value->resume_options);
+    json_decref(value->skills);
     memset(value, 0, sizeof(*value));
 }
 
@@ -355,6 +366,7 @@ snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *th
         (!!view->compact_end != !!state->compact_id[0]) ||
         (!!view->response_end != !!state->response_public_bytes) ||
         view->turn >= through->next_seq || view->resume_options >= through->next_seq ||
+        view->skills >= through->next_seq ||
         view->compact_end >= through->next_seq || view->response_end >= through->next_seq) {
         return snag_errno(EINVAL);
     }
@@ -391,6 +403,23 @@ snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *th
         int applied = snag_store_reduce_event(staged, type, data, sequence, NULL, 0u);
         json_decref(data);
         if (applied < 0) goto done;
+    }
+    if (view->skills) {
+        struct snag_binary_batch batch;
+        struct snag_binary_record record;
+        struct snag_binary_event event;
+        if (find_record(fd, through, access, view->skills, SNAG_BINARY_SKILLS_UPDATED,
+            &scratch, &batch, &record, &event) < 0) goto done;
+        const char *type;
+        json_t *data = NULL;
+        if (snag_binary_legacy_decode(&record, &type, &data) < 0) goto done;
+        int applied = snag_store_reduce_event(staged, type, data, view->skills, NULL, 0u);
+        json_decref(data);
+        if (applied < 0) goto done;
+        value.skills = json_incref(staged->active_skills);
+        value.skills_revoked_seq = staged->skills_revoked_seq;
+        memcpy(value.skills_policy_digest, staged->skills_policy_digest,
+            sizeof(value.skills_policy_digest));
     }
     value.response_public = json_incref(staged->response_public);
     value.response_public_bytes = staged->response_public_bytes;

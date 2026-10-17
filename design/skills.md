@@ -2,268 +2,324 @@
 
 # Skills
 
-Status: design settled for implementation, October 16, 2026. This document defines
-planned behavior; runtime support and qualification are pending.
+Status: revised design, October 16, 2026. Native implementation is in progress;
+qualification and shipment of this policy are pending. This revision replaces the
+earlier ambient-root and root-trust admission model.
 
-## Outcome and current boundary
+## Outcome and trust contract
 
-A skill is a reusable directory of task instructions and supporting resources.
-Skills must work through the ordinary local agent, every configured model/provider,
-one-shot execution, queued input, attached workspaces, goal continuation and resume.
+A skill is a reusable package of instructions and supporting resources. Skills
+work through ordinary local agents, configured models/providers, queued input,
+one-shot execution, workspaces, goals and resume. Runtime rules, current user
+input and ordinary tool permissions retain their existing precedence.
 
-The inspected source at `6808b6a9` has instruction-path discovery, managed tools,
-MCP admission, native session storage and context reconstruction, but no skills
-catalog, activation, management commands or YAML dependency. Skills reuse those
-owners. The fixed runtime rules and current user input continue to take precedence.
+The central contract is **operator-curated, approved versions only**. Discovery,
+installation, a familiar publisher, a trusted directory, a `$name` reference and
+an explicit request to inspect a package do not constitute skill approval.
+Unapproved skill contents are adversarial input, including names, descriptions,
+vendor metadata, filenames, references, scripts and assets.
 
-The compatibility target is the Agent Skills format and lifecycle, with explicit
-Codex metadata support. Other clients' execution extensions have separately stated
-semantics. A skill never authorizes an external effect by describing one.
+The format target remains Agent Skills with Codex metadata and documented Claude
+compatibility. Format compatibility confers no admission rights. Approved prose
+is attributed lower-priority task guidance, never application policy or an effect
+authorization. Approval on one machine does not silently approve another copy on
+another machine.
 
-## 1. Format and parsing
+## 1. Discovery roots and configuration
 
-Accept a directory containing `SKILL.md`, YAML frontmatter and a Markdown body.
-Implement the standard fields `name`, `description`, `license`, `compatibility`,
-`metadata` and experimental `allowed-tools`, and preserve additional data fields.
-Supporting directories such as `scripts/`, `references/` and `assets/` remain
-ordinary files. A skill may contain other directories and files too.
+Default discovery uses only the selected application's dotdir: `$dotdir/skills`.
+There is no automatic workspace, `~/.agents`, `~/.codex`, administrator, PATH or
+bundled-resource root. Launch cwd, `-d` working-document roots, repository files
+and frontend attachment do not add search locations.
 
-Use libyaml's C data parser, integrated into native and production build recipes.
-This avoids a second hand-written YAML grammar and a runtime Python requirement.
-Quoted values, block scalars, Unicode, mappings, sequences and ordinary aliases
-must work. Inspect declared fields with checked types; reject duplicate keys,
-cyclic structures, multiple documents and unsafe/non-data tags with diagnostics.
-Never instantiate objects, interpolate a shell or execute frontmatter.
+Expose the entire ordered root list in the normal application configuration:
 
-The explicit validator checks the published field types, naming/length rules,
-UTF-8, directory-name relationship and resource references. Runtime discovery
-isolates malformed entries: valid siblings stay usable. Cosmetic naming deviations
-produce a diagnostic and a stable selectable identity when safe; missing required
-metadata, ambiguous YAML or unsafe input prevents activation. Validation is strict;
-compatibility loading remains usable and explains every deviation.
+```ini
+[skills]
+roots = ["skills"]
+```
 
-Published advice about body size is advice. Existing file, record, tool-output and
-provider transport bounds remain real limits; introduce no skill-count quota or
-silent body truncation. Oversized activation fails explicitly before adoption.
+This is a JSON array of directory paths. Relative paths resolve against the
+selected dotdir, not launch/session cwd. Absolute paths select additional roots
+explicitly. An empty array disables discovery. Perform no shell evaluation or
+arbitrary environment expansion. Configuration rendering includes the effective
+default; omitted configuration does not conceal an additional search tier.
 
-## 2. Discovery, identity and trust
+`/skills paths` and `snajpagent skills paths --json` enumerate, in order:
 
-Default roots:
+- Each configured path, resolved absolute path, canonical target and presence.
+- Whether it is the default or explicitly configured, and any path diagnostic.
+- Application-owned package selections and their actual generation paths within
+  that root, including retained storage excluded from ordinary discovery.
+- Every linked origin that would need separate admission or review.
 
-- Workspace `.agents/skills`, from the session cwd upward to its repository root;
-  outside a repository, inspect the cwd's root only.
-- User `~/.agents/skills` and the application's selected `$dotdir/skills`.
-- Administrator `/etc/snajpagent/skills` on systems with that location, plus shipped
-  skill resources resolved through the existing installed-resource mechanism.
-- Explicit additional roots in local application configuration. Legacy Codex,
-  Claude or organization-specific directories can be included this way.
+Store managed generations below `$dotdir/skills/.store`. Local receipts select
+published packages; discovery does not recursively admit retained generations.
+`.store` is reserved managed storage, not an unreported second root. The paths
+report explains these selections and exclusions. A configured external root only
+makes candidates available for operator review; it approves none of its packages.
 
-Persistent `-d` instruction roots do not implicitly become skill roots. Discovery
-uses saved session cwd, not whichever directory a frontend occupies. A missing cwd
-retains user/admin availability and the existing absolute-cd recovery behavior.
+Search only configured roots, descend collection containers and stop at a
+`SKILL.md` boundary. Deduplicate canonical targets and detect cycles. Attribute
+linked roots/packages explicitly. Links escaping a package are refused during
+managed import; no linked origin gains approval from its parent. Stable identity
+includes source and package location; a separate digest identifies package content.
+Configuration order establishes precedence among *approved eligible* candidates.
+Same-priority collisions require a qualified ID. Inspect shadowed alternatives;
+never merge bodies or let an unapproved duplicate hide an approved package.
 
-Search only skill roots, never the whole working tree. Descend collection
-containers, stop at a `SKILL.md` package boundary and deduplicate canonical targets.
-Support linked root/package directories with explicit source attribution and
-cycle detection. A linked target outside an admitted root is a separately admitted
-origin; ordinary resource access does not silently traverse into another origin.
+## 2. Local approval, bans and review
 
-Precedence: explicit configured roots, nearest workspace, application-user root,
-portable user root, administrator, bundled. Configuration order resolves explicit
-root priority. Same-priority duplicates are ambiguous until qualified. Keep all
-colliding entries inspectable by origin-qualified ID; never merge their bodies.
-Display the selected default and shadowed alternatives. JSON/provider and terminal
-escaping keep descriptions and filenames as data. Identity follows origin
-and package location; a separate digest identifies the actual instruction version.
+`$dotdir/skills.json` holds private, effectively owned local policy and managed
+receipts. Use checked types, atomic replace, file/directory synchronization and
+the existing locking primitives. Repository files and package metadata cannot
+modify policy. Keep the records inspectable and version the policy schema.
 
-User/admin/explicitly configured roots are admitted according to local config.
-Workspace skills are discoverable but require a locally stored workspace trust
-choice before entering automatic model context. Repository files cannot grant
-that trust themselves. Show new/changed origins and diagnostics; trust of a root
-is not a claim that every future edit has been independently reviewed.
+Separate these states:
 
-## 3. Catalog and activation
+- **Pending:** discovered/imported but lacking approval for its exact content.
+- **Approved:** a recorded direct operator decision matches the immutable package
+  snapshot, source identity and package digest.
+- **Changed:** a previously approved source/version differs; the replacement is
+  pending review, while an already admitted immutable pin keeps its own version.
+- **Disabled:** an approved version excluded from future normal selection.
+- **Banned:** an explicit persistent exclusion, taking precedence over approval,
+  enablement, root priority and all skill invocation forms.
 
-Publish compact, escaped name/description/origin records; keep bodies and resources
-out of the initial catalog. Carry catalog generation in request/cache identity.
-Use a searchable, cursor-paged listing when the complete catalog cannot fit the
-existing output/request constraints. Report total/remaining entries truthfully.
-A skipped page must never mean that its skills do not exist.
+Approval fingerprints the full package manifest: relative paths, file kinds,
+executable bits and file bytes, including frontmatter, body, vendor metadata,
+references, scripts and assets. Deterministic traversal excludes Git internals.
+Reject special files, cycles and escaping links; import permitted internal links
+as ordinary files/directories with recorded provenance. Checked reads detect
+concurrent changes. Record the source revision and the exact reviewed snapshot.
+A change to any approved content requires a new review; approval of a directory
+is not approval of its future contents.
 
-Provide one model tool, `skills`, with `list`, `show` and `activate` actions.
-`list` searches/pages the catalog; `show` inspects metadata and source text without
-activating it. `activate` accepts a qualified ID and optional literal arguments.
-The result contains the full admitted instructions, skill root, version digest,
-invocation arguments, dependency state and a bounded resource listing. Generic
-filesystem/media tools inspect additional resources as needed.
+Review makes a private staged snapshot. The operator sees its source, resolved
+revision, complete content digest, capabilities, dependencies, manifest/diff and
+validation diagnostics. `/skills approve ID --digest HASH` approves exactly that
+reviewed snapshot. Verify the digest again at adoption; refuse a race rather than
+approving different bytes. Only direct operator command admission may create an
+approval. Model tool calls, generated slash text, timers, queued model text and
+package instructions cannot do so. The model-facing `skills` tool has no approval,
+enable, policy-write or all-entries action. Installing and validating can be
+ordinary requested tool work; approval remains an operator decision.
 
-Expose the same catalog, diagnostics and active bindings to terminal completion
-and semantic workspace views; attachment does not create a second catalog owner.
-Skill names do not shadow existing slash commands.
+`/skills ban <skill>` accepts a name or a catalog-qualified ID and records a
+name-wide exclusion across sources and versions. Resolve an ID through the
+operator inventory, including hidden entries. Allow banning an absent standard
+name so removal/reinstallation does not erase the exclusion. Name-wide bans
+prevent relocation, another root or an update from bypassing the decision.
+Record the selected identity/source for explanation, without narrowing the ban.
+Ban revokes approvals for that name and retires its active guidance before the
+next provider request. `/skills unban <skill>` removes the exclusion but restores
+no approval; a subsequent explicit review/approval is required.
 
-The model selects relevant skills from their descriptions. `show` never grants
-invocation rights. An operator `/skills clear [ID]` retires active pins without
-undoing tool effects or terminating commands. Explicit selection is
-available through `/skills use ID -- REQUEST` and unambiguous `$skill-name`
-references in direct operator input. Recognize references outside code/escaped
-text; unknown or ambiguous explicit selections return a useful error. Queued
-requests resolve against the catalog at actual admission, with that binding saved.
-An already admitted invocation retains its original identity across retries.
+Normal catalogs, completion, model context, model list/show/activate results and
+operator `/skills` listings omit banned and unapproved contents. Unknown/hidden
+lookups give a generic unavailable response to the model rather than disclosing
+hidden descriptions. Operator-facing diagnostics may state the exclusion reason.
 
-Commit activation before making it active. Recheck a changed discovery version
-before admission; report the change instead of silently using different metadata.
-Treat skill prose as attributed, lower-priority task guidance, including when
-provider adapters flatten messages. Preserve the original user request separately.
+A launch/CLI **`--all-skills`** option exposes pending, changed, disabled and banned
+entries only to operator inventory/review surfaces, clearly labeled by state.
+It never approves, enables, invokes, unbans, places hostile metadata in model
+context or changes tool permissions. The model has no equivalent parameter.
+`/skills review ID` is an explicit operator inspection of candidate data, not an
+activation. If the operator asks a model to help review adversarial files, keep
+that a separately attributed, request-scoped review task with ordinary permissions;
+its report cannot approve the package.
 
-Default-prompt metadata inserts editable composer text; it does not submit input.
-Arguments are literal task data. Importing a skill never evaluates command
-substitution or performs recursive template expansion.
+These application admission controls are not an OS sandbox: a process with the
+same user's unrestricted filesystem access can modify that user's files. Preserve
+existing I/O/exact-approval policy for writes to curation state. Do not claim the
+application can protect a policy file from every same-UID process, and do not give
+skill instructions authority to request or perform policy edits.
 
-## 4. Vendor metadata and dependencies
+## 3. Parsing and validation
+
+Use libyaml's C data parser in native and production recipes. Accept YAML
+frontmatter and a Markdown body in `SKILL.md`; parse standard `name`, `description`,
+`license`, `compatibility`, `metadata` and experimental `allowed-tools`, preserving
+additional data fields. Ordinary aliases, quoted/block scalars, Unicode, mappings
+and sequences work. Reject duplicate keys, cycles, multiple documents, unsafe tags,
+invalid UTF-8 and malformed declared types with diagnostics. Execute nothing.
+
+The explicit validator checks published field types, naming/length rules and
+directory-name correspondence. It resolves local inline Markdown link destinations
+outside code spans/fences and vendor icon paths inside the package; missing or
+escaping resources fail validation. External links are never fetched. Isolate
+malformed entries so valid siblings remain inspectable. Compatibility loading can
+explain cosmetic deviations, but cannot bypass approval or unsafe-input rejection.
+Descriptions from pending packages belong only in operator review data.
+
+Body-size advice remains advice. Existing file, record, output and transport bounds
+apply; add no skill-count quota and silently truncate no adopted instructions.
+An oversized approval/activation fails explicitly before adoption.
+
+## 4. Catalog, tools and invocation
+
+Build one catalog with an operator inventory and a filtered eligible projection;
+frontends do not rescan independently. Only approved, enabled, unbanned versions
+enter the model's compact name/description/origin catalog. Bodies and resources
+remain lazy. Include catalog generation and active package digests in request/cache
+identity. Search/page within existing output bounds and report filtered counts and
+remaining entries truthfully. Large inventories are not silently absent.
+
+One model tool, `skills`, provides:
+
+- `list`: search/page the eligible catalog.
+- `show`: inspect an eligible approved version without activating it.
+- `activate`: pin an eligible approved version with optional literal arguments.
+
+Activation returns admitted instructions, immutable absolute root, source/package
+digests, literal arguments, dependency state and a bounded resource listing. Normal
+filesystem/media tools inspect approved supporting resources. Neither activation
+nor discovery executes scripts, installs dependencies or contacts a service.
+
+`/skills use ID -- REQUEST` and unambiguous `$skill-name` in direct operator input
+select approved versions. Recognize references outside code and escaped text.
+Explicit selection does not approve pending or banned packages. Model text cannot
+fake an explicit selection for a skill whose policy requires one. Queued requests
+resolve and check approval/bans at actual admission, and save their exact binding.
+Refresh/cwd/config changes replace the derived catalog at request boundaries;
+pending calls retain admitted versions, subject to explicit revocation.
+
+Commit acceptance before projecting active instructions or returning success.
+Inspection and activation recheck the complete package manifest against the
+catalog entry before returning contents; a changed snapshot requires refresh.
+Recheck source/review identity before adoption and report mismatches. Preserve the
+original user request independently. Skill names never shadow existing commands.
+`/skills clear [ID]` retires pins without undoing completed effects or stopping
+commands. Default-prompt metadata inserts editable text and does not submit it.
+
+## 5. Vendor metadata and capabilities
 
 Read `agents/openai.yaml` interface metadata, invocation policy and declared MCP
-tool dependencies. Display title, short description, default prompt and available
-appearance information; resolve icon paths through ordinary resource handling.
-Honor `policy.allow_implicit_invocation: false`: only a matching explicit operator
-selection may activate that skill. Model-generated text cannot fake that selection.
+requirements only through the same review/approval boundary. Resolve icon paths as
+package resources. Honor `policy.allow_implicit_invocation: false` in addition to
+local approval. Map Claude `disable-model-invocation`, `user-invocable` and
+`argument-hint` conservatively; conflicting controls use the restrictive result.
 
-Recognize Claude invocation controls (`disable-model-invocation`, `user-invocable`
-and `argument-hint`) with documented mappings to the same admission state. Conflicting
-controls use the more restrictive result. Support `$ARGUMENTS`, indexed arguments
-(`$ARGUMENTS[N]` and `$N`) and `${CLAUDE_SKILL_DIR}` as literal substitutions.
-Tokenize indexed arguments with quoting/escaping only; perform no shell or variable
-evaluation. Substitute once over the original body so inserted argument text can
-never introduce another substitution. Preserve the source digest and rendered
-instructions separately.
-Foreign executable features such as inline shell expansion, lifecycle hooks,
-model overrides and forked-agent contexts produce explicit compatibility diagnostics;
-activation requiring those behaviors is refused until the skill is adapted.
+Support `$ARGUMENTS`, `$ARGUMENTS[N]`, `$N` and `${CLAUDE_SKILL_DIR}` as single-pass
+literal substitutions. Indexed argument tokenization handles quoting/escaping
+without shell/variable evaluation. Preserve source body and rendered instructions
+separately. Foreign inline shell expansion, hooks, model overrides and forked-agent
+contexts produce compatibility diagnostics and refuse unsupported activation.
 
-`compatibility` remains descriptive text, not an executable dependency expression.
-Resolve declared MCP requirements against configured server identities, transports
-and endpoints. Show configured/available/missing/unauthorized states. Missing
-services guide the user to existing MCP configuration/authentication commands.
-A skill declaration cannot register a server, start login, install a package or
-connect to a new endpoint automatically.
+`compatibility` is descriptive text. Resolve MCP identities/transports/endpoints
+against actual configuration/authentication/catalog state; expose
+configured/available/missing/unauthorized states. Declared requirements never
+register a server, connect a new endpoint, log in or install anything automatically.
 
-Parse and expose `allowed-tools`; resolve recognized tool references against the
-actual local catalog. Existing permissions, read-only turns, I/O rules and exact
-MCP approvals remain authoritative. Foreign matcher syntax never becomes a broad
-allow rule. Additional approval follows the existing explicit policy path.
+Parse/expose `allowed-tools`; resolve exact recognized references against the
+actual catalog. Foreign matcher syntax grants nothing. Skill approval itself does
+not grant tool or MCP approval, widen filesystem/network policy or override a
+read-only turn. Follow existing explicit approval paths for effects.
 
-## 5. Execution and lifetime
+## 6. Execution, lifetime and revocation
 
-Scripts run through ordinary managed command tools, with their normal environment,
-cwd, cancellation, output retention and yielding. Provide absolute skill-root paths
-so scripts can find bundled resources while the session cwd remains unchanged.
-Installed scripts require an available interpreter or executable; discovery and
-activation execute nothing. Assets use the existing file/image/document tools.
+Scripts use existing managed commands with normal cwd, environment, yielding,
+output retention and cancellation. Supply immutable absolute package roots so
+resources remain stable without changing session cwd. Report missing interpreters
+or resources honestly. No alternate runner, daemon or automatic updater is needed.
 
-Bind activation to its initiating turn, or to the goal identity when invoked for
-ongoing goal work. Keep exact active instructions and literal arguments through
-that turn's retries, provider/model switches, compaction, detach and resume.
-Read-only side queries do not replace an ongoing binding. A new ordinary task
-retires prior non-goal pins; goal completion/cancellation retires that goal's pins.
-History remains intact and follow-up requests may reactivate the same skill.
+Bind exact instructions, rendered arguments, source identity and approved package
+digest to the initiating turn or active goal. Retain them through retries,
+provider/model switches, compaction, detach and resume; reconstruct from the
+journal/checkpoints, never a lossy summary or edited source tree. Deduplicate
+identical activations within a binding and preserve deterministic multi-skill order.
+A new ordinary task retires non-goal pins. Read-only side queries do not replace
+ongoing bindings; goal completion/cancellation retires goal pins.
 
-Deduplicate identical skill/version/argument activations within a binding. Preserve
-multiple distinct skills with deterministic admission order. Their text cannot
-change priority by claiming to be system instructions. Compaction reprojects the
-active pinned instructions and their attribution, rather than relying on a lossy
-summary to reproduce them.
+Recheck local revocations on resume and before each new provider request. Ban or
+explicit approval revocation invalidates matching pins even if their snapshot
+survives. Record retirement and explain the operator-visible reason; an old
+checkpoint never restores revoked authority. An already transmitted provider
+request cannot be retracted. Bans add no tool effects, undo completed work or
+silently kill existing commands; normal cancellation remains available. Preserve
+the original immutable package for other live/unknown owners and forensic history.
 
-The journal owns activation identity, exact loaded body, arguments and lifecycle.
-Checkpoints and provider views derive from those events. Include active digests in
-continuation/cache bindings. Add native required-feature/read-write compatibility
-handling so an older binary cannot resume and silently drop active skill semantics.
-Older sessions with no skill state retain their current behavior.
+The native journal owns approval-bound activation identity and exact snapshots.
+Policy remains locally authoritative for current revocations. Required-feature and
+checkpoint compatibility handling prevents older binaries from silently resuming
+skill semantics they cannot enforce, including the curated-policy revision.
+Old sessions without skills keep their existing behavior. Resume never repeats
+completed scripts or installation effects.
 
-Instruction snapshots are exact. Workspace resources remain live files accessed
-through ordinary tools and may change or disappear; report this honestly. Resume
-never replays completed scripts, installation steps or other tool effects.
+## 7. Management and authoring
 
-## 6. Management and updates
+Provide matching operator terminal and noninteractive inventory/management paths:
+`list`, `paths`, `show`, `validate`, `review`, `create`, `install`, `update`,
+`remove`, `enable`, `disable`, `ban`, `unban`, `refresh` and `clear` where applicable.
+Approval is restricted to direct operator admission as described above. `--all-skills`
+is inspection-only. Display state and the exact revision/digest in review results.
 
-Offer matching terminal and noninteractive entrypoints:
+Local/Git installation stages only the selected package, records resolved commit
+and provenance, validates, then atomically publishes a *pending* candidate. Use
+existing managed execution for retrieval/yield/cancel; disable Git hooks, filters,
+submodule fetches and automatic dependency installation. Reject traversal,
+special files and escaping links; omit Git internals and redact source credentials.
+Interrupted/concurrent/failed updates preserve the published generation and policy.
 
-- `/skills` and `snajpagent skills list/show/validate` for catalog and diagnostics.
-- `use` for invocation; `enable`, `disable` and `refresh` for local selection.
-- `create` for a standard scaffold, plus bundled authoring instructions usable by
-  any configured model through ordinary file-writing tools.
-- `install`, `update` and `remove` for application-owned packages. Accept a local
-  directory or explicitly selected Git source/subdirectory/ref; record the resolved
-  commit and provenance. Git-based operations require an available Git executable.
+Updates require approval for the new manifest before selection. Preserve older
+immutable generations for active pins and rollback. Removal affects managed
+receipts only, not arbitrary source roots, and preserves ban/revocation records.
+Cleanup never discards generations with live/unknown owners. User-source edits
+produce pending candidates; never execute directly from an unapproved live tree.
 
-Use existing managed-process execution for slow retrieval so the agent can yield;
-no additional runner, daemon, remote registry service or silent startup updater.
-Review metadata and required capabilities before enabling an imported package.
-Network retrieval and execution remain distinct actions; installation runs no hooks.
-Copy only the selected package tree: reject path traversal, special files and
-links escaping that package; omit Git internals. Submodule fetches and dependency
-installations require their own explicit actions. Redact credentials from source
-URLs, diagnostics and provenance receipts.
+Supply authoring guidance as a standard reviewable package that can be explicitly
+copied/imported into the dotdir. Shipping an example does not create a hidden
+bundled root or preapprove it. Creation writes a scaffold only; generated skills
+remain pending until operator approval. No shipped authoring package self-approves
+or grants approval to its outputs.
 
-Stage, validate and atomically publish managed packages under private application
-storage. Immutable installed generations keep admitted resource paths stable across
-updates; retain previous generations for ongoing invocations and rollback. A small
-local install receipt records source/revision and owned files. Removal touches only
-that managed package, never an arbitrary workspace/user source directory. Explicit
-cleanup must preserve generations with live/unknown owners. Source edits outside
-managed packages remain ordinary filesystem edits.
+## 8. Acceptance and delivery
 
-Refresh builds a replacement catalog and swaps only after validation. It applies
-at request boundaries; pending calls and pinned activations keep their admitted
-version. Enabling/disabling affects future selection and never implicitly cancels
-already running commands or rolls back completed effects.
+Permanent tests must exercise the real CLI/provider/workspace paths:
 
-## 7. Implementation shape
+1. Defaults enumerate dotdir only. Workspace/admin/home/bundled locations stay
+   undiscovered unless configured. Relative roots bind to dotdir; empty roots,
+   missing roots, links, collisions and every effective path are explained.
+2. Pending/adversarial descriptions, default prompts and dependencies stay out of
+   model context/completion/list/show. No discovery/inspection execution, login,
+   network call or automatic install occurs. Explicit `$name` cannot approve.
+3. Only direct operator approval of the exact reviewed manifest admits content.
+   Race/content/resource/script/mode changes invalidate the replacement; source
+   relocation and updates cannot inherit approval accidentally.
+4. Ban is persistent, name-wide and higher priority than approval. Ordinary views
+   hide bans; `--all-skills` only exposes operator review. Reinstall, rename of a
+   source directory, another root, unban and old checkpoints cannot restore approval.
+5. Approved package scripts/references/assets work through ordinary tools, with
+   real output checks, yielding, cancellation, permission denial, unavailable
+   dependencies and exact MCP authorization. Adversarial review stays data-only.
+6. Compaction/retry/model-switch/resume retain exact eligible pins; revocation
+   retires them before another request. Exercise goals, read-only side queries,
+   queued input, detached workspaces, required-feature rejection and no effect replay.
+7. Atomic local/Git import/update/remove, concurrency, rollback, private policy,
+   stable identities, retained generations and complete production dependency builds.
 
-Keep one small skills module (`skills.c/.h`) for parsing, discovery, identities,
-resolution and validation. Application glue owns commands, config and admission;
-existing tool/process and MCP owners execute effects. Extend context projection,
-store event/reducer/checkpoint encoding and semantic workspace state at their
-existing boundaries. There is no plugin ABI, skill scheduler or alternate journal.
+For real official-skill qualification, present selected source revisions and exact
+package manifests for operator approval before admitting their instructions to
+Luna. Isolate test sessions/artifacts/configuration and synthetic data; a test
+approval does not silently become a workflow approval on either machine.
 
-Canonical event/status boundaries: catalog replacement, activation accepted or
-refused, dependency resolution, task-binding retirement and managed installation
-publication. Reuse normal tool-start/completion records for script execution.
-Expose counts/digests and inspectable errors without unconditional large traces.
-Keep content lazy, avoid repeated whole-root scans per token/request, and invalidate
-catalog/cache state on explicit refresh, cwd or relevant configuration changes.
-
-## 8. Acceptance and implementation order
-
-1. Format/parser plus deterministic resolver: real portable and Codex examples,
-   aliases/block scalars/Unicode, duplicates, bad YAML, links/cycles, trust,
-   precedence, collisions, missing cwd, refresh and large paged catalogs.
-2. Actual CLI/provider activation: explicit and implicit selection, literal
-   arguments, disabled invocation, dependencies, multiple skills and read-only
-   restrictions. Discovery must have zero execution/network side effects.
-3. End-to-end workflows: run a bundled script through a managed tool, inspect a
-   reference, consume an asset and verify the real output. Exercise slow yield,
-   cancellation, permission denial, unavailable interpreters and MCP authorization.
-4. Durability and consumer equivalence: active-turn and goal compaction/resume,
-   source deletion/change, model switches, old-session imports, required-feature
-   rejection, queued input, detached/reattached workspace state and no tool replay.
-5. Management: local/Git install, pinned provenance, interrupted retrieval,
-   concurrent update, atomic rollback, live-generation retention and safe removal.
-6. Run relevant permanent regressions plus the repository gate, explaining any
-   baseline/environment failures. Build the combined current source and validate
-   supported production dependency recipes, with native Linux/Mac smoke coverage.
-
-Update the manual/tutorial, README/website introductory workflow, design/status,
-configuration examples and Unreleased entry together with runtime implementation.
-Source publication and installations require the current shipment scope; a base
-version change, stable release or website deployment remains a separate decision.
+Update the complete manual/tutorial, README/website workflow, configuration examples,
+status and Unreleased entry with implementation. Deliver a consistent curation
+policy on both machines with the authorized binaries/manuals. Preserve base version,
+existing sessions, credentials and gateway defaults; stable/tag/site publication
+remains separately authorized. Current source implements the curated admission
+path. Full-feature platform qualification and approved Luna workflow acceptance
+remain in progress until their recorded delivery checks complete.
 
 ## Reference baseline
 
-Official format/integration documentation and Codex/Claude documentation were
-retrieved October 16, 2026. Source receipts and retained copies accompany this
-design locally. These references are compatibility inputs, not permission grants.
+Official format/integration and Codex/Claude documentation were retrieved
+October 16, 2026. They are compatibility inputs, not permission grants. The local
+curation contract above governs admission even where another client auto-discovers
+or invokes skills. Retained source receipts accompany the design.
 
 - Agent Skills specification: `https://agentskills.io/specification`
 - Agent Skills integration: `https://agentskills.io/client-implementation/adding-skills-support`
 - OpenAI skills guide: `https://learn.chatgpt.com/docs/build-skills`
-- OpenAI skill-creator metadata reference: `https://github.com/openai/skills/blob/main/skills/.system/skill-creator/references/openai_yaml.md`
-- Claude Code skills extensions: `https://code.claude.com/docs/en/skills`
+- OpenAI metadata reference: `https://github.com/openai/skills/blob/main/skills/.system/skill-creator/references/openai_yaml.md`
+- Claude extensions: `https://code.claude.com/docs/en/skills`
