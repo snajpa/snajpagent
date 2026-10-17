@@ -4395,7 +4395,10 @@ snajpagent skills --dotdir ~/.snajpagent paths --json
 .fi
 .PP
 The private, effective-user-owned dotdir/skills.json holds approvals, bans,
-disabled selections, reviews and installation receipts. Managed versions and
+disabled selections, reviews and installation receipts. Private policy inspection
+rejects symbolic links in the dotdir path, including parent components; use the
+canonical absolute path when a temporary or home-directory prefix is an alias.
+Managed versions and
 review snapshots live under dotdir/skills/.store; recursive discovery excludes
 retained storage and selects installed versions through their receipts.
 Configuration and policy are local to each selected dotdir. Apply the same

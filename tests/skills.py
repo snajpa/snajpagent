@@ -15,7 +15,7 @@ BINARY = str(Path(os.environ.get("SNAJPAGENT_TEST_BIN", "./snajpagent")).resolve
 class SkillsCase(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="snag-skills-cli-")
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.home = self.root / "home"
         self.home.mkdir()
         self.dotdir = self.root / "state"
@@ -312,6 +312,16 @@ class CuratedPolicy(SkillsCase):
         self.assertTrue(all(item["present"] for item in paths["linked_origins"]))
         self.assertEqual(self.run_cli("list")["total"], 0)
 
+    def test_private_dotdir_rejects_symlinked_parent(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.dotdir, target_is_directory=True)
+        result = subprocess.run([BINARY, "skills", "--dotdir", str(alias), "paths", "--json"],
+            env=self.environment, capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot inspect skills settings directory", result.stderr)
+        self.assertEqual(self.run_cli("paths")["roots"][0]["path"],
+            str(self.dotdir / "skills"))
+
     def test_relative_dotdir_reports_absolute_lookup_paths(self):
         result = subprocess.run([BINARY, "skills", "--dotdir", "state", "paths", "--json"],
             cwd=self.root, env=self.environment, capture_output=True, text=True, timeout=10)
@@ -461,7 +471,6 @@ class RuntimeSkills(SkillsCase):
             active = event_list(self.runtime_events(), "skills_updated")[-1]["data"]["active"]
             self.assertEqual(len(active), 1)
             self.assertEqual(active[0]["manifest_digest"], review["digest"])
-            terminal.submit_wait("/model fixture/two-model/high:100000", "selected=100000")
             terminal.submit_wait("/session detach", "You can resume this session")
             directory = max((self.dotdir / "sessions").iterdir(),
                 key=lambda path: path.stat().st_mtime_ns)
@@ -470,7 +479,12 @@ class RuntimeSkills(SkillsCase):
                 view.bind()
                 if not view.states:
                     view.until("state")
+                result = view.result(view.command("/model fixture/two-model/high:100000"))
+                self.assertEqual(result["status"], "completed", result)
                 state = view.states[-1]
+                if state["model"] != "two-model":
+                    state = view.until("state", lambda message:
+                        message["state"]["model"] == "two-model")["state"]
                 self.assertEqual(state["model"], "two-model")
                 self.assertEqual(state["active_skills"], active)
                 self.assertEqual([entry["name"] for entry in

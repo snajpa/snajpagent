@@ -135,6 +135,11 @@ existing I/O/exact-approval policy for writes to curation state. Do not claim th
 application can protect a policy file from every same-UID process, and do not give
 skill instructions authority to request or perform policy edits.
 
+Private policy inspection uses the existing component-wise no-follow path checks.
+Select a canonical absolute dotdir; a symlinked parent is rejected, including
+operating-system temporary-directory aliases. This preserves the host filesystem
+inspection boundary while package-root links remain explicitly enumerated.
+
 ## 3. Parsing and validation
 
 Use libyaml's C data parser in native and production recipes. Accept YAML
