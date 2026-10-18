@@ -1,11 +1,11 @@
 ---
 name: skill-authoring
-description: Draft and validate a small reusable task package with explicit review and approval.
+description: Draft and validate a small reusable task package for a concrete project workflow.
 license: GPL-2.0-only
 ---
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
-# Author a curated task skill
+# Author a task skill
 
 Ask for the task, inputs, intended outputs and decisive verification. Keep the
 package focused on that workflow. Use `snajpagent skills create /absolute/PACKAGE`
@@ -18,8 +18,8 @@ Validate with `snajpagent skills validate /absolute/PACKAGE`. Exercise the actua
 workflow only with the user's authorization and the normal declared tools. Report
 its result, failure behavior, dependency requirements and any permissions it needs.
 
-Use `snajpagent skills install /absolute/PACKAGE` and `snajpagent skills review ID`
-to prepare an exact package manifest for the operator. Report the qualified ID,
-manifest digest, resource list and changes. Stop short of approving it. Only the
-operator may admit the reviewed snapshot with `/skills approve ID --digest HASH`.
-A future package change needs a new review and approval.
+Install with `snajpagent skills install /absolute/PACKAGE`, or place the package in
+an existing project's `.agents/skills` directory. Inspect its origin with
+`/skills paths`, refresh the catalog and invoke `$my-skill` with a representative
+task. Verify its output and failure behavior. Keep supporting resources lazy and
+instructions concise; vendor model or subagent hints do not launch another worker.

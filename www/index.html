@@ -36,14 +36,12 @@
         steering and saved sessions keep that work under your direction.
         Connect agents across machines and rooms to divide work and exchange
         findings while each runs tools in its own environment.</p>
-      <p>Start <code>snajpagent</code> and describe the task. Sessions start in your
-        home directory; the model manages its working directory. Tools read and
-        edit files and run commands across the filesystem with your OS
-        permissions. Local tools run without per-call approval. Tool details are hidden at the
-        default verbosity; show them when useful. Read replies and scroll back
-        normally. Native MCP in current development builds adds tools from configured
-        Streamable HTTP servers, with OAuth and exact call approvals. Setup and
-        recovery are in the <a href="manual.html#Native_MCP">MCP reference</a>.</p>
+      <p>Start <code>snajpagent</code> and describe the task. Sessions start at home;
+        the model manages its working directory. Local tools read/edit files and
+        run commands with your OS permissions, without per-call approval.
+        Tool details start hidden; show them when useful. Current-source MCP adds
+        configured Streamable HTTP tools with OAuth and exact call approvals.
+        See the <a href="manual.html#Native_MCP">MCP reference</a> for setup and recovery.</p>
       <figure>
         <a href="screenshots/ordinary.png">
           <img src="screenshots/ordinary.png" width="1122" height="221"
@@ -81,9 +79,9 @@
         <code>-N NAME</code> to name a new session and select it on attach or resume;
         <code>/session name NAME</code> names an existing session. <code>--resume</code> attaches to a running owner and restarts a stored session. Session lists show
         <code>attached</code>, <code>detached</code>, <code>running</code> (attachment status unavailable) or <code>stored</code> with prompts and IRC <code>nick@endpoint</code> (<code>s/</code> server, <code>c/</code> client).
-        <code>snajpagent -l</code> lists all attached sessions, then all detached
-        sessions, then those with unavailable attachment status, then the 10 most recent stored sessions, newest activity first
-        in each group. Use <code>-l N</code> to change the stored count, or
+        <code>snajpagent -l</code> lists sessions in that order, with the 10 most recent
+        stored sessions; each group sorts newest activity first.
+        Use <code>-l N</code> to change the stored count, or
         <code>-l 0</code> for running sessions only.
         Resume retains saved settings unless overridden, including the last
         chat/rollout view and verbosity when restarting a stored session. Terminal file transfers
@@ -122,32 +120,24 @@
         outside trusted networks. The <a href="manual.html">manual</a> covers
         supported providers, data destinations and capture controls.</p>
     </section>
-    <p>Current source supports curated task skills: review a package and approve its
-      exact content digest before use. <code>/skills paths</code> shows lookup roots;
-      <code>/skills</code> lists loaded skills.
-      <code>/skills ban NAME</code> excludes a skill across versions. Unapproved
-      packages stay out of model context. See the <a href="manual.html">skills reference</a>.</p>
+    <p>Current source supports temporary project roles through <code>work_context</code>:
+      enter a project or harness for a task, then leave to return to the broader work.
+      The same worker retains its conversation, model and notes. Project and configured
+      skill packages supply reusable instructions; <code>/skills paths</code> shows their
+      origins, <code>/skills</code> lists loaded guidance and <code>$my-skill</code> invokes a package. See the
+      <a href="manual.html">manual</a> for the workflow.</p>
     <section id="network" aria-labelledby="network-heading">
       <h2 id="network-heading">Coordinate distributed work</h2>
-      <p>People and agents connect through built-in IRC servers and clients.
-        Each instance can connect to several endpoints and channels;
-        <code>/connect ENDPOINT</code> joins that endpoint's advertised room.
-        A host accepts up to 1,024 remote connections (512 paired instances),
-        subject to its file-descriptor limit. Full-server errors remain visible
-        while clients retry.
-        Empty Tab cycles through rollout, connected rooms and opened private chats.
-        Open a private tab with <code>/query NICK</code> or join a channel
-        with <code>/join ENDPOINT/#CHANNEL</code>. Conversations keep
-        their own drafts, nickname completion and unread indicators. Enter sends to
-        the selected operator conversation and directs your own agent in rollout.</p>
-      <p>Models select room messages, sleep IRC delivery and compact context;
-        your transcript stays complete.</p>
-      <p>Start a room and connect another instance in a separate terminal:</p>
+      <p>Built-in IRC connects people and agents across endpoints and channels.
+        A host accepts 1,024 remote connections (512 paired instances), subject to
+        its file-descriptor limit. Rejection reasons remain visible while clients retry.
+        Empty Tab cycles rollout, rooms and private chats, each with its own draft.
+        Enter sends to the selected operator conversation; in rollout it directs
+        your agent. The <a href="manual.html">manual</a> covers connection and messaging controls.</p>
+      <p>Start a room; connect from another terminal:</p>
       <pre><code>snajpagent -s
 snajpagent -c</code></pre>
-      <p>These defaults connect on localhost. Give agents tasks in the room;
-        they can exchange messages and report results. How you divide the work
-        is up to you.</p>
+      <p>Defaults connect on localhost. Assign work in the room; agents exchange findings.</p>
       <p>Agents can use project files and Git for code and handoff notes;
         arrange access to those files separately. IRC has
         no authentication or TLS. Use localhost, a trusted network, or a secure
@@ -180,11 +170,10 @@ sudo make install</code></pre>
         <code>snajpagent login codex --with-access-token</code>, reading the token from stdin.
         Select the Codex provider for subsequent sessions; see the
         <a href="manual.html">login reference</a>.</p>
-      <p>Refresh available models with <code>/model cache</code>. The model's
-        <code>select_model</code> tool, enabled with <code>[agent] allow_model_change=true</code>
-        (default off), chooses from the current cache and can refresh
-        it before selecting a newly listed model. Current source adds <code>/fast</code>
-        to inspect priority service; <code>/fast on|off</code> sets it. Provider support and pricing apply.</p>
+      <p><code>/model cache</code> refreshes available models. Model-driven switching
+        requires <code>[agent] allow_model_change=true</code> (default off).
+        <code>/fast</code> inspects priority service; <code>/fast on|off</code> sets it.
+        Provider support and pricing apply.</p>
       <ul>
         <li><strong>OpenAI GPT-5+:</strong> recommended; the only model family thoroughly tested and
           known to work reliably with snajpagent.</li>

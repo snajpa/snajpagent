@@ -13,8 +13,8 @@ project notes that retain findings and unfinished work.
 [Install](#install-and-choose-a-provider) ·
 [User manual](https://agent.snajpa.net/manual.html)
 
-This guide and the web manual describe current source; downloaded releases ship
-a matching manual. Check `snajpagent -V` when behavior differs.
+This guide covers current source. Downloads include a matching manual; check
+`snajpagent -V` when behavior differs.
 
 ## 1. Work on a project
 
@@ -29,18 +29,17 @@ Describe the outcome, constraints and repository; press Enter. A persistent
 goal carries implementation, testing and follow-through across turns until
 complete or blocked.
 
-Current source supports operator-curated task skills. Packages default to
-`~/.snajpagent/skills`; inspect effective roots with `/skills paths`. Import and
-review a package, then approve its exact full-package digest with
-`/skills approve ID --digest HASH`. Unapproved metadata stays out of model context.
-Use `/skills` to see loaded skills and `/skills list` to browse available packages.
-`/skills ban NAME` excludes that name across versions; `--all-skills` enables
-operator inspection only. See the manual's **Curated skills** workflow.
+Ask the model to enter a temporary project or harness role with `work_context`,
+then leave to return to its broader assignment. The worker retains its conversation,
+model and notes; goals are optional. `cd` navigates within that work.
+Skills come from project `.snajpagent/skills`, `.agents/skills` and `.claude/skills`,
+then configured roots or `~/.snajpagent/skills`. Use `/skills` for loaded guidance,
+`/skills list` to browse, `/skills paths` for origins and `$my-skill` to invoke one.
+See the manual's **Project roles and skills** workflow.
 
-New sessions start at `~`. The model manages its working directory and can read
-and edit files and run commands across the filesystem with your OS permissions,
-without per-call approval. Absolute paths and explicit `./` paths are supported.
-Empty Enter opens a fresh prompt, like a shell.
+New sessions start at `~`; the model manages its working directory. Tools read/edit
+files and run commands with your OS permissions, without per-call approval.
+Paths may be absolute or explicit `./` paths. Empty Enter opens a fresh prompt.
 
 Scroll back normally. Tool details start hidden: `/verbose 1` shows activity,
 `/verbose 2` adds input/result previews and call references; `[…]` marks omissions.
@@ -77,8 +76,8 @@ while retaining the full log; failure preserves previous context.
 
 ### Keep working, or leave and come back
 
-Automatic retry is on by default. `/retry auto` toggles it for the session;
-`/retry auto on|off` sets it explicitly. `[agent] retry_auto` sets the default.
+Automatic retry defaults on. `/retry auto` reports its state; `/retry auto on|off`
+sets it explicitly. `[agent] retry_auto` sets the default.
 Failed turns retry five times; `max_turn_retries` changes that budget. With
 automatic retry enabled, active goals retry ordinary errors without a limit,
 while policy stops pause them.
@@ -109,8 +108,7 @@ terminal loss. Use `/s d` to detach, then `snajpagent --attach SESSION_ID`
 running-session picker. `/s a ID` switches live sessions; failure keeps the source.
 Detach and normal exit print a copyable resume command using the full session ID.
 It reconnects to a running owner and retains session settings.
-Current source also restores the last chat/rollout view and verbosity when
-restarting a saved session.
+Current source restores saved view and verbosity on restart.
 
 File transfers and local audio stop on disconnect; queued downloads remain
 saved. Restart microphone capture after reconnecting. New editors and pagers
@@ -409,41 +407,17 @@ updater-free. The manual covers channels, publisher URLs and recovery.
 `./configure` probes the toolchain and the four optional modalities and tunes the
 tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
-A session is one agent run. A workspace is a saved layout of panes showing
-sessions and conversations; several panes can show the same session.
-The development `snajpagent vm` frontend provides named workspaces, splits,
-retained transcripts, retrospective verbosity, search, mouse controls and Vim
-editing. Click an attached pane to enter **INSERT** for its prompts and `/commands`.
-Escape returns to **NORMAL**; `i`/`a`/`I`/`A` enter its composer again. From NORMAL,
-`:` enters **COMMAND-LINE** for workspace commands. The workspace command line names
-the current mode; dragging transcript text enters **VISUAL** selection.
-Each session prompt shows its name and live status. Conversation labels appear
-when there are multiple channels or queries to switch between.
-`:new [NAME]` creates an agent; `:session ID` resumes one. On POSIX,
-`:workspace detach` (or `:workspace d`) saves and detaches the whole workspace while
-agents continue. Tab/Shift-Tab complete commands and their options.
-`:w` saves the workspace; `:q` / `:x` / `:wq` save and detach it. `:q!` stops
-all controlled sessions and exits, preserving layout and drafts. `:close` closes
-a pane; `:session quit` stops the focused session.
-Leaving a saved workspace prints its `snajpagent vm --resume WORKSPACE_ID` command
-after restoring the shell screen. `:session detach` (also `:session d` or
-`:detach`) detaches only the focused session and shows `:attach SESSION_ID`.
-Restoring a workspace leaves stopped owners stopped.
-The experimental Windows workspace runs one live agent: `:close` hides it and
-`:q!` stops it before exiting. Additional live agents and persistent detach are unavailable.
+`snajpagent vm` saves pane workspaces containing sessions and conversations.
+Click a session pane for INSERT mode; Escape returns to NORMAL, where `:` opens
+workspace commands. `:new [NAME]` creates a session; `:session ID` resumes one.
+`:workspace detach` saves the layout while agents continue and prints its resume
+command. Restoring a workspace leaves stopped owners stopped. `:q` saves and
+detaches; `:q!` stops controlled sessions and exits, preserving drafts.
 
-`/query NICK` opens a private conversation; `/chat #CHANNEL` opens a known channel.
-`:buffers` lists conversations;
-`:vsp ADDRESS` opens one in a split. Each conversation keeps its draft and undo
-history; agent conversations are read-only.
-Use `/query SESSION/ENDPOINT/NICK` to select another attached session's query;
-`:attach ID` in another split gives the workspace control of that session.
-
-Pane transcripts retain commands and output. `:reports` lists retained reports;
-`:history` returns to rollout. Search with `/TEXT`, `?TEXT`, `n`/`N`; select with
-`v`, `V` or Ctrl-V and yank with `y`. Clipboard transfer works through `remote`;
-OSC 52 delivery is unconfirmed. The [manual](snajpagent.1) covers reports,
-clipboard policy and `:classic` terminal access. `WITH_VM=0` omits the frontend.
+Transcripts support search, selection, yanking and retained reports. The
+[manual](snajpagent.1) covers workspace controls, clipboard policy and `:classic`
+terminal access. `WITH_VM=0` omits the frontend. The experimental Windows
+workspace supports one live agent; persistent detach is unavailable.
 
 The POSIX build needs C11 with pthreads, GNU make, pkg-config and
 libcurl/Jansson development files. On the BSDs, install GNU make and use `gmake`

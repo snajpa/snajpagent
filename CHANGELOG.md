@@ -86,7 +86,7 @@
   size quota.
 
 - Keep prices and unmatched shell-style dollar words literal in prompts. Restrict
-  skill shorthand to the approved catalog and keep interactive sessions open
+  skill shorthand to the discovered catalog and keep interactive sessions open
   when an explicit skill selection is unavailable.
 
 - Reuse compatible provider HTTP/1.1 connections across session tool cycles,
@@ -94,13 +94,16 @@
   replacement of closed or interrupted connections. Connection reuse requires
   libcurl 7.80 or later so retries remain controlled by the configured policy.
 
-- Add native operator-curated skills with dotdir-only default lookup, explicit
-  configured roots and path inventory, exact full-package review/approval,
-  name-wide bans and inspection-only `--all-skills`. Preserve admitted task/goal
-  snapshots through retry/resume while applying current local revocations before
-  provider requests. Include portable YAML/vendor metadata, literal arguments,
-  native list/show/activate tools and atomic local/Git package management. Use
-  retained reviewed-package paths throughout the approved catalog.
+- Add temporary `work_context` project roles with atomic cwd, guidance and skill
+  changes. Preserve the broader assignment, model, running commands and parent
+  guidance across navigation, direct switches, compaction and resume; native goals
+  are optional. Leave returns to the original directory and retires visit guidance.
+
+- Discover portable skills from project and configured roots with canonical alias
+  deduplication and deterministic precedence. Load supporting resources on demand;
+  retain activated instruction snapshots through retry and resume. Remove skill
+  approval, revocation, enable/disable, ban and inspection-only controls. Keep
+  list/show/activate/refresh and atomic local/Git package management.
 
 - Yield workstation sends and receives after the configured tool wait while
   their transfer continues in the background. Keep pending exports until digest

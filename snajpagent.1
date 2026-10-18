@@ -4463,157 +4463,141 @@ A malformed snapshot withholds MCP tools for that turn and is reported in status
 Resume sessions that invoked MCP with an MCP-capable binary. Existing sessions
 that have never used MCP keep their storage contracts. No MCP server is configured
 by default. Changing the installed executable leaves running owners in place.
-.SH "Curated skills"
-Current source supports portable SKILL.md packages, Codex agents/openai.yaml
-metadata and the supported Claude invocation fields. Each package contains YAML
-frontmatter with name and description, Markdown instructions and optional scripts,
-references and assets. Inspecting a package parses data and never runs its scripts.
-Unsupported hooks, subagents, model overrides and inline execution prevent activation.
-.SS "Lookup paths and local policy"
-The default lookup root is skills beneath the selected application dotdir.
-Use the normal configuration file to choose the complete ordered root list:
+.SH "Project roles and skills"
+Current source supports temporary project roles and portable SKILL.md packages.
+A package contains YAML name and description fields, Markdown instructions and
+optional scripts, references and assets. Codex agents/openai.yaml and supported
+Claude fields supply discovery and invocation metadata.
+.SS "Take on temporary project work"
+Ask the model to enter a project or harness directory for a specific task. The
+model's work_context tool accepts these arguments:
+.PP
+.nf
+{"action":"enter","path":"/work/project","task":"Implement the parser fix"}
+{"action":"status"}
+{"action":"leave","summary":"Fix and verification recorded in project notes"}
+.fi
+.PP
+Enter adopts a temporary developing-agent or harness role beneath the session's
+broader assignment. It changes the saved working directory, instruction references,
+skill catalog and task brief together. Read the discovered AGENTS.md files and
+follow their relevant document pointers. Persistent documents, notes and memory
+remain the continuity of the broader assignment; a native goal is optional.
+The conversation, selected model, native goal if present, IRC identity and running
+commands remain in place. Existing commands keep their original working directory.
+.PP
+Use cd for navigation within that work: it refreshes project guidance and skills
+while retaining the temporary role. Entering another role directly replaces the
+current visit and preserves the original return directory. There is one active
+visit. Leave returns to that directory and retires the visit's active skill
+instructions. Parent task guidance is retained. Summary is optional ordinary text;
+leaving requires no additional summarization request to a model.
+.PP
+Preparation failures preserve the previous cwd, role and guidance. If the original
+return directory disappears, leave accepts an existing path as a return override.
+Status reports the current cwd and role; read-only turns allow status only.
+Visits survive completed turns, compaction and resume until leave or replacement.
+Use the matching binary to resume sessions containing the new native context event.
+.SS "Reuse an existing workflow"
+Enter the workflow repository with a task naming the target project, required
+outcome and relevant limits. Read its entrypoint and activate the applicable skill;
+use ordinary file and command tools for its references and helpers. Navigate to the
+target project with cd as needed. Record results in the project's existing documents
+and leave when the temporary assignment ends.
+.PP
+The existing worker performs the workflow. Optional delegation can use an ordinary
+snajpagent CLI process for a concrete independent task. Vendor model names,
+subagent directives, hooks and inline-execution fields are advisory metadata;
+they do not launch processes, execute scripts or switch models. A workflow requiring
+independent reviewers still requires actual independent reviewers. Label sequential
+self-review accurately and report an unmet gate if that workflow cannot be adapted.
+Investigation instructions retain their actual read-only and access restrictions.
+.SS "Discover packages"
+Discovery searches the temporary role root first when it differs from cwd, then
+walks from cwd to the nearest Git root inclusive. Outside a Git project it searches
+cwd only. At each level, the ordered roots are .snajpagent/skills, .agents/skills and
+.claude/skills. Configured application roots follow project roots; their default is
+skills beneath the selected application dotdir.
 .PP
 .nf
 [skills]
 roots = ["skills"]
 .fi
 .PP
-Relative paths resolve against the selected dotdir. An empty JSON array disables
-lookup. Workspace directories, documentation roots, HOME/.agents, HOME/.codex,
-PATH and system directories add no implicit skill roots. External collections
-require explicit configuration. Enumerate configured, absolute and canonical paths,
-linked origins, path diagnostics and selected managed packages with /skills paths or:
+Relative application roots resolve against the selected dotdir. An empty array
+removes application roots while preserving project discovery. Canonical paths
+deduplicate aliases and collection links; cycles are skipped. Earlier roots take
+name precedence. Same-name packages within one root require their qualified ID.
+Inspect effective roots, origins, diagnostics and installed selections with:
 .PP
 .nf
-snajpagent skills --dotdir ~/.snajpagent paths --json
+/skills paths
+snajpagent skills --dotdir ~/.snajpagent --cwd /work/project paths --json
+snajpagent skills --cwd /work/project list --json
 .fi
 .PP
-The private, effective-user-owned dotdir/skills.json holds approvals, bans,
-disabled selections, reviews and installation receipts. Private policy inspection
-rejects symbolic links in the dotdir path, including parent components; use the
-canonical absolute path when a temporary or home-directory prefix is an alias.
-Managed versions and
-review snapshots live under dotdir/skills/.store; recursive discovery excludes
-retained storage and selects installed versions through their receipts.
-Configuration and policy are local to each selected dotdir. Apply the same
-curation process separately on each machine. Relative CLI dotdir paths resolve
-against the launch directory.
-.SS "Review and approve an exact package"
-All unapproved package contents are adversarial, including names, descriptions,
-default prompts, scripts, references and assets. Normal catalogs, completion and
-model context expose only eligible approved packages. Installation, validation,
-explicit invocation and enablement grant no approval. To inspect pending or banned
-packages, launch with \-\-all-skills and use operator /skills list or /skills show;
-the standalone skills command accepts the same flag. This flag never widens the
-model catalog or permits activation.
+The catalog reads SKILL.md and optional vendor metadata. Supporting resources are
+loaded when requested through ordinary tools. Refresh with /skills refresh after
+editing package instructions. New turns and successful context changes refresh
+lookup automatically. HOME/.codex, PATH and system directories add no implicit roots.
+.SS "Invoke and retain guidance"
+Use $my-skill in a direct task, or /skills use my-skill -- REQUEST, to select a
+package. Quoted or fenced references remain text. Unmatched dollar words, shell
+variables and prices remain literal. Explicit selection errors leave an interactive
+session open for correction; one-shot execution fails before contacting a provider.
 .PP
-.nf
-snajpagent skills install /absolute/source/my-skill
-snajpagent skills list --all-skills --json
-snajpagent skills review my-skill --json
-.fi
+Bare /skills lists loaded guidance; /skills list browses available packages.
+The model skills tool supports list, show, activate and refresh. List exposes
+concise metadata; show loads instructions and resource locations. Activation pins
+attributed instructions with literal arguments. Changed instructions since discovery
+require refresh. Repeating an identical active selection reuses its binding.
+The current-state prompt carries expanded instructions once; activation receipts
+retain metadata without repeating the instruction body.
+Scripts run only through ordinary declared tools with their normal lifecycle.
 .PP
-Review prepares a private retained snapshot and returns its qualified ID, full
-manifest and digest. The manifest covers relative paths, kinds, executable bits
-and every file's bytes, including binary assets. Git metadata is excluded.
-Escaping links, cycles, special files and detected concurrent changes are refused;
-permitted internal links are flattened in the snapshot. Read the returned
-instructions and resource files as adversarial data. In the interactive operator
-composer, approve exactly the reviewed ID and digest:
-.PP
-.nf
-/skills approve my-skill@QUALIFIED_ID --digest FULL_SHA256
-.fi
-.PP
-Only the direct operator command admits approval. The management CLI and model
-skills tool provide no approval action. Approved catalog root and SKILL.md paths
-name the retained reviewed package; the original source root is provenance.
-Inspection and activation recheck the
-complete package manifest against the catalog before returning contents. A package
-changed since discovery is refused; refresh and review the changed version.
-Changed source packages disappear from eligibility until reviewed
-and approved again. An active task retains its admitted snapshot while its current
-approval remains valid, even if the original source disappears.
-.SS "Invoke, disable and ban"
-Use $my-skill in a direct task, or /skills use my-skill -- REQUEST, to explicitly
-select an eligible package. Quoted or fenced references remain ordinary text.
-Dollar references activate only matching entries in the approved catalog.
-Other dollar-prefixed text, including prices and shell variables, stays literal.
-Use /skills use ID -- REQUEST when an unavailable selection should reject the
-request. Selection errors leave the interactive session open for correction;
-one-shot execution returns a failure status before contacting the provider.
-The native model skills tool supports list, show and activate; activation pins
-attributed lower-priority instructions to the current task or persistent goal.
-Arguments are literal text. Package scripts use ordinary declared file/process
-tools with the existing permissions, yielding and cancellation behavior.
-Each newly loaded skill displays a green lifecycle notice, "Skill loaded: NAME",
-in the rollout. Reusing an active binding keeps the existing notice.
-Use /skills to see the loaded skills by name and qualified ID. An empty session
-reports "No skills loaded". The command rechecks policy and removes revoked
-bindings before listing them. Use /skills list to browse the available catalog;
-\-\-all-skills expands that catalog inspection while /skills shows loaded bindings.
-Keep retained package contents unchanged and place outputs and caches elsewhere.
-Run Python helpers with python3 \-B or PYTHONDONTWRITEBYTECODE=1 to avoid bytecode
-cache writes. Changes inside a retained package invalidate its manifest at the next
-check.
-.PP
-.nf
-/skills disable my-skill
-/skills enable my-skill
-/skills ban my-skill
-/skills unban my-skill
-.fi
-.PP
-Enable requires current approval. Ban accepts a name or qualified ID and excludes
-that name across roots and versions, including later installations. An absent
-standard name can be banned. Ban revokes approvals and reviews for that name;
-unban restores neither. Review and approve again to readmit it. Local revocations
-retire active guidance before the next provider request, including after retry,
-compaction and resume. Previously transmitted requests and completed effects
-cannot be retracted. Ban does not automatically kill managed commands.
-.PP
-/skills clear [ID] retires task bindings. /skills refresh reloads policy and the
-catalog. /skills prompt ID places an approved package's default prompt in the
-composer for editing. Read-only turns retain their ordinary tool restrictions.
+Guidance activated during a visit belongs to that visit. Outside a visit it belongs
+to the current task or active persistent goal. Snapshots survive retry and resume;
+changes to helper resources do not revoke pinned instructions. /skills clear [ID]
+retires bindings. /skills prompt ID puts a package's default prompt in the composer
+for editing. Read-only turns retain their normal tool restrictions.
 .SS "Author and manage packages"
 .nf
 snajpagent skills create /absolute/source/my-skill
 snajpagent skills validate /absolute/source/my-skill
+snajpagent skills install /absolute/source/my-skill
 snajpagent skills install --git https://host/repository.git --ref COMMIT --subdir skills/my-skill
 snajpagent skills update my-skill
 snajpagent skills remove my-skill
 .fi
 .PP
-Create writes a new scaffold without overwriting an existing directory. Strict
-validation checks standard naming, field types and supported metadata. Local inline
-Markdown links outside code spans and fences, and vendor icon paths, must resolve
-inside the package; missing or escaping targets fail validation. External links
-are never fetched. Local and Git imports copy a checked package into private
-staged storage. Git retrieval
-suppresses global filters, hooks and recursive submodules and records the resolved
-commit. Publication is atomic; failed retrieval or validation preserves the selected
-version. Updates require a new review/approval. Removal deselects an installation;
-retained versions preserve active snapshots and rollback data.
+Create writes a scaffold in a new directory. Strict validation checks naming,
+metadata types and the package manifest. Local inline Markdown links outside
+code and vendor icon paths must resolve inside the package; missing or escaping
+targets fail validation. External links are never fetched. Discovery and activation
+do not recursively read every resource.
 .PP
-Use skills --help for management syntax and --json for machine-readable reports.
---dotdir selects policy/storage; --config selects the normal configuration file;
---cwd supplies inspection context and adds no lookup roots. --root DIR explicitly
-overrides lookup roots for that management invocation. The source example
-examples/skills/skill-authoring is available for explicit import and review.
-.SS "Security and recovery"
-Approved skill prose remains subordinate to operator instructions and host policy.
-Dependency and allowed-tools metadata never grants permissions, installs software,
-authenticates services or silently changes the selected model. Inspect actual
-capability diagnostics before a workflow. A model-generated review is evidence,
-not approval. Use ordinary I/O rules and exact approvals for sensitive writes.
+Local and Git imports copy checked packages into private staged storage. Git
+retrieval suppresses global filters, hooks and recursive submodules and records the
+resolved commit. Atomic publication preserves the selected version when retrieval
+or validation fails. Removal deselects an installation; retained versions preserve
+rollback data. The private, effective-user-owned dotdir/skills.json records
+installation selections. Managed versions live beneath dotdir/skills/.store.
 .PP
-Skills curation is an application admission rule, not an operating-system sandbox.
-A model with unrestricted same-user shell/filesystem access can modify files that
-user owns. Protect policy and package storage with the deployment's actual
-permissions and I/O policy. Never treat a filename or root's presence as trust.
-New skills journals use a required native event revision and checkpoint payload;
-older readers refuse unsupported skills semantics rather than silently activating
-guidance without curation. Keep the matching binary when resuming these sessions.
+Use skills --help for syntax and --json for machine-readable reports. --dotdir
+selects storage, --config selects normal configuration, --cwd supplies project
+lookup context and --root DIR overrides application roots for that invocation.
+See examples/skills/skill-authoring for an authoring workflow.
+.SS "Authority and migration"
+Skill instructions follow current user instructions and runtime rules. Package
+presence, allowed-tools and dependency metadata grant no permissions, install no
+software and authenticate no services. Normal OS access and service authentication
+apply. Inspect imported instructions and helpers before running them.
+.PP
+Approval, review, enable/disable, ban/unban and inspection-only --all-skills controls
+have been removed. Legacy curation fields are inert; existing package installations
+remain usable. Keep selected storage private, using a canonical dotdir path when
+its parent components are aliases. New context and skills journal records require
+a compatible reader; retain the matching executable for resume.
 
 .SH "Configuration"
 The file is UTF-8 INI syntax.  Lines beginning with

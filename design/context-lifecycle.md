@@ -77,6 +77,20 @@ routine reopen reads that boundary and its suffix, not the lifetime prefix.
     fixtures. A current executable and an older running process are different
     artifacts; installation must not alter the latter's open executable or state.
 
+## Temporary project work
+
+`work_context` enter/leave and `cd` prepare instructions, skills and cwd together
+before committing one context-change event. A visit adds a role/task brief and an
+original return point to session state. It remains subordinate to the ongoing
+assignment, including document-based work without a native goal. Navigation keeps
+the role; a direct switch replaces it; leave retires visit bindings and restores
+the parent return point. Running commands retain their spawn cwd.
+
+Journal replay, checkpoints and current provider projection carry this state
+independently of conversational summaries. Parent task bindings and current visit
+bindings have distinct lifetimes. See [project roles and skills](skills.md) for
+lookup, atomic failure and reuse contracts.
+
 ## One state and its derived views
 
 The session journal is authoritative. A checkpoint captures reducer state and

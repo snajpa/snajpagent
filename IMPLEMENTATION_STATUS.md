@@ -8,13 +8,13 @@ clients surface the reason once per outage and distinguish handshake and retry
 status. Live membership/completion remains dynamic; replay membership accommodates
 1,026 members per endpoint and bounded human snapshots describe omissions.
 
-Native skills development uses operator-curated dotdir roots, exact full-package
-review snapshots, direct terminal digest approval and persistent name-wide bans.
-Unapproved metadata is excluded from model catalogs and `--all-skills` is limited
-to operator inspection. Store/context and real CLI/terminal transport fixtures
-exercise approval, revocation and resume. Whole delivery remains in progress:
-additional lifecycle/UI coverage, documentation review, production-build
-qualification and explicitly approved Luna workflows are still required.
+Current source supports temporary project roles through `work_context`
+enter/leave/status and project-aware navigation through `cd`. The same session
+retains its model, broader assignment and persistent documents. Portable skills
+are discoverable from project and configured roots; activation pins attributed
+instructions with visit, task or goal lifetime. Resources remain lazy and skill
+curation controls have been removed. See [project roles and skills](design/skills.md)
+for the lifecycle and existing-workflow adaptation contract.
 
 Saved working directories that disappear remain recorded while new turns load
 global and explicit instruction roots. Context reports the unavailable path so
