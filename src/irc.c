@@ -1706,31 +1706,6 @@ hosted_history_event(const struct snag_irc_core *irc, const struct snag_irc_even
            snag_irc_endpoint_equal(event->endpoint, irc->listen);
 }
 
-int
-snag_irc_core_replay_hosted_history(
-    const struct snag_irc_core *irc, snag_irc_event_fn render, void *opaque)
-{
-    bool replayed = false;
-    if (!irc || !render) return snag_errno(EINVAL);
-    if (!irc->hosting) return 0;
-    for (size_t i = 0u; i < irc->history_count; ++i) {
-        struct snag_irc_event event = irc->history[(irc->history_start + i) % irc->history_limit];
-
-        if (!hosted_history_event(irc, &event)) continue;
-        event.historical = true;
-        if (render(opaque, &event) < 0) return -1;
-        replayed = true;
-    }
-    /* This callback is display-only: do not append or broadcast the boundary.
-     * Keep it scoped to the replayed room so per-room presentation queues
-     * cannot strand the completion marker in the unselected empty room. */
-    struct snag_irc_event ready = {.kind = SNAG_IRC_HISTORY_READY, .text = "replayed"};
-    if (!snag_strcpy(ready.endpoint, sizeof(ready.endpoint), irc->listen) ||
-        !snag_strcpy(ready.room, sizeof(ready.room), irc->room))
-        return snag_errno(EOVERFLOW);
-    return replayed ? render(opaque, &ready) : 0;
-}
-
 static int
 server_send_history(struct snag_irc_core *irc, struct irc_conn *peer)
 {

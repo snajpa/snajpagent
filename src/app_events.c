@@ -372,8 +372,12 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         if (send && event->route.revised &&
             json_object_set_new(send, "revised_text", json_string(event->text)) < 0) return -1;
     }
-    if (snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_IRC, .data.irc = event}) <
-        0)
+    /* Catch-up restores routing and context; chat bodies are read on /history. */
+    bool gap = event->kind == SNAG_IRC_HISTORY_READY &&
+        !strncmp(event->text, "history gap", 11u);
+    bool history = !gap && (event->historical || event->kind == SNAG_IRC_HISTORY_READY);
+    if (snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = history ? SNAG_UI_CONVERSATION : SNAG_UI_IRC, .data.irc = event}) < 0)
         return -1;
     own_agent = snag_irc_local_identity(app->irc, event, true);
     if (conversation_replied(

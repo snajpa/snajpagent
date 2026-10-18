@@ -1225,12 +1225,6 @@ snag_irc_restore_event(struct snag_irc *irc, const struct snag_irc_event *event)
     return 0;
 }
 
-int
-snag_irc_replay_hosted_history(const struct snag_irc *irc, snag_irc_event_fn render, void *opaque)
-{
-    return snag_irc_core_replay_hosted_history(irc ? irc->history : NULL, render, opaque);
-}
-
 const char *
 snag_irc_model_nick(const struct snag_irc *irc)
 {

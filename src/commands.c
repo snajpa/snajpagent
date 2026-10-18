@@ -57,7 +57,7 @@ const struct snag_term_command snag_commands[] = {
     {"/session attach|a ID", "switch to a live session; failure keeps this attachment"},
     {"/session detach|d", "return to the shell while this session continues"},
     {"/s [list|l|name NAME|attach|a ID|detach|d]", "alias for /session"},
-    {"/history [N]", "show N retained turns; default 1, 0 counts only"},
+    {"/history [N]", "show retained turns in rollout or selected conversation records in chat"},
     {"/delete", "delete after confirmation at a safe boundary"},
     {"/exit", "stop work, preserve session and exit"},
     {"/cat PATH", "open a local file in the configured pager"},

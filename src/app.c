@@ -4040,12 +4040,29 @@ handle_common_command(
     }
     if (strncmp(line, "/history", 8u) == 0 && (!line[8] || isspace((unsigned char)line[8]))) {
         const char *argument = line + 8u;
-        uint64_t count = 1u;
+        enum snag_render_view view = app->ui.input_interface ? app->ui.input_view :
+            snag_ui_view(&app->ui);
+        bool chat = view == SNAG_RENDER_CHAT;
+        uint64_t count = chat ? app->config->irc.history_lines : 1u;
         while (isspace((unsigned char)*argument)) ++argument;
         if (*argument && snag_parse_count(argument, &count) < 0)
             return app_error(app, "usage: /history [N]");
+        if (chat) {
+            const struct snag_irc_conversation_target *target = &app->ui.input_conversation;
+            if (target->kind == SNAG_IRC_CHANNEL ? !target->endpoint[0] :
+                    !target->connection[0] || !target->conversation[0])
+                return app_error(app, "select an IRC conversation first");
+            struct snag_buf text = {.max = SIZE_MAX};
+            int rc = snag_ui_history_report(&app->ui, &app->session, count,
+                app->command_report ? app->command_report : &text, target);
+            if (!rc && !app->command_report)
+                rc = snag_ui_text(&app->ui, SNAG_UI_HELP, (const char *)text.data);
+            snag_buf_free(&text);
+            return rc;
+        }
         return app->command_report
-                   ? snag_ui_history_report(&app->ui, &app->session, count, app->command_report)
+                   ? snag_ui_history_report(
+                         &app->ui, &app->session, count, app->command_report, NULL)
                    : snag_ui_history(&app->ui, &app->session, count);
     }
     if (strncmp(line, "/cat", 4u) == 0 && (!line[4] || isspace((unsigned char)line[4])))
@@ -7579,12 +7596,6 @@ ui_failed:
     free(owned);
     return 6;
 }
-static int
-render_room_history(void *opaque, const struct snag_irc_event *event)
-{
-    return snag_ui_send(opaque, (struct snag_ui_command){.kind = SNAG_UI_IRC, .data.irc = event});
-}
-
 static void
 owner_report(int *fd, const char *session, const char *error)
 {
@@ -7931,8 +7942,6 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     (void)snag_ui_history_open(&app.ui, dotdir, app.session.dir_path);
     history_warning(&app);
     if (snag_ui_orientation(&app.ui, &app.session, cli->resume) < 0 ||
-        (app.networked &&
-            snag_irc_replay_hosted_history(app.irc, render_room_history, &app.ui) < 0) ||
         (cli->resume && snag_ui_history(&app.ui, &app.session, config.resume_history_turns) < 0) ||
         (cli->resume && app.session.goal_status != SNAG_GOAL_NONE &&
             snag_app_goal_command(&app, "/goal", false) < 0) ||

@@ -38,6 +38,16 @@ saved work, and supplies the resulting topology and identities to the UI and
 model. Historical room snapshots remain conversation data; the live runtime
 owns the current networking state.
 
+Resume and client catch-up update conversation metadata and model context without
+automatically displaying historical chat bodies. `/history [N]` in chat reads
+only the selected conversation through the existing bounded reverse-journal
+reader and IRC renderer. Public channels match endpoint and case-folded room
+across local identities and membership lifetimes; private queries match exact
+connection, conversation and local identity. The default is `history_lines` IRC
+records, including delivery receipts and lifecycle records; zero skips the scan.
+The command is display-only. Rollout `/history` keeps its coding-turn behavior,
+and the hosted server still supplies retained history to connecting peers.
+
 The default endpoint is `localhost:6667`. A bare `-s`, `--listen`, `-c`, or
 `--client` uses it. An explicit endpoint accepts `HOST`, `HOST:PORT`,
 `[IPv6]`, or `[IPv6]:PORT`; an omitted port is 6667. Short attached arguments,

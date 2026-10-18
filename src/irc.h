@@ -283,9 +283,6 @@ int snag_irc_restore_event(struct snag_irc *irc, const struct snag_irc_event *ev
 /* Initialize session-owned conversations before starting endpoint threads.
  * Resume preserves connection IDs and advances their network generations. */
 int snag_irc_bind_conversations(struct snag_irc *, const json_t *conversations);
-/* Render-only replay; no re-recording or sends. Nonempty replay ends with HISTORY_READY. */
-int snag_irc_replay_hosted_history(
-    const struct snag_irc *irc, snag_irc_event_fn render, void *opaque);
 /* Hosted identity, or the first configured server's last accepted identity. */
 const char *snag_irc_model_nick(const struct snag_irc *irc);
 const char *snag_irc_operator_nick(const struct snag_irc *irc);

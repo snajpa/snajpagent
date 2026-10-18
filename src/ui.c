@@ -3548,9 +3548,29 @@ struct history_window {
     struct snag_ui *ui;
     json_t *events;
     uint64_t remaining;
+    const struct snag_irc_conversation_target *conversation;
     size_t prefix_irc;
     bool wants_irc;
 };
+
+static bool
+history_conversation_matches(
+    const struct snag_irc_conversation_target *target, const char *type, const json_t *data)
+{
+    struct snag_irc_event event;
+    if (snag_irc_event_record_read(type, data, &event) < 0) return false;
+    if (target->kind == SNAG_IRC_CHANNEL) {
+        /* Public history spans both local identities and membership lifetimes.
+         * Released unrouted records are public only; queries require exact IDs. */
+        return (!event.routed || event.route.kind == SNAG_IRC_CHANNEL) &&
+            snag_irc_endpoint_equal(target->endpoint, event.endpoint) &&
+            snag_irc_name_equal(target->casemapping, target->room, event.room);
+    }
+    return event.routed && event.route.kind == target->kind &&
+        event.route.identity == target->identity &&
+        !strcmp(event.route.connection, target->connection) &&
+        !strcmp(event.route.conversation, target->conversation);
+}
 
 static int
 history_collect(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
@@ -3563,6 +3583,12 @@ history_collect(void *opaque, const struct snag_session *state, uint64_t seq, co
     (void)error_size;
     if (snag_ui_leaving(window->ui)) return snag_errno(ECANCELED);
     bool irc = snag_string_in(type, "irc_event irc_event_v2");
+    if (window->conversation) {
+        if (!window->remaining) return 1;
+        if (!irc || !history_conversation_matches(window->conversation, type, data)) return 0;
+        if (json_array_append(window->events, (json_t *)data) < 0) return -1;
+        return --window->remaining ? 0 : SNAG_JOURNAL_STOP_AFTER;
+    }
     if (!strcmp(type, "irc_admitted") && !json_object_get(data, "steering")) return 0;
     if (!window->remaining) {
         if (!window->wants_irc || window->prefix_irc == HISTORY_IRC_PAYLOADS) return 1;
@@ -3590,7 +3616,8 @@ history_collect(void *opaque, const struct snag_session *state, uint64_t seq, co
 
 static int
 history_show(
-    struct snag_ui *ui, struct snag_session *session, uint64_t count, struct snag_render *report)
+    struct snag_ui *ui, struct snag_session *session, uint64_t count, struct snag_render *report,
+    const struct snag_irc_conversation_target *conversation)
 {
     /* One response's public text plus one separator per fragment, under the
      * response-public byte bound. */
@@ -3598,7 +3625,8 @@ history_show(
         .report = report,
         .total = session->turn_count,
         .response = {.max = 3u * SNAG_MAX_RESPONSE_GRAPH}};
-    struct history_window window = {.ui = ui, .remaining = count, .events = json_array()};
+    struct history_window window = {.ui = ui, .remaining = count, .events = json_array(),
+        .conversation = conversation};
     uint64_t before = 0u;
     int rc = window.events ? 0 : -1;
     if (!rc && count) {
@@ -3617,6 +3645,10 @@ history_show(
         bool first = true;
         for (size_t i = json_array_size(window.events); !rc && i; --i) {
             const json_t *entry = json_array_get(window.events, i - 1u);
+            if (conversation) {
+                rc = snag_render_irc_snapshot(report, entry, NULL);
+                continue;
+            }
             const char *type = snag_json_string(entry, "type");
             if (first && !snag_string_in(type, "irc_event irc_event_v2 voice_event")) {
                 history.turn.partial = before && strcmp(type, "turn_started");
@@ -3625,7 +3657,7 @@ history_show(
             }
             rc = history_event(&history, NULL, 0u, type, json_object_get(entry, "data"), NULL, 0u);
         }
-        if (rc == 0) rc = history_finish(&history);
+        if (rc == 0 && !conversation) rc = history_finish(&history);
         if (!rc && before && window.remaining) {
             char notice[192];
             (void)snprintf(notice, sizeof(notice),
@@ -3634,12 +3666,17 @@ history_show(
             rc = report ? snag_render_host(report, notice) : snag_ui_text(ui, SNAG_UI_HOST, notice);
         }
     }
-    if (rc == 0 && count && session->pending_input) {
+    if (rc == 0 && !conversation && count && session->pending_input) {
         const char *text = snag_json_string(session->pending_input, "text");
         rc = report ? snag_render_submitted(report, "pending input › ", text)
                     : snag_ui_submitted(ui, "pending input › ", text, false);
     }
-    if (rc == 0) rc = history_display(&history, NULL);
+    if (rc == 0 && conversation) {
+        char summary[128];
+        (void)snprintf(summary, sizeof(summary), "IRC history: %zu selected conversation records.",
+            json_array_size(window.events));
+        rc = snag_render_host(report, summary);
+    } else if (rc == 0) rc = history_display(&history, NULL);
     free(history.turn.user);
     free(history.turn.assistant);
     snag_buf_free(&history.response);
@@ -3653,12 +3690,13 @@ history_show(
 int
 snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count)
 {
-    return history_show(ui, session, count, NULL);
+    return history_show(ui, session, count, NULL, NULL);
 }
 
 int
 snag_ui_history_report(
-    struct snag_ui *ui, struct snag_session *session, uint64_t count, struct snag_buf *text)
+    struct snag_ui *ui, struct snag_session *session, uint64_t count, struct snag_buf *text,
+    const struct snag_irc_conversation_target *conversation)
 {
     struct snag_render render;
     struct snag_term target = {.capture = text, .output_fd = {-1, -1}};
@@ -3669,7 +3707,7 @@ snag_ui_history_report(
     render.markdown = false;
     /* Only this engine thread renders into the report; the UI keeps its terminal. */
     snag_term_output_bind(&target);
-    int rc = history_show(ui, session, count, &render);
+    int rc = history_show(ui, session, count, &render, conversation);
     snag_term_output_bind(previous);
     snag_render_free(&render);
     return rc;

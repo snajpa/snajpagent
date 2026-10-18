@@ -3630,7 +3630,7 @@ render_irc_event_now(
         return !text[0]
                    ? 0
                    : render_banner(render, !strncmp(text, "history gap", 11u)
-                                               ? "── history gap; available history replayed ──\n"
+                                               ? "── IRC history gap; use /history ──\n"
                                                : "── history replayed ──\n");
     prefix = malloc(prefix_size);
     source = calloc(source_size, 1u);

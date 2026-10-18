@@ -63,8 +63,6 @@ int snag_irc_core_restore_event(struct snag_irc_core *irc, const struct snag_irc
 /* Replay metadata only: never sockets or uncommitted owner-thread traffic. */
 json_t *snag_irc_core_checkpoint(const struct snag_irc_core *irc);
 int snag_irc_core_restore_checkpoint(struct snag_irc_core *irc, const json_t *data);
-int snag_irc_core_replay_hosted_history(
-    const struct snag_irc_core *irc, snag_irc_event_fn render, void *opaque);
 const char *snag_irc_core_model_nick(const struct snag_irc_core *irc);
 const char *snag_irc_core_operator_nick(const struct snag_irc_core *irc);
 

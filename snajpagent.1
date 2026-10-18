@@ -433,7 +433,7 @@ confirmation; opening the queue editor cancels deletion and opens that editor.
 The external configuration editor takes exclusive terminal input until it exits.
 .SS Read history and its length
 .B /history
-replays up to one recent retained turn by default. Use /history 10 to request ten,
+in rollout replays up to one recent retained turn by default. Use /history 10 to request ten,
 or /history 0 for the total turn count without reading the journal. Replay ends
 with shown turns, completions among those shown, and the total session turn count.
 Unfinished, failed and interrupted work is included. Automatic resume uses the
@@ -454,6 +454,15 @@ ASR input from generated replies; action rows follow tool verbosity settings.
 Voice records do not increase the coding-turn totals. Replay displays retained
 text and outcomes without activating the microphone, playing speech or executing
 actions. /history 0 still reports only totals.
+.PP
+In chat, /history reads the selected channel or private query. Its default count
+is the configured IRC history_lines; /history N requests up to N recent IRC
+records, oldest first. The same bounded journal scan applies. Delivery receipts
+and lifecycle records count toward N, including records with no visible text.
+/history 0 reads no records. Select a conversation before requesting its history;
+private queries remain scoped to their original conversation and local identity.
+Resume and client catch-up restore routing, membership and model context while
+leaving old chat text for this explicit command. New messages still appear live.
 .PP
 Conversation replay is separate from the session's prompt-entry history used by
 Up, Ctrl-P and Ctrl-R.  Compaction reduces model context, not the full local
@@ -2969,13 +2978,15 @@ is an alias for
 .BR /state " goal" .
 .TP
 .BR /history " [N]"
-Show up to N recent turns, oldest first, including unfinished, failed and interrupted
-work. Default: 1. Available during active work. N is a nonnegative decimal count;
+In rollout, show up to N recent turns, oldest first, including unfinished, failed
+and interrupted work. Default: 1. Available during active work. N is a nonnegative decimal count;
 the bounded scan may show fewer turns or a marked partial oldest turn. Zero shows
 the total turn count without scanning. Completion counts cover only shown turns.
 Older original events remain available through read_session_history. Uses the same replay as
 .B resume_history_turns
 without changing configuration or model context.
+In chat, read up to N records from the selected conversation, defaulting to IRC
+history_lines. Zero reads no records; receipts and lifecycle events count toward N.
 .TP
 .BR /model " [list]"
 Read the local provider/model catalog.  No provider request is made.  On an
@@ -6927,7 +6938,7 @@ release downloads and the current-source manual can describe different revisions
 use the manual shipped with a release when checking that exact release.
 .TP
 .B /history appears to contain only one exchange.
-The default replay count is one, independently of total history length.  Read
+In rollout, the default replay count is one, independently of total history length.  Read
 the total and completed counts in the opening header and footer; /history 0
 shows counts alone and /history N requests more turns.  An old binary may lack
 the current count display.  The Up/Ctrl-R prompt-entry history is a separate list.

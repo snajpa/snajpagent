@@ -28,6 +28,11 @@
   verify the current writer-lock owner before signalling it. Add real PTY and
   owner-lifecycle regressions, and document the monitor in the getting-started guide.
 
+- Leave saved IRC chat text for explicit `/history` instead of printing the
+  backlog on resume or client catch-up. In chat, history reads the selected
+  channel or private query; live messages and restored model context remain
+  available.
+
 - Keep workstation clipboard publication exactly once when rapid terminal polls
   repeat an already-accepted background publication request.
 
