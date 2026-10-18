@@ -5559,16 +5559,16 @@ def test_network_resume_roles():
     resumed_server = Child.from_command(server_command)
     header = resumed_server.wait(b"session id")
     resumed_server.wait(server_id[:8].encode(), start=header)
-    restored = resumed_server.wait("@firstpeer › retained room message".encode())
-    replayed = resumed_server.wait("── history replayed ──".encode(), start=restored)
-    assert b" history @firstpeer" not in resumed_server.buf
-    assert resumed_server.buf[:replayed].count("── history replayed ──".encode()) == 1
-    # The conversation history may also quote this message in admitted model
-    # input. The hosted-room replay itself must contain exactly one chat row.
-    assert resumed_server.buf[:replayed].count(b"retained room message") == 1
-    assert resumed_server.buf.count("@firstpeer › retained room message".encode()) == 1, \
-        bytes(resumed_server.buf)
     resumed_server.wait(chat_prompt("serverop"))
+    assert "── history replayed ──".encode() not in resumed_server.buf
+    row = "@firstpeer › retained room message".encode()
+    assert row not in resumed_server.buf
+    start = len(resumed_server.buf)
+    resumed_server.send_wait(b"/history\r", b"IRC history:", start=start)
+    resumed_server.wait(chat_prompt("serverop"), start=start)
+    report = resumed_server.buf[start:]
+    assert report.count(row) == 1, bytes(report)
+    assert b" history @firstpeer" not in report
     peer = IRCClient(server_port, "secondpeer")
     peer.wait(b" PRIVMSG #lab :retained room message\r\n")
     assert peer.buf.count(b" PRIVMSG #lab :retained room message\r\n") == 1

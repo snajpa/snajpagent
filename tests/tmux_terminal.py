@@ -3114,7 +3114,7 @@ def run_banner_layout_case(binary, root, width=28):
 
 
 def run_history_length_case(binary, root, active=False, chat=False, width=100, verbosity=0):
-    """History length is visible before and after replay in every presentation."""
+    """Rollout counts survive resume; offline chat needs a conversation."""
     case = root / f"history-length-{active}-{chat}-{width}-{verbosity}"
     case.mkdir(parents=True)
     provider = FakeResponses()
@@ -3167,6 +3167,9 @@ def run_history_length_case(binary, root, active=False, chat=False, width=100, v
         if chat:
             terminal.submit("/chat")
             terminal.wait("chat is offline", join_wrapped=True)
+            terminal.submit("/history")
+            wait_normalized(terminal, "select an IRC conversation first", timeout=10)
+            terminal.submit_wait("/rollout", "── rollout ──", join_wrapped=True)
         total = 2 if active else 1
         terminal.submit("/history 0")
         wait_normalized(terminal, f"history: 0 shown · 0 completed among shown · {total} total", timeout=10)
@@ -3963,6 +3966,20 @@ def active_turns(dotdir):
     return active
 
 
+def wait_irc_joined(terminal, timeout=15.0):
+    """Wait for connection state, independently of optional history display."""
+    deadline = time.monotonic() + wait_budget(timeout)
+    while time.monotonic() < deadline:
+        terminal.submit("/names")
+        time.sleep(0.05)
+        screen = terminal.capture(join_wrapped=True)
+        joined = set(re.findall(r"channel\[([^\]]+)\]: joined as operator", screen))
+        if joined:
+            return
+        assert not terminal.dead(), screen
+    raise AssertionError("IRC channels did not join:\n" + screen)
+
+
 def wait_irc_idle(terminals, timeout=15.0):
     deadline = time.monotonic() + wait_budget(timeout)
     stable_since = None
@@ -4171,7 +4188,7 @@ def run_destination_case(binary, root, provider, environment):
             terminals[name] = terminal
             terminal.wait(f"{args[args.index('-o') + 1]}@{MACHINE_HOSTNAME} :")
             if "-c" in args:
-                terminal.wait("── history replayed ──")
+                wait_irc_joined(terminal)
             terminal.submit("destination fixture setup")
             wait_event_count(terminal.dotdir, "session_created", 1)
         client = terminals["c"]
@@ -4276,7 +4293,7 @@ def run_destination_reconnect_case(binary, root, provider, environment):
             unit / "state", config, 100, 24, args=args, environment=environment)
         terminals.append(terminal)
         if "-c" in args:
-            terminal.wait("── history replayed ──")
+            wait_irc_joined(terminal)
         return terminal
 
     try:
@@ -4285,7 +4302,7 @@ def run_destination_reconnect_case(binary, root, provider, environment):
         client = start("client", "one-model",
             ["-c", endpoint, "-n", "clientbot", "-o", "clientop"])
         host.wait("clientop joined")
-        client.wait("clientop joined")
+        wait_irc_joined(client)
         client.submit("reconnect-before")
         host.wait("reconnect-before")
 
@@ -5983,11 +6000,12 @@ def run_runtime_history_case(binary, root, provider, environment, sequenced=Fals
                     if event["data"]["text"] == "later live event"]
             assert len(live) == 1 and not live[0]["historical"]
             assert live[0]["sequence"] > historical[0]["sequence"]
-        screen = terminal.submit_wait("/chat", "── history replayed ──", join_wrapped=True)
-        assert screen.count("── history replayed ──") == 1, screen
+        screen = terminal.submit_wait("/chat", f"── chat {endpoint} #lab ──", join_wrapped=True)
+        assert history not in screen and "── history replayed ──" not in screen, screen
+        screen = terminal.submit_wait("/history", "IRC history:", join_wrapped=True)
         assert re.search(r"\d{2}:\d{2}:\d{2} peer › " + re.escape(history), screen), screen
+        assert screen.count(history) == 1, screen
         assert not re.search(r"\d{2}:\d{2}:\d{2} history ", screen), screen
-        assert screen.index(history) < screen.index("── history replayed ──"), screen
         terminal.submit_wait("/disconnect", "outgoing connections removed; hosting unchanged", join_wrapped=True)
         release.set()
         deadline = time.monotonic() + 8.0
@@ -8652,7 +8670,7 @@ def run_incremental_history_case(binary, root):
         terminals[name] = t
         t.wait(("hostop" if name == "host" else "clientop") + f"@{MACHINE_HOSTNAME} :")
         if name == "client" and not session:
-            t.wait("── history replayed ──")
+            wait_irc_joined(t)
             t.submit("catchup fixture setup")
         return t
 
@@ -8873,7 +8891,7 @@ def run_interrupted_history_case(binary, root):
         terminal = TmuxTerminal(root / "term", binary, root / "work", root / "state", config,
             140, 28, args=["-c", endpoint, "-n", "agent", "-o", "operator"],
             environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"})
-        terminal.wait("── history replayed ──")
+        wait_irc_joined(terminal)
         terminal.submit("interrupted history fixture setup")
         deadline = time.monotonic() + 12
         while True:
@@ -8884,8 +8902,7 @@ def run_interrupted_history_case(binary, root):
             time.sleep(0.02)
         assert [e['sequence'] for e in records] == [1, 2, 3, 4]
         assert [e['historical'] for e in records] == [True, True, False, True]
-        terminal.wait("── history replayed ──")
-        assert terminal.capture().count("partial history 2") == 1
+        assert "partial history 2" not in terminal.capture()
         deadline = time.monotonic() + 8
         while not any("@agent historical mention" in json.dumps(r) for r in requests):
             assert time.monotonic() < deadline, terminal.capture()
@@ -8893,7 +8910,9 @@ def run_interrupted_history_case(binary, root):
         assert not event_list(read_events(terminal.dotdir)[1], "steering_added")
         assert all(sum("partial history 2" in str(i.get('content', '')) for i in r.get('input', [])) <= 1 for r in requests)
         wait_irc_idle([terminal])
-        assert terminal.capture().count("── history replayed ──") == 1
+        assert "── history replayed ──" not in terminal.capture()
+        screen = terminal.submit_wait("/history", "IRC history:", join_wrapped=True)
+        assert screen.count("partial history 2") == 1, screen
         terminal.exit()
         print("tmux_terminal interrupted history/cursor recovery: ok", flush=True)
     finally:
@@ -9751,7 +9770,7 @@ def run_irc_peer_join_case(binary, root):
             environment=environment)
         terminals["host"].wait(f"hostop@{MACHINE_HOSTNAME} :")
         terminals["one"].wait(f"oneop@{MACHINE_HOSTNAME} :")
-        terminals["one"].wait("── history replayed ──")
+        wait_irc_joined(terminals["one"])
 
         # A raw peer joins and is opped by the server while the worker is idle.
         peer = socket.create_connection(("127.0.0.1", port), timeout=3)
@@ -9953,7 +9972,7 @@ def run_irc_chat_case(binary, root):
             terminals[name] = terminal
             terminal.wait(f"{operator}@{MACHINE_HOSTNAME} :")
             if "-c" in args:
-                terminal.wait("── history replayed ──")
+                wait_irc_joined(terminal)
             terminal.submit("chat fixture setup")
             wait_event_count(terminal.dotdir, "session_created", 1)
 
@@ -9961,7 +9980,7 @@ def run_irc_chat_case(binary, root):
         terminals["host"].wait("twoop joined")
         terminals["one"].wait("twoop joined")
         terminals["one"].wait("set mode · +o twoop")
-        terminals["two"].wait("── history replayed ──")
+        wait_irc_joined(terminals["two"])
         wait_irc_idle(ordered)
         for terminal, operator in zip(ordered, ("hostop", "oneop", "twoop")):
             wait_current_prompt(terminal, operator)
