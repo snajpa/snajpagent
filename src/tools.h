@@ -31,9 +31,15 @@ char **snag_tools_environment(const struct snag_config *config);
 int snag_tools_prepare(const struct snag_response_item *, const struct snag_config *,
     const char *cwd, uint32_t max_parallel, char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms,
     json_t **rejected);
+int snag_tools_prepare_execution(const struct snag_response_item *,
+    const struct snag_execution_config *, const char *cwd, uint32_t max_parallel,
+    char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms, json_t **rejected);
 int snag_tools_start(const struct snag_response_item *, const struct snag_config *,
     const struct snag_credential *, const char *cwd, json_t **result, char *error,
     size_t error_size);
+int snag_tools_start_execution(const struct snag_response_item *, const struct snag_config *,
+    const struct snag_execution_config *, const char *shell, const struct snag_credential *,
+    const char *cwd, json_t **result, char *error, size_t error_size);
 int snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t error_size);
 bool snag_tools_ready(const char *handle);
 bool snag_tools_busy(void);

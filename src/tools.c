@@ -834,7 +834,7 @@ snag_tools_collected(const char *handle)
 static int
 start_command(const char *handle, const char *command, const char *workdir, const char *stdin_text,
     uint32_t timeout_ms, struct output_limit output_limit, bool pty,
-    const struct snag_config *config,
+    const struct snag_config *config, const char *shell,
     const struct snag_credential *credential, char *error, size_t error_size)
 {
     char **env = NULL;
@@ -863,7 +863,7 @@ start_command(const char *handle, const char *command, const char *workdir, cons
         snag_errorf(error, error_size, "cannot allocate tool environment");
         goto out;
     }
-    if (snag_child_spawn(&proc->child, config->shell, command, workdir, env, pty) < 0) {
+    if (snag_child_spawn(&proc->child, shell, command, workdir, env, pty) < 0) {
         snag_errorf(error, error_size, "cannot start tool process: %s", strerror(errno));
         goto out;
     }
@@ -904,8 +904,17 @@ struct command_args {
 
 static int
 command_args(const struct snag_response_item *call, const struct snag_config *config,
-    const char *cwd, struct command_args *args, char *error, size_t size)
+    const struct snag_execution_config *execution, const char *cwd, struct command_args *args,
+    char *error, size_t size)
 {
+    uint32_t default_yield_ms =
+        execution ? execution->default_yield_ms : config->default_yield_ms;
+    uint32_t max_wait_ms = execution ? execution->max_wait_ms : config->max_wait_ms;
+    uint32_t default_timeout_ms =
+        execution ? execution->default_timeout_ms : config->default_timeout_ms;
+    uint32_t max_timeout_ms = execution ? execution->max_timeout_ms : config->max_timeout_ms;
+    uint32_t tool_output_bytes =
+        execution ? execution->tool_output_bytes : config->tool_output_bytes;
     memset(args, 0, sizeof(*args));
     args->exec = !strcmp(call->name, "exec_command");
     const char *command =
@@ -921,11 +930,9 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
                   "max_output_approx_tokens",
             error, size) ||
         !json_u32_member(call->arguments, yield,
-            config->default_yield_ms < config->max_wait_ms ? config->default_yield_ms
-                                                           : config->max_wait_ms,
-            0u, config->max_wait_ms, &args->yield, error, size) ||
-        !command_output_limit(
-            call->arguments, config->tool_output_bytes, &args->limit, error, size))
+            default_yield_ms < max_wait_ms ? default_yield_ms : max_wait_ms, 0u, max_wait_ms,
+            &args->yield, error, size) ||
+        !command_output_limit(call->arguments, tool_output_bytes, &args->limit, error, size))
         return -1;
     if (args->exec) {
         args->handle = call->call_id;
@@ -936,8 +943,8 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
             !snag_json_arg_text(call->arguments, "stdin", 0u, SNAG_TOOL_STDIN_MAX, true,
                 &args->input, error, size) ||
             !snag_json_arg_bool(call->arguments, "pty", false, &args->pty, error, size) ||
-            !json_u32_member(call->arguments, "timeout_ms", config->default_timeout_ms, 1u,
-                config->max_timeout_ms, &args->timeout, error, size))
+            !json_u32_member(call->arguments, "timeout_ms", default_timeout_ms, 1u,
+                max_timeout_ms, &args->timeout, error, size))
             return -1;
         if (!args->workdir) args->workdir = cwd;
         args->eof = args->input != NULL;
@@ -974,18 +981,24 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
                      "exec_command.");
 }
 
-int
-snag_tools_prepare(const struct snag_response_item *call, const struct snag_config *config,
-    const char *cwd, uint32_t max_parallel, char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms,
-    json_t **rejected)
+static int
+attach_output_limit(
+    const struct snag_response_item *call, uint32_t tool_output_bytes, json_t *result);
+
+static int
+tools_prepare(const struct snag_response_item *call, const struct snag_config *config,
+    const struct snag_execution_config *execution, const char *cwd, uint32_t max_parallel,
+    char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms, json_t **rejected)
 {
     struct command_args args;
     const char *reason = NULL;
     struct managed_process *proc;
     size_t used = 0u;
     char diagnostic[768] = {0};
+    uint32_t tool_output_bytes =
+        execution ? execution->tool_output_bytes : config->tool_output_bytes;
     *rejected = NULL;
-    if (command_args(call, config, cwd, &args, diagnostic, sizeof(diagnostic)) < 0) {
+    if (command_args(call, config, execution, cwd, &args, diagnostic, sizeof(diagnostic)) < 0) {
         reason = "invalid_arguments";
     } else {
         *yield_ms = args.yield;
@@ -1016,7 +1029,7 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
         } else {
             *rejected = snag_tool_result_not_run(reason);
         }
-        return *rejected && snag_tools_attach_output_limit(call, config, *rejected) == 0 ? 1 : -1;
+        return *rejected && attach_output_limit(call, tool_output_bytes, *rejected) == 0 ? 1 : -1;
     }
     free(args.owned_workdir);
     if (!journal_write || !journal_read) return snag_errno(EINVAL);
@@ -1026,20 +1039,38 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
 }
 
 int
-snag_tools_start(const struct snag_response_item *call, const struct snag_config *config,
+snag_tools_prepare(const struct snag_response_item *call, const struct snag_config *config,
+    const char *cwd, uint32_t max_parallel, char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms,
+    json_t **rejected)
+{
+    return tools_prepare(call, config, NULL, cwd, max_parallel, handle, yield_ms, rejected);
+}
+
+int
+snag_tools_prepare_execution(const struct snag_response_item *call,
+    const struct snag_execution_config *execution, const char *cwd, uint32_t max_parallel,
+    char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms, json_t **rejected)
+{
+    return tools_prepare(call, NULL, execution, cwd, max_parallel, handle, yield_ms, rejected);
+}
+
+static int
+tools_start(const struct snag_response_item *call, const struct snag_config *config,
+    const struct snag_execution_config *execution, const char *shell,
     const struct snag_credential *credential, const char *cwd, json_t **result, char *error,
     size_t error_size)
 {
     struct command_args args;
     struct managed_process *proc;
+    uint32_t max_wait_ms = execution ? execution->max_wait_ms : config->max_wait_ms;
     *result = NULL;
-    if (command_args(call, config, cwd, &args, error, error_size) < 0) {
+    if (command_args(call, config, execution, cwd, &args, error, error_size) < 0) {
         free(args.owned_workdir);
         return -1;
     }
     if (args.exec) {
         int started = start_command(args.handle, args.command, args.workdir, args.input,
-            args.timeout, args.limit, args.pty, config, credential, error, error_size);
+            args.timeout, args.limit, args.pty, config, shell, credential, error, error_size);
         free(args.owned_workdir);
         if (started < 0) {
             *result =
@@ -1062,23 +1093,41 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
     }
     proc->output_limit = args.limit;
     proc->wait_started_ms = snag_monotonic_ms();
-    proc->max_wait_ms = config->max_wait_ms;
+    proc->max_wait_ms = max_wait_ms;
     proc->requested_yield_ms = args.yield;
     return 0;
 }
 
 int
-snag_tools_attach_output_limit(
-    const struct snag_response_item *call, const struct snag_config *config, json_t *result)
+snag_tools_start(const struct snag_response_item *call, const struct snag_config *config,
+    const struct snag_credential *credential, const char *cwd, json_t **result, char *error,
+    size_t error_size)
+{
+    return tools_start(
+        call, config, NULL, config->shell, credential, cwd, result, error, error_size);
+}
+
+int
+snag_tools_start_execution(const struct snag_response_item *call, const struct snag_config *config,
+    const struct snag_execution_config *execution, const char *shell,
+    const struct snag_credential *credential, const char *cwd, json_t **result, char *error,
+    size_t error_size)
+{
+    return tools_start(
+        call, config, execution, shell, credential, cwd, result, error, error_size);
+}
+
+static int
+attach_output_limit(
+    const struct snag_response_item *call, uint32_t tool_output_bytes, json_t *result)
 {
     struct output_limit limit;
 
-    if (!call || !call->name || !config || !result ||
-        json_object_get(result, "max_output_tokens") ||
+    if (!call || !call->name || !result || json_object_get(result, "max_output_tokens") ||
         (!snag_string_in(call->name, "exec_command write_stdin")))
         return 0;
-    if (!command_output_limit(call->arguments, config->tool_output_bytes, &limit, NULL, 0u))
-        limit = (struct output_limit){.bytes = config->tool_output_bytes};
+    if (!command_output_limit(call->arguments, tool_output_bytes, &limit, NULL, 0u))
+        limit = (struct output_limit){.bytes = tool_output_bytes};
     if (snag_json_set_new(result, "max_output_tokens", json_integer(limit.bytes)) < 0)
         return -1;
     if (limit.requested_bytes > limit.bytes) {
@@ -1093,6 +1142,13 @@ snag_tools_attach_output_limit(
         return rc;
     }
     return 0;
+}
+
+int
+snag_tools_attach_output_limit(
+    const struct snag_response_item *call, const struct snag_config *config, json_t *result)
+{
+    return !config ? 0 : attach_output_limit(call, config->tool_output_bytes, result);
 }
 
 static int

@@ -5294,15 +5294,8 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
         bool pending = false;
         for (size_t i = 0u; i < count; ++i) {
             const struct snag_response_item *call = &calls[i].call;
-            struct snag_config process_config = *app->config;
-            process_config.default_yield_ms = app->session.default_yield_ms;
-            process_config.max_wait_ms = app->session.max_wait_ms;
-            process_config.max_parallel_commands = app->session.max_parallel_commands;
-            process_config.default_timeout_ms = app->session.default_timeout_ms;
-            process_config.max_timeout_ms = app->session.max_timeout_ms;
-            process_config.tool_output_bytes = app->session.tool_output_bytes;
-            process_config.output_cache_bytes = app->session.output_cache_bytes;
-            if (app->session.command_shell[0]) process_config.shell = app->session.command_shell;
+            struct snag_execution_config execution;
+            const char *shell = NULL;
             json_t *result = NULL;
             bool refresh = false, cancelled = false;
             if (calls[i].finished) continue;
@@ -5311,6 +5304,16 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
                     snag_tool_result("not_run", "rule_rejected", calls[i].rule_message, -1, 0u);
                 if (!result) return -1;
                 goto complete;
+            }
+            /* Snapshot only for admission, before the pump can apply controls.
+             * Polling an admitted command does not consume configuration. */
+            if (calls[i].process && !calls[i].started) {
+                execution = (struct snag_execution_config){app->session.default_yield_ms,
+                    app->session.max_wait_ms, app->session.max_parallel_commands,
+                    app->session.default_timeout_ms, app->session.max_timeout_ms,
+                    app->session.tool_output_bytes, app->session.output_cache_bytes};
+                shell = app->session.command_shell[0] ? app->session.command_shell
+                                                      : app->config->shell;
             }
             control = snag_app_active_input_pump(app, 0u);
             if (control < 0) {
@@ -5354,7 +5357,7 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
                 if (!result) return -1;
             } else if (calls[i].process) {
                 uint32_t yield_ms = 0u;
-                int rc = snag_tools_prepare(call, &process_config, app->session.cwd,
+                int rc = snag_tools_prepare_execution(call, &execution, app->session.cwd,
                     app->session.max_parallel_commands, calls[i].handle, &yield_ms, &result);
                 if (rc < 0) return -1;
                 /* An explicitly requested zero yields after this admission
@@ -5411,8 +5414,8 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
                                            .data.value = prompt_spinner_states(app)}) < 0)
                 return -1;
             int rc = calls[i].process
-                         ? snag_tools_start(call, &process_config, credential, app->session.cwd,
-                               &result, error, error_size)
+                         ? snag_tools_start_execution(call, app->config, &execution, shell,
+                               credential, app->session.cwd, &result, error, error_size)
                          : snag_app_tool_run(app, call, credential, &result, error, error_size);
             app->tool_active = false;
             if (rc < 0) {
