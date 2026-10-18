@@ -10,6 +10,22 @@ from tmux_terminal import read_events
 
 
 class HostedChannelTests(QueryFixture):
+    def test_large_room_nickname_completion(self):
+        # Long names exceed the legacy 4096-byte completion snapshot without
+        # turning this terminal test into the separate 1024-socket stress test.
+        for index in range(160):
+            peer = self.connect('capacity-member-%04d-full-name' % index)
+            while self.term.read(0):
+                pass
+        self.term.write(b'/chat 1/#lab\r')
+        self.term.until(f'chat 127.0.0.1:{self.port} #lab'.encode())
+        self.term.output.clear()
+        self.term.write(b'@capacity-member-0159-f\t')
+        self.term.until(b'@capacity-member-0159-full-name ')
+        self.term.write(b'\x15/exit\r')
+        self.term.wait_exit()
+        self.assertEqual(self.term.process.returncode, 0)
+
     def test_resume_chat_history_is_on_demand(self):
         with self.config.open('a') as out:
             out.write('resume_history_turns = 0\n')

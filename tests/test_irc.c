@@ -41,6 +41,7 @@ struct capture {
     struct snag_irc_event last_nick;
     struct snag_irc_event last_part;
     struct snag_irc_event last_connected;
+    struct snag_irc_event last_disconnected;
     struct snag_irc_event last_history_ready;
     bool slow_quit;
     bool fail_message;
@@ -100,6 +101,7 @@ capture_event(void *opaque, const struct snag_irc_event *event)
     if (event->kind == SNAG_IRC_NICK) capture->last_nick = *event;
     if (event->kind == SNAG_IRC_PART) capture->last_part = *event;
     if (event->kind == SNAG_IRC_CONNECTED) capture->last_connected = *event;
+    if (event->kind == SNAG_IRC_DISCONNECTED) capture->last_disconnected = *event;
     if (event->kind == SNAG_IRC_HISTORY_READY) capture->last_history_ready = *event;
     if (event->kind == SNAG_IRC_QUIT && strcmp(event->nick, "slow") == 0) capture->slow_quit = true;
     return capture->fail_message && event->kind == SNAG_IRC_MESSAGE ? -1 : 0;
@@ -868,19 +870,151 @@ test_server(void)
     ping_without_engine(human);
     assert(snag_socket_close(human) == 0);
     tick(server, 5u);
-    /* Local identities must not consume any of the 64 remote peer slots. */
-    snag_socket capacity[64u];
-    for (size_t i = 0; i < 64u; ++i) {
+    snag_irc_close(server);
+    snag_config_free(&config);
+}
+
+static void
+test_capacity(void)
+{
+    struct snag_config config;
+    struct capture capture = {0};
+    unsigned short port = free_port();
+    char wire[128u * 1024u];
+    init_server_config(&config, port);
+    struct snag_irc *server = open_server(&config, &capture);
+    /* Local identities must not consume any of the 1024 remote peer slots. */
+    snag_socket capacity[1024u];
+    for (size_t i = 0; i < 1024u; ++i) {
+        char nick[32u];
+        snprintf(nick, sizeof(nick), "capacity%04zu", i);
         capacity[i] = connect_local(port, false);
-        send_text(capacity[i], "PING :capacity\r\n");
-        tick(server, 1u);
+        register_peer(server, capacity[i], nick, false, wire, sizeof(wire));
+        assert(strstr(wire, " 366 "));
+        /* Consume broadcasts while retaining all registered connections. */
+        for (size_t j = 0; j < i; ++j)
+            (void)drain(capacity[j], wire, sizeof(wire));
     }
-    for (size_t i = 0; i < 64u; ++i) {
+    send_text(capacity[1023u], "NAMES #lab\r\n");
+    wait_wire(server, capacity[1023u], wire, sizeof(wire), " 366 capacity1023 #lab ");
+    size_t members = 0u;
+    const char *line = wire;
+    while ((line = strstr(line, " 353 "))) {
+        const char *names = strstr(line, " :");
+        assert(names);
+        const char *end = strstr(names, "\r\n");
+        assert(end);
+        for (const char *p = names + 2u; p < end; ++p)
+            if (*p != ' ' && (p == names + 2u || p[-1] == ' ')) ++members;
+        line = end + 2u;
+    }
+    assert(members == 1026u);
+    snag_socket overflow = connect_local(port, false);
+    wait_wire(server, overflow, wire, sizeof(wire),
+        "ERROR :Server full (1024 client connections)\r\n");
+    assert(snag_socket_close(overflow) == 0);
+    for (size_t i = 0; i < 1024u; ++i) {
         drain_ready(server, capacity[i], wire, sizeof(wire));
-        assert(strstr(wire, "PONG") && strstr(wire, "capacity"));
+        assert(strstr(wire, "PONG"));
         assert(snag_socket_close(capacity[i]) == 0);
     }
+    tick(server, 5u);
+    overflow = connect_local(port, false);
+    send_text(overflow, "PING :reused-slot\r\n");
+    wait_wire(server, overflow, wire, sizeof(wire), " :reused-slot\r\n");
+    assert(snag_socket_close(overflow) == 0);
     snag_irc_close(server);
+    snag_config_free(&config);
+}
+
+static void
+test_large_replay_membership(void)
+{
+    struct snag_config config;
+    struct snag_irc_core *core;
+    struct snag_irc_event event = {.kind = SNAG_IRC_JOIN};
+    char error[256] = {0};
+    snag_config_init(&config);
+    assert(snag_irc_core_open(&core, &config, "/replay", false,
+               NULL, NULL, NULL, error, sizeof(error)) == 0);
+    event.timestamp_ms = snag_time_ms();
+    strcpy(event.room, "#lab");
+    for (size_t endpoint = 0u; endpoint < 3u; ++endpoint) {
+        snprintf(event.endpoint, sizeof(event.endpoint), "server%zu:6667", endpoint);
+        for (size_t member = 0u; member < 1026u; ++member) {
+            snprintf(event.nick, sizeof(event.nick), "member%zu", member);
+            assert(snag_irc_core_restore_event(core, &event) == 0);
+        }
+    }
+    /* A large saved room must not erase another endpoint's known membership. */
+    strcpy(event.endpoint, "server0:6667");
+    strcpy(event.nick, "member0");
+    event.kind = SNAG_IRC_MESSAGE;
+    strcpy(event.text, "membership retained");
+    event.op = true;
+    assert(snag_irc_core_restore_event(core, &event) < 0);
+    event.op = false;
+    assert(snag_irc_core_restore_event(core, &event) == 0);
+    snag_irc_core_close(core);
+    snag_config_free(&config);
+}
+
+static void
+test_client_error(bool bound)
+{
+    struct snag_config config;
+    struct capture capture = {0};
+    struct snag_irc_core *client;
+    struct snag_irc_view view;
+    snag_wake_fd wake[2u];
+    unsigned short port;
+    snag_socket listener = listen_local(&port);
+    snag_socket peers[2u];
+    char address[64u], error[256] = {0};
+    endpoint(address, port);
+    init_client_config(&config, address, "erroragent", "errorop");
+    assert(snag_wakeup_create(wake) == 0);
+    assert(snag_irc_core_open(&client, &config, "/client", true,
+               capture_event, NULL, &capture, error, sizeof(error)) == 0);
+    if (bound)
+        assert(snag_irc_core_bind(client, "11111111111111111111111111111111", address, 1u) == 0);
+    assert(snag_irc_core_tick(client, 0, wake[0], error, sizeof(error)) == 0);
+    unsigned int before = capture.events[SNAG_IRC_DISCONNECTED];
+    assert(snag_irc_core_view(client, &view) == 0 && !view.joined && view.connecting);
+    for (size_t i = 0u; i < 2u; ++i) {
+        peers[i] = snag_socket_accept(listener);
+        assert(peers[i] != SNAG_SOCKET_INVALID);
+        send_text(peers[i], "ERROR :Server full (1024 client connections)\r\n");
+    }
+    uint64_t deadline = snag_monotonic_ms() + 500u;
+    while (capture.events[SNAG_IRC_DISCONNECTED] < before + (bound ? 2u : 1u)) {
+        assert(snag_monotonic_ms() < deadline);
+        assert(snag_irc_core_tick(client, 1, wake[0], error, sizeof(error)) == 0);
+    }
+    assert(!strcmp(capture.last_disconnected.text,
+        "Server full (1024 client connections); retrying"));
+    assert(capture.last_disconnected.routed == bound);
+    assert(snag_irc_core_view(client, &view) == 0 && !view.joined && !view.connecting);
+    unsigned int once = capture.events[SNAG_IRC_DISCONNECTED];
+    for (size_t i = 0u; i < 2u; ++i) assert(snag_socket_close(peers[i]) == 0);
+
+    /* A second rejected attempt must not produce another outage notice. */
+    deadline = snag_monotonic_ms() + 2000u;
+    for (size_t i = 0u; i < 2u; ++i) {
+        while ((peers[i] = snag_socket_accept(listener)) == SNAG_SOCKET_INVALID) {
+            assert(errno == EAGAIN || errno == EWOULDBLOCK);
+            assert(snag_monotonic_ms() < deadline);
+            assert(snag_irc_core_tick(client, 5, wake[0], error, sizeof(error)) == 0);
+        }
+        send_text(peers[i], "ERROR :Server full (1024 client connections)\r\n");
+    }
+    for (size_t i = 0u; i < 5u; ++i)
+        assert(snag_irc_core_tick(client, 1, wake[0], error, sizeof(error)) == 0);
+    assert(capture.events[SNAG_IRC_DISCONNECTED] == once);
+    for (size_t i = 0u; i < 2u; ++i) assert(snag_socket_close(peers[i]) == 0);
+    snag_irc_core_close(client);
+    assert(snag_socket_close(listener) == 0);
+    snag_wakeup_close(wake);
     snag_config_free(&config);
 }
 
@@ -2836,11 +2970,11 @@ main(int argc, char **argv)
     (void)argc;
     (void)argv;
 #ifndef _WIN32
-    /* The 64-peer capacity case holds both endpoints in this process. */
+    /* The 1024-peer capacity case holds both endpoints in this process. */
     struct rlimit files;
     assert(getrlimit(RLIMIT_NOFILE, &files) == 0);
-    if (files.rlim_cur < 256u) {
-        files.rlim_cur = 256u;
+    if (files.rlim_cur < 4096u) {
+        files.rlim_cur = 4096u;
         assert(setrlimit(RLIMIT_NOFILE, &files) == 0);
         /* Early BSD libpthread caches its fd table size before main(). */
         execv(argv[0], argv);
@@ -2851,6 +2985,25 @@ main(int argc, char **argv)
     engine_thread = pthread_self();
     assert(snag_network_init() == 0);
     set_user("root");
+    if (argc == 2 && !strcmp(argv[1], "--rejection")) {
+        test_client_error(false);
+        test_client_error(true);
+        snag_network_free();
+        puts("test_irc rejection: ok");
+        return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--members")) {
+        test_large_replay_membership();
+        snag_network_free();
+        puts("test_irc members: ok");
+        return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--capacity")) {
+        test_capacity();
+        snag_network_free();
+        puts("test_irc capacity: ok");
+        return 0;
+    }
     test_validation();
     test_replay_membership_boundaries();
     test_replay_checkpoint();
@@ -2866,6 +3019,10 @@ main(int argc, char **argv)
     test_private_native_receipts();
     test_private_commit_failure();
     test_server();
+    test_capacity();
+    test_client_error(false);
+    test_client_error(true);
+    test_large_replay_membership();
     test_nick_rename();
     test_client_reconnect();
     test_default_nick_sequence();

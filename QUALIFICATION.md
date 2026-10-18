@@ -22,6 +22,19 @@ Store checks cover checkpoint preservation, invalid destinations and old records
 without a wait channel. Vim transcript projection retains the destination and
 redacts the blocker text through its ordinary source mapping.
 
+## IRC server capacity and rejection
+
+The ordinary IRC suite registers and joins 1,024 remote clients alongside the
+host's local identities, verifies all 1,026 names, checks PONG on every socket,
+rejects socket 1,025 with an explicit
+server-full error, and reuses a released slot. Replay checks retain membership
+across three 1,026-member endpoint histories. Error fixtures cover bound and
+legacy pre-registration rejection, retry notice deduplication and handshake state.
+Renderer coverage distinguishes connecting and disconnected/retrying prompts.
+The socket fixture raises its own descriptor limit to 4,096 where supported.
+Native terminal fixtures verify visible rejection, recovery without repeated
+notices, and nickname completion beyond the legacy 4,096-byte cached snapshot.
+
 ## Native-storage workspace integration
 
 Active-turn compaction after an IRC summary is covered in both legacy and native

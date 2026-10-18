@@ -2,11 +2,14 @@
 """Connection views retain server traffic and pin operator commands."""
 
 import json
+import socket
+import tempfile
 import unittest
+from pathlib import Path
 
 from test_irc_channels import ChannelFixture, ChannelServer
 from test_irc_queries import QueryFixture
-from tmux_terminal import read_events
+from tmux_terminal import FakeResponses, irc_workspace, read_events
 
 
 class ConnectionTests(ChannelFixture):
@@ -128,6 +131,74 @@ class HostedConnectionTests(QueryFixture):
         self.term.until(b'WHOIS query-peer: user')
         self.assertFalse(any(e['data'].get('routing', {}).get('conversation_kind') == 'query'
                              for e in self.events()))
+
+
+class RejectingServer(ChannelServer):
+    def __init__(self):
+        self.reject = True
+        self.rejected = 0
+        super().__init__()
+
+    def serve(self, link):
+        if not self.reject:
+            return super().serve(link)
+        try:
+            link.settimeout(2)
+            link.recv(4096)
+            link.sendall(b'ERROR :Server full (1024 client connections)\r\n')
+            self.rejected += 1
+        except (OSError, socket.timeout):
+            pass
+        finally:
+            link.close()
+
+
+class ServerRejectionTests(unittest.TestCase):
+    start = QueryFixture.start
+    fixture_owners = QueryFixture.fixture_owners
+    process_identity = staticmethod(QueryFixture.process_identity)
+    close_terminal = QueryFixture.close_terminal
+    events = QueryFixture.events
+    wait = QueryFixture.wait
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='snag-irc-full-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.provider = FakeResponses()
+        self.addCleanup(self.provider.close)
+        self.workspace, self.config = irc_workspace(
+            self.root / 'workspace', self.provider.port, 'host-model')
+        self.server = RejectingServer()
+        self.addCleanup(self.server.close)
+        self.terminals = []
+        self.term = self.start('--no-listen', '-c', self.server.endpoint,
+            '-n', 'querybot', '-o', 'queryop', '-r', 'lab',
+            ready=b'Server full (1024 client connections); retrying')
+
+    def test_initial_rejection_is_visible_and_recovers_without_notice_spam(self):
+        self.wait(lambda: self.server.rejected >= 6)
+        operator = [e['data'] for e in self.events()
+                    if e['data'].get('kind') == 'disconnected' and
+                    e['data'].get('text') and
+                    e['data'].get('routing', {}).get('identity') == 'operator']
+        self.assertEqual(len(operator), 1)
+        self.assertEqual(operator[0]['text'],
+                         'Server full (1024 client connections); retrying')
+        self.assertIn(b'Server full (1024 client connections); retrying', self.term.output)
+        self.server.reject = False
+        self.wait(lambda: any(e['data'].get('kind') == 'connected' and
+                  e['data'].get('routing', {}).get('identity') == 'operator' and
+                  e['data'].get('nick') == 'queryop' for e in self.events()))
+        self.term.write(b'/connections 1\r')
+        self.term.until(('connection ' + self.server.endpoint).encode())
+        self.term.write(b'/query peer after-capacity-recovery\r')
+        self.term.until(b'[peer]')
+        self.wait(lambda: ('queryop', 'PRIVMSG peer :after-capacity-recovery')
+                  in self.server.lines)
+        self.term.write(b'/exit\r')
+        self.term.wait_exit()
+        self.assertEqual(self.term.process.returncode, 0)
 
 
 if __name__ == '__main__':

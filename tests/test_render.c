@@ -1699,6 +1699,16 @@ test_destination_editor(void)
     assert(snag_term_select_destination(&term, 2u) == 0);
     snag_term_destination_prefix(&term, label, sizeof(label));
     assert(!label[0]);
+    destinations.items[0].joined = false;
+    destinations.items[0].connecting = true;
+    assert(snag_term_set_destinations(&term, &destinations) == 0);
+    snag_term_destination_prefix(&term, label, sizeof(label));
+    assert(!strcmp(label, "[2 connecting] "));
+    destinations.items[0].connecting = false;
+    assert(snag_term_set_destinations(&term, &destinations) == 0);
+    snag_term_destination_prefix(&term, label, sizeof(label));
+    assert(!strcmp(label, "[2 disconnected; retrying] "));
+    destinations.items[0].joined = true;
     strcpy(destinations.items[0].endpoint, "first:6667");
     assert(snag_term_set_destinations(&term, &destinations) == 0);
     term.conversation = (struct snag_irc_conversation_target){.kind = SNAG_IRC_QUERY,
@@ -1721,7 +1731,7 @@ test_destination_editor(void)
     destinations.items[0].joined = false;
     assert(snag_term_set_destinations(&term, &destinations) == 0);
     snag_term_destination_prefix(&term, label, sizeof(label));
-    assert(strcmp(label, "[2 connecting] ") == 0);
+    assert(strcmp(label, "[2 disconnected; retrying] ") == 0);
     assert(snag_term_select_destination(&term, 2u) == 0);
     destinations.count = 0u;
     assert(snag_term_set_destinations(&term, &destinations) == 0);
