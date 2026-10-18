@@ -3727,8 +3727,8 @@ def run_fast_case(binary, root, provider, environment):
                 140, 12, args=("--no-listen", "--no-client"), environment=environment),
                 case / "screen.txt") as terminal:
             terminal.wait("fake/host-model/medium")
-            acknowledge(terminal, "/fast status", "Fast mode: OFF (provider default)")
-            acknowledge(terminal, "/fast", "Fast mode: OFF (provider default)")
+            acknowledge(terminal, "/fast status", "Fast mode: OFF")
+            acknowledge(terminal, "/fast", "Fast mode: OFF")
             ask(terminal, "fast-initial", None)
             screen = acknowledge(terminal, "/fast on", "Fast mode: ON")
             assert len(re.findall(r"^.*› /fast on$", screen, re.MULTILINE)) == 1, screen
@@ -3739,7 +3739,7 @@ def run_fast_case(binary, root, provider, environment):
             terminal.submit("fast-held")
             assert held.wait(10), terminal.capture()
             acknowledge(terminal, "/fast", "Fast mode: ON")
-            acknowledge(terminal, "/fast off", "Fast mode: OFF (standard")
+            acknowledge(terminal, "/fast off", "Fast mode: OFF")
             assert seen[-1]["service_tier"] == "priority"
             assert len(seen) == 3, seen
             release.set()
@@ -3762,7 +3762,7 @@ def run_fast_case(binary, root, provider, environment):
                     acknowledge(terminal, "/compact", "Compacted")
                     assert seen[-1]["service_tier"] == "priority", seen[-1]
                     assert seen[-1]["input"][-1]["role"] == "developer", seen[-1]
-                acknowledge(terminal, "/fast off", "Fast mode: OFF (standard")
+                acknowledge(terminal, "/fast off", "Fast mode: OFF")
                 terminal.exit()
         assert len({request["prompt_cache_key"] for request in seen}) == 1
         _, events = read_events(state)

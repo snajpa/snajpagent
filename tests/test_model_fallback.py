@@ -41,8 +41,16 @@ class ModelFallbackTests(unittest.TestCase):
         self.assertEqual(self.owner.config.read_bytes(), config)
         self.assertEqual(len(self.provider.requests), requests)
 
+    def test_fast_confirmation_is_only_the_state(self):
+        for command, state in [('/fast', 'OFF'), ('/fast on', 'ON'),
+                               ('/fast status', 'ON'), ('/fast off', 'OFF')]:
+            self.command(command, 'Fast mode: ' + state)
+            self.assertRegex(bytes(self.owner.initial.output),
+                             ('Fast mode: ' + state + r'\r?\n').encode())
+            self.assertNotIn(b'model and effort unchanged', bytes(self.owner.initial.output))
+
     def test_bare_fast_inspects_default_and_explicit_settings(self):
-        self.inspect_setting('/fast', 'Fast mode: OFF (provider default)')
+        self.inspect_setting('/fast', 'Fast mode: OFF')
         for value, state in [('on', 'ON'), ('off', 'OFF')]:
             self.command('/fast ' + value, 'Fast mode: ' + state)
             self.inspect_setting('/fast', 'Fast mode: ' + state)
