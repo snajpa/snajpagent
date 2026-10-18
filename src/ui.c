@@ -1991,7 +1991,6 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         timeout_ms = 16;
     struct snag_ui_runtime *runtime = display->runtime;
     struct snag_term *term = &display->term;
-    struct ui_action *item;
     int rc;
 
     /* Output checkpoints can leave a local submission waiting to be painted.
@@ -2037,9 +2036,25 @@ read_input(struct snag_ui_display *display, int timeout_ms)
                 &display->render, "input backlog is full; draft retained, retry Enter shortly") < 0)
             return -1;
     }
-    item = calloc(1u, sizeof(*item));
-    if (!item) return -1;
-    rc = snag_term_poll(term, timeout_ms, runtime->commands[0], &item->action, &item->text);
+    enum snag_term_action action;
+    char *text;
+    rc = snag_term_poll(term, timeout_ms, runtime->commands[0], &action, &text);
+    int saved_errno = errno;
+    if (action == SNAG_TERM_NONE && !text && (rc >= 0 || saved_errno == EINTR) &&
+        !term->history_reader.warning &&
+        (!term->history_refresh_requested || term->input_backlog)) {
+        atomic_store(&runtime->pause_until,
+            term->typing_active ? term->last_input_ms + term->typing_pause_ms : 0u);
+        return 0;
+    }
+    struct ui_action *item = calloc(1u, sizeof(*item));
+    if (!item) {
+        free(text);
+        return -1;
+    }
+    item->action = action;
+    item->text = text;
+    errno = saved_errno;
     return finish_input(display, item, rc);
 }
 
