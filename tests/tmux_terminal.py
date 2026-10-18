@@ -2870,8 +2870,10 @@ def run_goal_interrupt_http_case(binary, root, chat=False):
             assert len(requests) == 1
             sid = read_events(state)[0].parent.name
             terminal.exit()
+        # Select rollout explicitly to inspect the resumed goal's active prompt.
         with TmuxTerminal(case / "resume", binary, case, state, config, 28, 32,
-                args=("--no-listen", "--no-client", "--resume", sid), environment=env) as terminal:
+                args=("--no-listen", "--no-client", "--resume", sid,
+                      "--view", "rollout"), environment=env) as terminal:
             terminal.wait("I>")
             terminal.run("send-keys", "-t", terminal.target, "Enter", "Enter")
             terminal.wait_until(lambda text: text.count("I>") >= 3, "resumed paused prompts")
@@ -3221,7 +3223,15 @@ def run_resume_history_case(binary, root):
         current = log.read_bytes()
         assert current.startswith(before), "resume rewrote saved history"
         updates = [event for event in journal_events(log) if event["seq"] > before_sequence]
-        assert all(e["type"] == "irc_snapshot" for e in updates), updates
+        assert all(e["type"] in ("irc_snapshot", "session_options") for e in updates), updates
+        # Interactive resume may persist explicit display choices once in this
+        # observation window. Later history reports leave them unchanged.
+        options = event_list(updates, "session_options")
+        assert len(options) <= 1, options
+        for option in options:
+            assert option["data"]["args"] == [
+                "--config", str(config), "--color", "never", "--markdown",
+                "--no-listen", "--no-client", "--view", "rollout"], options
 
     before = log.read_bytes()
     for setting in (0, 1, 2, 3, 101, 2**64, 10**100, None):
