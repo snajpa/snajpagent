@@ -492,6 +492,7 @@ snag_binary_batch_encode(struct snag_buf *out, const struct snag_binary_anchor *
     /* Build separately: a failed allocation or invalid record cannot leave a
      * partial batch in the caller's pending transaction. */
     struct snag_buf encoded = {.max = SNAG_BINARY_BATCH_MAX};
+    if (snag_buf_reserve(&encoded, size) < 0) goto fail;
     unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE] = {0};
     memcpy(header, batch_magic, sizeof(batch_magic));
     put_le(header + 8, size, 8u);

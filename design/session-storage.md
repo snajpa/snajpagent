@@ -1194,7 +1194,10 @@ checks exact counted literal bytes against the already reduced and encoded JSON
 facts; it reuses that validation instead of decoding the complete snapshot again.
 Reader validation and original-source checks remain independent.
 
-Writer staging shares an immutable latest-snapshot cache. Linear readers and
+Writer staging shares an immutable latest-snapshot cache. Its provenance uses
+aligned spare capacity in the already allocated literal field; successful staging
+transfers that allocation to the cache. A tight buffer clears the next reuse
+opportunity without growing for metadata. Linear readers and
 ordered checkpoint source restoration retain that same bounded working set and
 reuse verified JSON facts by exact original tuple, so stable facts require neither
 text copies nor historical scans on each response. Unindexed checkpoint suffixes
@@ -1211,32 +1214,43 @@ watermark and compaction/accounting relationships before adoption.
 
 #### Sharing qualification, October 18, 2026
 
-An instrumented producer probe encoded 4,096 snapshots containing one stable
-64-KiB fact and one changing fact. Both paths used the same current literal
-encoder and staged clone/reference/adopt transaction. The control used the
-`16cb5267` producer with cache-constructor/release link glue for the current
-reader; the candidate used the optimized producer in `5a344aa2`.
+An instrumented write-path probe encoded and staged 4,096 snapshots containing
+one stable 64-KiB fact and one changing fact, including native batch assembly.
+Both paths used the current literal encoder, staged clone/reference/adopt
+transaction and known-size batch reservation. The control used the `16cb5267`
+literal producer with current cache API link glue; the candidate reused spare
+literal-field capacity for its cache.
 
-| Producer metric | Literal control | Shared host facts |
+| Complete batch-staging metric | Literal control | Shared host facts |
 | --- | ---: | ---: |
 | Encoded payload bytes | 270,556,074 | 1,485,909 |
-| Instrumented CPU seconds, three runs | 2.552–2.560 | 2.530–2.537 |
-| C-path allocation calls | 28,672 | 32,768 |
-| Requested C-path allocation bytes | 2,151,677,952 | 2,152,038,400 |
-| C-path copied bytes | 1,081,724,584 | 1,081,916,208 |
+| Framed batch bytes | 271,473,578 | 2,403,413 |
+| Instrumented CPU seconds, three runs | 3.640–3.665 | 2.536–2.539 |
+| C-path allocation calls | 36,864 | 36,864 |
+| Requested C-path allocation bytes | 3,225,419,776 | 2,160,326,656 |
+| Jansson allocation calls | 118,784 | 118,784 |
+| Requested Jansson allocation bytes | 7,334,826 | 7,334,826 |
+| C-path copy calls | 4,481,024 | 279,554 |
+| C-path copied bytes | 1,896,931,750 | 1,089,847,093 |
 
-The cache adds one 88-byte allocation per changed snapshot in this fixture;
-relocating changing literals adds 191,624 copied bytes over the complete probe.
 The working set retains only the latest snapshot and its original-source tuples.
-Counters interposed on C allocation and copy symbols; Jansson's dynamically linked
-internal operations are outside their scope. Both paths include the same literal
-staging. The probe measures neither disk writes nor provider/network cost, and its
-instrumented CPU timings establish this comparison only.
+C allocation/copy symbols were interposed; Jansson allocation hooks measured its
+internal allocations separately. Jansson and libc internal copies were outside
+the copy counters. Both paths construct the same JSON facts. The probe measures
+in-memory canonical write staging; disk/fsync and provider/network cost are
+outside its scope.
+
+The isolated producer stage, before required batch assembly, has equal C
+allocations (28,672 calls and 2,151,677,952 requested bytes) and a relocation cost:
+180,224 versus 184,319 C copy calls, and 1,081,724,584 versus 1,081,850,422 copied
+bytes. Its CPU times were 2.513–2.515 versus 2.525–2.528 seconds. The complete
+write-path comparison above includes that stage and the resulting batch savings.
 
 Permanent store tests cover exact payload savings, canonical JSON equality,
 UTF-8/base64 excerpts, literal predecessor versions, malformed offsets/counts,
-staged-error ownership, original-source identity, rejected reference chains,
-checkpoint dependency closure and cold reopened writers. A read-only qualification
+staged-error and tight-buffer ownership, allocation transfer, original-source
+identity, rejected reference chains, checkpoint dependency closure, shared
+checkpoint JSON objects and cold reopened writers. A read-only qualification
 of an 851,436,259-byte historical journal opened its checkpoint in 0.264 seconds;
 independent replay of 407,109 batches from an immutable prefix took 67.716 seconds.
 Checkpoint and replay agreed on provider-context seams and active goal/turn state.

@@ -19,7 +19,7 @@ snag_binary_host_source_new(json_t *snapshot, size_t count)
     }
     struct snag_binary_host_source *host = malloc(sizeof(*host) + count * sizeof(*host->parts));
     if (host) *host = (struct snag_binary_host_source){.owners = 1u, .count = count,
-        .snapshot = json_incref(snapshot)};
+        .snapshot = json_incref(snapshot), .storage = host};
     return host;
 }
 
@@ -28,7 +28,7 @@ snag_binary_host_source_release(struct snag_binary_host_source *host)
 {
     if (!host || --host->owners) return;
     json_decref(host->snapshot);
-    free(host);
+    free(host->storage);
 }
 
 static void
@@ -58,14 +58,26 @@ reference_host(struct snag_binary_producer *writer, uint64_t sequence,
             length > SNAG_MAX_EVENT_LINE - size - 5u) return snag_errno(EINVAL);
         size += 5u + length;
     }
-    if (size > record->size) return snag_errno(EINVAL);
+    if (size > record->size || writer->field.len > writer->field.cap)
+        return snag_errno(EINVAL);
     size_t base = record->size - size;
     const unsigned char *literal = record->payload + base;
     for (size_t i = 0u; i < 4u; ++i) {
         if (literal[i] != (unsigned char)(count >> (8u * i))) return snag_errno(EINVAL);
     }
-    struct snag_binary_host_source *host = snag_binary_host_source_new(snapshot, count);
-    if (!host) return -1;
+    /* Reuse unused literal-field capacity for immutable provenance. A tight
+     * buffer simply loses the next reuse opportunity; it never grows for a
+     * cache. Keep the metadata beyond all source bytes until compaction ends. */
+    size_t alignment = _Alignof(struct snag_binary_host_source);
+    size_t padding = (alignment - writer->field.len % alignment) % alignment;
+    size_t available = writer->field.cap - writer->field.len;
+    struct snag_binary_host_source *host = NULL;
+    if (padding <= available && sizeof(*host) <= available - padding &&
+        count <= (available - padding - sizeof(*host)) / sizeof(*host->parts)) {
+        host = (void *)(writer->field.data + writer->field.len + padding);
+        *host = (struct snag_binary_host_source){.owners = 1u, .count = count,
+            .snapshot = json_incref(snapshot)};
+    }
     size_t read = 4u, written = 4u;
     bool referenced = false;
     for (size_t index = 0u; index < count; ++index) {
@@ -95,13 +107,14 @@ reference_host(struct snag_binary_producer *writer, uint64_t sequence,
             written += 17u;
             referenced = true;
         } else {
-            memmove(writer->field.data + base + written, literal + read, length + 5u);
+            if (written != read)
+                memmove(writer->field.data + base + written, literal + read, length + 5u);
             source = (struct snag_binary_ref){sequence, (uint32_t)(base + written + 5u),
                 (uint32_t)length};
             written += length + 5u;
         }
         read += length + 5u;
-        host->parts[index] = source;
+        if (host) host->parts[index] = source;
     }
     /* Host content is the final field, so compaction needs no second text buffer. */
     writer->field.len = base + written;
@@ -552,6 +565,11 @@ snag_binary_producer_reference(struct snag_binary_producer *producer,
     if (!state->response_open) clear_output(producer);
     record->payload = producer->field.data;
     record->size = producer->field.len;
+    if (kind == SNAG_BINARY_RESPONSE_STARTED && producer->host && !producer->host->storage) {
+        producer->host->storage = producer->field.data;
+        producer->field.data = NULL;
+        producer->field.len = producer->field.cap = 0u;
+    }
     return 0;
 }
 

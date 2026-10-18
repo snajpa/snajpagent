@@ -22,6 +22,7 @@ struct snag_binary_input_source {
 struct snag_binary_host_source {
     size_t owners, count;
     json_t *snapshot;
+    void *storage;
     struct snag_binary_ref parts[];
 };
 struct snag_binary_host_source *snag_binary_host_source_new(json_t *, size_t count);
@@ -70,7 +71,8 @@ int snag_binary_producer_live_result(struct snag_binary_producer *producer,
 /* The caller has strictly reduced the event into state and encoded its literal
  * body into producer.field. Replace repeated input/public-output bytes with typed
  * canonical references, then retain/prune provenance for that candidate. On error
- * discard the staged producer. record is a borrowed view of the resulting field. */
+ * discard the staged producer. record borrows the resulting field or host cache;
+ * successful host staging can transfer the field allocation into that cache. */
 int snag_binary_producer_reference(struct snag_binary_producer *producer,
     const struct snag_session *state, uint64_t sequence, struct snag_binary_record *record,
     const json_t *data);
