@@ -2566,6 +2566,33 @@ query_receipt_emit(struct snag_render *render, struct snag_irc_event *event, boo
 }
 
 static void
+test_skill_notice(void)
+{
+    for (unsigned int level = 0u; level <= 6u; ++level)
+        for (unsigned int color = 0u; color < 2u; ++color)
+            for (unsigned int queued = 0u; queued < 2u; ++queued) {
+                struct snag_render render;
+                struct output_capture capture = capture_open(false, true);
+                char output[512];
+                snag_render_init(&render, level);
+                snag_render_set_color(&render, color ? SNAG_COLOR_ALWAYS : SNAG_COLOR_NEVER);
+                if (queued) assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+                struct snag_ui_command command = {.kind = SNAG_UI_NOTICE,
+                    .label = "Skill loaded: ", .text = "sample"};
+                json_t *record = NULL;
+                assert(snag_presentation_encode(&command, &record) == 0);
+                assert(snag_presentation_replay(&render, record, -1) == 0);
+                if (queued) assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
+                json_decref(record);
+                snag_render_free(&render);
+                (void)capture_close(&capture, output, sizeof(output), 0u);
+                assert(strstr(output, color ? "\033[1;32m• Skill loaded: sample\n\033[0m" :
+                    "• Skill loaded: sample\n"));
+                if (!color) assert(!strchr(output, '\033'));
+            }
+}
+
+static void
 query_send_receipts_at(unsigned int level, bool replay, bool queued)
 {
     struct snag_render render;
@@ -4237,6 +4264,7 @@ main(int argc, char **argv)
         test_append_only_views(verbosity);
     test_chat_room_views();
     test_query_send_receipts();
+    test_skill_notice();
     test_channel_send_echo();
     test_async_render_backfill();
 

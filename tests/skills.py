@@ -437,10 +437,15 @@ class RuntimeSkills(SkillsCase):
             provider.reply(handler, provider.response_body(sequence, "approved request done").encode(),
                 close_header=True)
         provider.runtime_handler = respond
-        result = self.execute("Use $sample to check $5k with $HOME.")
+        result = self.execute("Use $sample and $sample to check $5k with $HOME.")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(requests), 1)
         self.assertIn("APPROVED-PRICE-GUIDANCE", json.dumps(requests[0]["input"]))
+        self.assertEqual(result.stderr.count("• Skill loaded: sample"), 1)
+        selected = self.execute("/skills use sample -- Check $5k.")
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        self.assertEqual(selected.stderr.count("• Skill loaded: sample"), 1)
+        self.assertEqual(len(requests), 2)
 
     def test_explicit_missing_selection_is_recoverable_before_provider(self):
         from tmux_terminal import TmuxTerminal
@@ -471,6 +476,7 @@ class RuntimeSkills(SkillsCase):
         refused = self.execute("/skills use missing -- request")
         self.assertEqual(refused.returncode, 4, refused.stderr)
         self.assertIn("skill unavailable", refused.stderr)
+        self.assertNotIn("Skill loaded:", refused.stderr)
         self.assertEqual(len(requests), 0)
         session, = (self.dotdir / "sessions").iterdir()
         resumed = self.execute("Continue with $5k and $HOME.", session=session.name)
@@ -993,6 +999,7 @@ class RuntimeSkills(SkillsCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("requires explicit", json.dumps(requests[1]["input"]))
         self.assertNotIn("Active skill snapshot:", json.dumps(requests[1]["input"]))
+        self.assertNotIn("Skill loaded:", result.stderr)
         requests.clear()
         provider.runtime_handler = lambda handler, request, sequence: (
             requests.append(request), provider.reply(handler,
@@ -1032,6 +1039,7 @@ class RuntimeSkills(SkillsCase):
         first = subprocess.run([*common, "-e", "--", "use the sample task"],
             cwd=self.workspace, env=self.environment, capture_output=True, text=True, timeout=30)
         self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(first.stderr.count("• Skill loaded: sample"), 1)
         self.assertEqual(len(requests), 2)
         initial = json.dumps(requests[0]["input"])
         self.assertIn("Available task skills", initial)
