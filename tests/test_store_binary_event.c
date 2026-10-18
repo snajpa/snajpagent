@@ -5682,7 +5682,7 @@ test_result_references(void)
         input_reference_batch(&record, &bytes, &batch);
         assert_result_original_missing(&batch, 2u, kinds[k]);
         payload.data[payload.len - 1u] = 0u;
-        record.version = 3u;
+        record.version = snag_binary_event_version(kinds[k]) + 1u;
         input_reference_batch(&record, &bytes, &batch);
         assert_result_original_missing(&batch, 2u, kinds[k]);
         record.version = 1u;

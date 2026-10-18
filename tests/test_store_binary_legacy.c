@@ -243,8 +243,8 @@ roundtrip_checked(const char *type, const json_t *data, unsigned int expected_ki
     enum snag_binary_kind kind = 0;
     assert(!snag_binary_legacy_encode(&bytes, type, data, &kind));
     assert((unsigned int)kind == expected_kind && !memcmp(bytes.data, "pre", 3u));
-    uint16_t version = (expected_kind >= 96u && expected_kind <= 105u) ||
-        expected_kind == 177u || expected_kind == 193u || expected_kind == 266u ? 2u : 1u;
+    uint16_t version = expected_kind == 177u || expected_kind == 193u ? 3u :
+        (expected_kind >= 96u && expected_kind <= 105u) || expected_kind == 266u ? 2u : 1u;
     assert(snag_binary_event_version(kind) == version);
     struct snag_binary_record record = {
         .kind = (uint16_t)kind, .version = version,
@@ -3293,6 +3293,109 @@ tool_result_domain(void)
 }
 
 static void
+tool_result_text_sharing(void)
+{
+    const char *small[] = {"", "tiny", "five!", "YWJjZGVmZ2g="};
+    char *large = malloc(65537u);
+    assert(large);
+    memset(large, 'x', 65536u);
+    large[65536] = '\0';
+    for (size_t sample = 74u; sample <= 75u; ++sample) {
+        for (size_t variant = 0u; variant < 6u; ++variant) {
+            const char *text = variant < 4u ? small[variant] : large;
+            const char *error = "warning: \xe2\x82\xac\n";
+            size_t text_bytes = variant == 3u ? 8u : strlen(text);
+            json_t *data = json_loads(samples[sample].data, 0, NULL);
+            json_t *result = json_object_get(data, "result");
+            assert(data && result);
+            struct snag_buf model = {.max = SNAG_MAX_EVENT_LINE};
+            assert(!snag_buf_printf(&model, "observed result\nstdout:\n%s\nstderr:\n%s", text,
+                error));
+            if (variant == 5u) {
+                model.len = 0u;
+                assert(!snag_buf_append(&model, "unrelated model text", 20u));
+            }
+            assert(!json_object_set_new(result, "model_text",
+                json_stringn((const char *)model.data, model.len)));
+            const char *names[] = {"stdout", "stderr"};
+            const char *values[] = {text, error};
+            for (size_t i = 0u; i < 2u; ++i) {
+                size_t bytes = i ? strlen(error) : text_bytes;
+                assert(!json_object_set_new(result, names[i],
+                    json_pack("{s:s,s:s,s:I,s:I,s:I}", "encoding",
+                        !i && variant == 3u ? "base64" : "utf8", "retained", values[i],
+                        "retained_bytes", (json_int_t)bytes,
+                        "original_bytes", (json_int_t)(bytes + 7u),
+                        "discarded_bytes", (json_int_t)7u)));
+            }
+            struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+            struct snag_buf literal = {.max = SNAG_MAX_EVENT_LINE};
+            enum snag_binary_kind kind;
+            assert(!snag_binary_legacy_encode(&payload, samples[sample].type, data, &kind));
+            struct snag_binary_record record = {.kind = kind,
+                .version = snag_binary_event_version(kind),
+                .payload = payload.data, .size = payload.len};
+            struct snag_binary_event event;
+            assert(!snag_binary_event_decode(&record, &event));
+            struct snag_binary_tool_result *decoded = sample == 74u ?
+                &event.data.tool_finished.result : &event.data.process_closed.result;
+            for (size_t i = 0u; i < 2u; ++i) {
+                assert(decoded->streams[i].retained.size == strlen(values[i]));
+                assert(!memcmp(decoded->streams[i].retained.data, values[i], strlen(values[i])));
+                /* Deliberately separate storage supplies the old literal profile. */
+                decoded->streams[i].retained.data = (const unsigned char *)values[i];
+            }
+            assert(!snag_binary_event_encode(&literal, &event));
+            size_t saved = variant == 5u ? 0u :
+                (strlen(text) > 4u ? strlen(text) - 4u : 0u) + strlen(error) - 4u;
+            assert(payload.len + saved == literal.len);
+            assert(record.version == 3u);
+            const char *type = NULL;
+            json_t *restored = NULL;
+            assert(!snag_binary_legacy_decode(&record, &type, &restored));
+            assert(!strcmp(type, samples[sample].type) && json_equal(data, restored));
+            json_decref(restored);
+
+            /* Old literal results remain readable, including their exact JSON. */
+            struct snag_binary_record old = record;
+            old.payload = literal.data;
+            old.size = literal.len;
+            for (old.version = 1u; old.version <= 2u; ++old.version) {
+                restored = NULL;
+                assert(!snag_binary_legacy_decode(&old, &type, &restored));
+                assert(json_equal(data, restored));
+                json_decref(restored);
+            }
+            if (saved) {
+                old = record;
+                old.version = 2u;
+                assert(snag_binary_event_decode(&old, &event) < 0);
+            }
+            if (variant == 4u) {
+                size_t excerpt = (sample == 74u ? 32u : 33u) + 17u + model.len;
+                assert(payload.data[excerpt] == 3u);
+                for (size_t field = 0u; field < 2u; ++field) {
+                    size_t at = excerpt + 25u + field * 4u;
+                    unsigned char before[4];
+                    memcpy(before, payload.data + at, sizeof(before));
+                    memset(payload.data + at, 255, sizeof(before));
+                    memset(&event, 0xa5, sizeof(event));
+                    struct snag_binary_event unchanged = event;
+                    assert(snag_binary_event_decode(&record, &event) < 0);
+                    assert(!memcmp(&event, &unchanged, sizeof(event)));
+                    memcpy(payload.data + at, before, sizeof(before));
+                }
+            }
+            snag_buf_free(&literal);
+            snag_buf_free(&payload);
+            snag_buf_free(&model);
+            json_decref(data);
+        }
+    }
+    free(large);
+}
+
+static void
 tool_result_options(void)
 {
     for (size_t n = 74u; n <= 75u; ++n) {
@@ -4048,6 +4151,7 @@ unsupported_and_null(void)
 void
 test_store_binary_legacy(void)
 {
+    tool_result_text_sharing();
     samples_and_shapes();
     archive_variants();
     archive_bounds();
