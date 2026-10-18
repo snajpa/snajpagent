@@ -2202,6 +2202,7 @@ transport_connection(
 
 struct nested_transport {
     struct snag_provider_connection connection;
+    struct snag_provider_connection *borrowed;
     CURLM *outer;
     unsigned int calls;
     bool cancel;
@@ -2219,7 +2220,9 @@ nested_transport_pump(void *opaque, unsigned int wait_ms)
     if (nested->calls++) return nested->cancel ? 2 : 0;
     assert(transport->busy && transport->multi);
     nested->outer = transport->multi;
-    assert(snag_provider_models_list(nested->connection, &models, error, sizeof(error)) == 0);
+    /* Setup has captured the outer call's fields before entering the pump. */
+    memset(nested->borrowed, 0, sizeof(*nested->borrowed));
+    assert(snag_provider_models_list(&nested->connection, &models, error, sizeof(error)) == 0);
     assert(json_array_size(models) == 2u);
     json_decref(models);
     assert(transport->busy && transport->multi == nested->outer);
@@ -2243,14 +2246,18 @@ test_session_transport_reentry(void)
             transport_connection(&config, &credential, outer.endpoint);
         struct nested_transport nested = {
             .connection = transport_connection(&nested_config, &nested_credential, inner.endpoint),
+            .borrowed = &connection,
             .cancel = cancel != 0u};
         nested.connection.transport = &transport;
         connection.transport = &transport;
         connection.pump = nested_transport_pump;
         connection.pump_opaque = &nested;
-        assert(snag_provider_models_list(connection, &models, error, sizeof(error)) ==
+        struct snag_provider_connection original = connection;
+        assert(snag_provider_models_list(&connection, &models, error, sizeof(error)) ==
             (cancel ? 2 : 0));
         assert(nested.calls && !transport.busy && transport.multi == nested.outer);
+        assert(!connection.config && !connection.credential && !connection.pump);
+        connection = original;
         json_decref(models);
         stop_server(&inner);
         stop_server(&outer);
@@ -2262,7 +2269,7 @@ test_session_transport_reentry(void)
             sizeof(config.providers[0].base_url), outer.endpoint));
         connection.pump = NULL;
         models = NULL;
-        assert(snag_provider_models_list(connection, &models, error, sizeof(error)) == 0);
+        assert(snag_provider_models_list(&connection, &models, error, sizeof(error)) == 0);
         assert(!transport.busy && transport.multi == nested.outer);
         json_decref(models);
         stop_server(&outer);
@@ -2313,12 +2320,12 @@ test_session_identity_header(void)
     /* Every provider request must carry the session identity: the fixture aborts the request
      * when the exact header line is absent or altered, so the case cannot pass vacuously. The
      * call order mirrors the fixture's canned replies (models, count, create, compact). */
-    assert(snag_provider_models_list(connection, &models, error, sizeof(error)) == 0);
+    assert(snag_provider_models_list(&connection, &models, error, sizeof(error)) == 0);
     json_decref(models);
 
     request = request_with_marker("transport-count");
     assert(snag_provider_responses_count(
-               connection, request, &tokens, NULL, error, sizeof(error), &retries) == 0);
+               &connection, request, &tokens, NULL, error, sizeof(error), &retries) == 0);
     json_decref(request);
 
     memset(&emitted, 0, sizeof(emitted));
@@ -2326,7 +2333,7 @@ test_session_identity_header(void)
     request = request_with_marker("transport-create");
     unsigned int ready_count = 0u;
     assert(
-        snag_provider_responses_create(connection, request, emit_capture, &emitted, NULL, NULL,
+        snag_provider_responses_create(&connection, request, emit_capture, &emitted, NULL, NULL,
             response_ready, &ready_count, &graph, NULL, NULL, error, sizeof(error), &retries) == 0);
     assert(ready_count == 1u);
     json_decref(request);
@@ -2335,7 +2342,7 @@ test_session_identity_header(void)
     struct snag_json_document compact_output = {0};
     request = request_with_marker("transport-compact");
     assert(snag_provider_responses_compact(
-               connection, request, &compact_output, error, sizeof(error), &retries) == 0);
+               &connection, request, &compact_output, error, sizeof(error), &retries) == 0);
     json_decref(request);
     snag_json_document_free(&compact_output);
     snag_credential_clear(&credential);
@@ -2371,7 +2378,7 @@ test_local_provider_transport(void)
                server.endpoint) > 0);
     transport_settings(&config.providers[1], &credential);
 
-    assert(snag_provider_models_list(connection, &models, error, sizeof(error)) == 0);
+    assert(snag_provider_models_list(&connection, &models, error, sizeof(error)) == 0);
     assert(json_array_size(models) == 2u);
     assert(strcmp(snag_json_string(json_array_get(models, 0), "id"), "gpt-standard") == 0);
     assert(strcmp(json_string_value(
@@ -2401,7 +2408,7 @@ test_local_provider_transport(void)
 
     request = request_with_marker("transport-count");
     assert(snag_provider_responses_count(
-               connection, request, &tokens, NULL, error, sizeof(error), &retries) == 0);
+               &connection, request, &tokens, NULL, error, sizeof(error), &retries) == 0);
     assert(tokens == 7u);
     assert(retries == 0u);
     json_decref(request);
@@ -2410,7 +2417,7 @@ test_local_provider_transport(void)
     struct snag_response_graph graph = {0};
     memset(&emitted, 0, sizeof(emitted));
     snag_buf_init(&emitted.text, 128u);
-    assert(snag_provider_responses_create(connection, request, emit_capture, &emitted, NULL, NULL,
+    assert(snag_provider_responses_create(&connection, request, emit_capture, &emitted, NULL, NULL,
                NULL, NULL, &graph, NULL, NULL, error, sizeof(error), &retries) == 0);
     assert(strcmp(graph.provider_response_id, "resp_transport") == 0);
     assert(graph.count == 1u);
@@ -2425,7 +2432,7 @@ test_local_provider_transport(void)
 
     request = request_with_marker("transport-compact");
     assert(snag_provider_responses_compact(
-               connection, request, &compact_output, error, sizeof(error), &retries) == 0);
+               &connection, request, &compact_output, error, sizeof(error), &retries) == 0);
     assert(json_is_array(compact_output.value));
     assert(json_array_size(compact_output.value) == 1u);
     assert(compact_output.bytes > 0u);
@@ -2471,7 +2478,7 @@ test_codex_path_selection(void)
             cases[i].base_override ? cases[i].base_override : server.endpoint));
         if (cases[i].base_override)
             assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
-        int rc = snag_provider_models_list(connection, &models, error, sizeof(error));
+        int rc = snag_provider_models_list(&connection, &models, error, sizeof(error));
         if (cases[i].diagnostic) {
             assert(rc < 0 && models == NULL);
             assert(strstr(error, cases[i].diagnostic));
@@ -2505,7 +2512,7 @@ test_structured_create_failures(void)
             transport_connection(&config, &credential, server.endpoint);
         struct snag_response_graph graph = {0};
         memset(&failure, 0, sizeof(failure));
-        assert(snag_provider_responses_create(connection, request, NULL, NULL, NULL, NULL, NULL,
+        assert(snag_provider_responses_create(&connection, request, NULL, NULL, NULL, NULL, NULL,
                    NULL, &graph, &failure, NULL, error, sizeof(error), NULL) < 0);
         assert(snag_provider_failure_is_capacity(&failure));
         assert(!strstr(error, "transport-secret"));
@@ -2536,7 +2543,7 @@ test_large_completion_transport(void)
     start_server(&server, MODEL_CREATE_LARGE_COMPLETION, false, "/v1");
     struct snag_provider_connection connection =
         transport_connection(&config, &credential, server.endpoint);
-    assert(!snag_provider_responses_create(connection, request, NULL, NULL, NULL, NULL, NULL,
+    assert(!snag_provider_responses_create(&connection, request, NULL, NULL, NULL, NULL, NULL,
         NULL, &graph, &failure, NULL, error, sizeof(error), &retries));
     assert(!retries && graph.count == 1u && json_array_size(graph.continuation) == 1u);
     const json_t *item = json_object_get(json_array_get(graph.continuation, 0u), "item");
@@ -2561,9 +2568,10 @@ test_typeless_create_diagnostic(void)
     struct snag_response_graph graph = {0};
 
     start_server(&server, MODEL_CREATE_TYPELESS, false, "/v1");
-    assert(snag_provider_responses_create(
-               transport_connection(&config, &credential, server.endpoint), request, NULL, NULL,
-               NULL, NULL, NULL, NULL, &graph, NULL, NULL, error, sizeof(error), NULL) < 0);
+    struct snag_provider_connection connection =
+        transport_connection(&config, &credential, server.endpoint);
+    assert(snag_provider_responses_create(&connection, request, NULL, NULL, NULL, NULL, NULL,
+               NULL, &graph, NULL, NULL, error, sizeof(error), NULL) < 0);
     assert(strstr(error, "Responses event has no type") != NULL);
     assert(strstr(error,
                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatran") == NULL);
@@ -2745,7 +2753,7 @@ test_create_retries(void)
         struct snag_response_graph graph = {0};
         snag_buf_init(&emitted.text, 1024u);
         int rc = snag_provider_responses_create(
-            (struct snag_provider_connection){&config, &config.providers[0], &credential,
+            &(struct snag_provider_connection){&config, &config.providers[0], &credential,
                 cancellation.code ? &ui : NULL, cancellation.code ? cancel_retry : NULL,
                 &cancellation, NULL, 0, NULL, NULL, NULL, NULL},
             request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph, &failure, NULL, error,
@@ -2820,7 +2828,7 @@ test_policy_clarification_after_reasoning(void)
     credential_set(&credential, "transport-secret");
     snag_buf_init(&emitted.text, 1024u);
     int rc = snag_provider_responses_create(
-        (struct snag_provider_connection){
+        &(struct snag_provider_connection){
             &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL,
             NULL, NULL},
         request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph, &failure, NULL, error,
@@ -2853,7 +2861,7 @@ test_count_capability_statuses(void)
         start_server(&server, fixtures[i], false, "/v1");
         struct snag_provider_connection connection =
             transport_connection(&config, &credential, server.endpoint);
-        assert(snag_provider_responses_count(connection, request, &tokens, &endpoint_unsupported,
+        assert(snag_provider_responses_count(&connection, request, &tokens, &endpoint_unsupported,
                    error, sizeof(error), NULL) < 0);
         assert(endpoint_unsupported);
         json_decref(request);
@@ -2997,7 +3005,7 @@ test_openrouter_search_transport(void)
     assert(snag_config_provider_is_openrouter(&config.providers[0]));
     snag_buf_init(&emitted.text, 128u);
     struct snag_response_graph graph = {0};
-    assert(snag_provider_responses_create(connection, request, emit_capture, &emitted, NULL, NULL,
+    assert(snag_provider_responses_create(&connection, request, emit_capture, &emitted, NULL, NULL,
                NULL, NULL, &graph, NULL, NULL, error, sizeof(error), &retries) == 0);
     assert(!retries);
     assert(graph.count == 2u);
@@ -3020,7 +3028,7 @@ test_openrouter_search_transport(void)
     snag_response_graph_free(&graph);
     snag_buf_reset(&emitted.text);
     emitted.calls = 0u;
-    assert(snag_provider_responses_create(connection, request, emit_capture, &emitted, NULL, NULL,
+    assert(snag_provider_responses_create(&connection, request, emit_capture, &emitted, NULL, NULL,
                NULL, NULL, &graph, NULL, NULL, error, sizeof(error), &retries) == 0);
     assert(graph.count == 1u && snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
     assert(strcmp(snag_response_graph_item(&graph, 0).text, "local transport") == 0);
@@ -3217,7 +3225,7 @@ test_native_compaction_probe(void)
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         if (!cases[i].live) stop_server(&server);
         int rc = snag_provider_native_compaction_probe(
-            (struct snag_provider_connection){
+            &(struct snag_provider_connection){
                 &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL,
                 NULL, NULL},
             "gpt-5.5", error, sizeof(error));
@@ -3273,10 +3281,10 @@ test_codex_streaming_compaction(void)
         assert(!setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1));
         if (mode == MODEL_CODEX_COMPACT_PROBE) {
             assert(snag_provider_native_compaction_probe(
-                       connection, "fixture-model", error, sizeof(error)) == 1);
+                       &connection, "fixture-model", error, sizeof(error)) == 1);
         } else {
             int rc = snag_provider_responses_compact(
-                connection, request, &output, error, sizeof(error), NULL);
+                &connection, request, &output, error, sizeof(error), NULL);
             if (mode <= MODEL_CODEX_COMPACT_CANONICAL) {
                 if (rc) fprintf(stderr, "Codex compaction failed (%d): %s\n", rc, error);
                 assert(!rc);
@@ -6540,7 +6548,7 @@ test_provider_auth(void)
             assert(snag_auth_read(store.root_fd, &config.providers[0], false, NULL, &credential,
                        NULL, NULL, error, sizeof(error)) == 0);
             int rc = snag_provider_models_list(
-                (struct snag_provider_connection){
+                &(struct snag_provider_connection){
                     &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL,
                     NULL, NULL, NULL},
                 &models, error, sizeof(error));
@@ -6657,7 +6665,7 @@ test_provider_auth(void)
             false, "");
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         int rc = snag_provider_responses_compact(
-            (struct snag_provider_connection){
+            &(struct snag_provider_connection){
                 &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL,
                 NULL, NULL},
             request, &output, error, sizeof(error), NULL);
