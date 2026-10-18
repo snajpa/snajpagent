@@ -10,7 +10,8 @@ import tempfile
 import threading
 from pathlib import Path
 
-from store_history import journal_paths, read_events
+from store_history import create_legacy, journal_paths, read_events
+from test_session_listing import append_event
 from test_access_token import response
 from test_remote_terminal import RemoteProcess
 
@@ -424,6 +425,82 @@ def check_default_context_advice(binary):
     print("Context default advice: 272000 below the 405000 threshold: ok")
 
 
+def check_local_compact_bounds(binary):
+    """Local envelope overflow must shrink before a provider attempt."""
+    text_bytes = 2 * 1024 * 1024 - 2500
+    with tempfile.TemporaryDirectory(prefix="snag-compact-local-") as directory:
+        root = Path(directory).resolve()
+        state, config = root / "state", root / "config.ini"
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.requests, server.count_requests = [], []
+        server.v2, server.failure, server.catalog_status = True, 0, 200
+        server.catalog_delay, server.invalid_output = False, None
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        config.write_text("[agent]\nmodel=gpt-fixture\nread_agents_md=false\n"
+                          "max_turn_retries=0\n"
+                          f"[provider fixture]\nbase_url=http://127.0.0.1:{server.server_port}/v1\n"
+                          'api_key="fixture-secret"\nexact_token_count=false\n'
+                          "native_compaction=true\nauto_compact_input_tokens=0\n"
+                          "[ui]\ncolor=never\nresume_history_turns=0\n")
+        config.chmod(0o600)
+        env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+               "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
+        env.pop("OPENAI_API_KEY", None)
+        prefix = [str(binary), "--dotdir", str(state), "--config", str(config)]
+        child = None
+        try:
+            journal = create_legacy(state, root, "fixture", "gpt-fixture")
+            result = subprocess.run([*prefix, "--resume", journal.parent.name, "-e"],
+                                    input="retained source", text=True, capture_output=True,
+                                    cwd=root, env=env, timeout=20)
+            assert result.returncode == 0, result.stderr
+            completed = next(e["data"] for e in read_events(journal)
+                             if e["type"] == "response_completed")
+            completed["items"][0]["text"] = "x" * text_bytes
+            events = read_events(journal)
+            first = events[0]
+            journal.write_text(json.dumps(first, separators=(",", ":")) + "\n")
+            # Six individually valid groups fit the source budget, but their
+            # native tool/reasoning envelope crosses the 12 MiB wire limit.
+            for number in range(6):
+                for event in events[1:]:
+                    data = dict(completed if event["type"] == "response_completed"
+                                else event["data"])
+                    if "turn_id" in data:
+                        data["turn_id"] = f"{number + 1:032x}"
+                    if "response_id" in data:
+                        data["response_id"] = f"{number + 100:032x}"
+                    if "final_response_id" in data:
+                        data["final_response_id"] = f"{number + 100:032x}"
+                    if "turn_number" in data:
+                        data["turn_number"] = number + 1
+                    append_event(journal, event["type"], data)
+            before = journal.read_bytes()
+            server.requests.clear()
+            child = RemoteProcess(root, [*prefix, "--resume", journal.parent.name],
+                                  wrapped=None, extra_env=env, winsize=(24, 100))
+            child.until("›".encode(), timeout=20)
+            child.output.clear()
+            os.write(child.master, b"/compact\r")
+            child.until(b"Compacted", timeout=30)
+            os.write(child.master, b"/exit\r")
+            child.wait(0)
+            compact, = server.requests
+            assert compact[0] == "/v1/responses/compact"
+            assert len(compact[3]) < 12 * 1024 * 1024
+            assert len(compact[3]) < 8 * 1024 * 1024, "source was not reduced"
+            assert journal.read_bytes().startswith(before), "compaction rewrote source history"
+            events = read_events(journal)
+            assert sum(e["type"] == "compaction_started" for e in events) == 1
+            assert sum(e["type"] == "compaction_completed" for e in events) == 1
+        finally:
+            if child:
+                child.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
 def check_compact_byte_ratios(binary, mode, exact=True):
     with tempfile.TemporaryDirectory(prefix="snag-compact-ratio-") as directory:
         root = Path(directory).resolve()
@@ -572,6 +649,7 @@ def check_post_turn_usage(binary):
 
 if __name__ == "__main__":
     binary = Path(sys.argv[1]).resolve()
+    check_local_compact_bounds(binary)
     check(binary)
     check_context_limits(binary)
     check_catalog_refresh(binary)
