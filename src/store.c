@@ -35,12 +35,20 @@ snag_store_verify_private_fd(
     int fd, bool directory, const char *name, char *error, size_t error_size)
 {
     snag_file_info st;
-    struct snag_file_privacy privacy;
     bool valid;
-    if (snag_fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0)
+    if (snag_fstat(fd, &st) < 0)
         return snag_errorf(error, error_size, "cannot inspect %s: %s", name, strerror(errno));
-    valid = (directory ? S_ISDIR(st.st_mode) : S_ISREG(st.st_mode)) && privacy.real_owner &&
-            privacy.private_access;
+#ifdef _WIN32
+    struct snag_file_privacy privacy;
+    if (snag_fd_privacy(fd, &privacy) < 0)
+        return snag_errorf(error, error_size, "cannot inspect %s: %s", name, strerror(errno));
+    bool private = privacy.real_owner && privacy.private_access;
+#else
+    /* The same observation supplies type, real ownership and private mode.
+     * The POSIX privacy helper would repeat this exact metadata transfer. */
+    bool private = st.st_uid == getuid() && !(st.st_mode & 077u);
+#endif
+    valid = (directory ? S_ISDIR(st.st_mode) : S_ISREG(st.st_mode)) && private;
     if (!valid)
         return snag_fail(error, error_size, EACCES, "%s must be private and user-owned", name);
     return 0;
