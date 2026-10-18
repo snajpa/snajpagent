@@ -379,6 +379,11 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     if (snag_ui_send(&app->ui, (struct snag_ui_command){
             .kind = history ? SNAG_UI_CONVERSATION : SNAG_UI_IRC, .data.irc = event}) < 0)
         return -1;
+    if (!history && event->kind == SNAG_IRC_DISCONNECTED && event->text[0] &&
+        event->routed && event->route.kind == SNAG_IRC_CONNECTION_EVENTS &&
+        event->route.identity == SNAG_IRC_OPERATOR &&
+        snag_ui_text(&app->ui, SNAG_UI_WARNING, event->text) < 0)
+        return -1;
     own_agent = snag_irc_local_identity(app->irc, event, true);
     if (conversation_replied(
             app->irc_turn_conversations, event, app->session.irc_conversations, own_agent) < 0)

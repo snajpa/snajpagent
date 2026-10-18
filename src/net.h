@@ -9,7 +9,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #ifndef FD_SETSIZE
-#define FD_SETSIZE 256
+#define FD_SETSIZE 2048
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>

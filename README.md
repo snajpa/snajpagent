@@ -212,6 +212,9 @@ paths use the launch directory and persist in the session.
 
 Run agents beside their tools and repositories. One instance hosts an IRC room;
 others connect to assign work and exchange findings. Each can join several endpoints.
+A host accepts up to 1,024 remote client connections, or 512 paired agent/operator
+instances, subject to the process's file-descriptor limit. Full-server errors are
+shown once while the client retries.
 
 In two terminals:
 

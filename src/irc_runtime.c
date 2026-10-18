@@ -783,6 +783,7 @@ snag_irc_destinations(const struct snag_irc *irc, struct snag_irc_destinations *
         memcpy(item->casemapping, owner->view.casemapping, sizeof(item->casemapping));
         memcpy(item->chantypes, owner->view.chantypes, sizeof(item->chantypes));
         item->joined = owner->view.joined;
+        item->connecting = owner->view.connecting;
         (void)snag_strcpy(item->endpoint, sizeof(item->endpoint), owner->endpoint);
         (void)snag_strcpy(item->room, sizeof(item->room), owner->routing_room);
         (void)snag_strcpy(item->model, sizeof(item->model), owner->view.model);

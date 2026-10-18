@@ -335,7 +335,9 @@ snag_term_destination_prefix(const struct snag_term *term, char *out, size_t siz
         (void)snprintf(out, size, "[choose destination] ");
     else if (selected && (!selected->joined || term->destinations->count > 1u))
         (void)snprintf(out, size, "[%u %s] ", selected->target.id,
-            selected->joined ? selected->room : "connecting");
+            selected->joined ? selected->room
+            : selected->connecting ? "connecting"
+                                   : "disconnected; retrying");
 }
 
 void

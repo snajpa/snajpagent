@@ -737,6 +737,16 @@ model, UI, or other peers; a peer that exceeds its queue bound is disconnected
 with a visible reason. The application handles `SIGPIPE` safely and treats a
 socket loss as a connection event rather than a process crash.
 
+The hosted server reserves 1,024 remote peer slots in addition to its two local
+identities. A connecting instance uses two slots. The poll set covers every slot;
+replay membership covers 1,026 members per endpoint. Live channel membership and
+native completion retain their existing dynamically sized representation; human
+snapshots remain bounded and report omitted members. A full accept sends a small
+best-effort nonblocking ERROR and closes the rejected socket without allocating
+another peer. Clients preserve the server reason and report one outage until a
+new registration succeeds. Owner views distinguish a live handshake from waiting
+to retry, and the operator receives a visible disconnect reason before registration.
+
 One thread owns the hosted server and all its accepted peers. Each outgoing
 endpoint has its own thread owning the paired model/operator connections.
 Each owner has a stable allocation, even as ordered primary selection changes:

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Accept up to 1,024 remote IRC client connections per hosted server (512 paired
+  agent/operator sessions), in addition to the host's local identities. Preserve
+  membership across larger saved rooms. Full servers send an IRC error; clients
+  show the rejection once per outage and distinguish handshakes from retries.
+
 - Use kernel-managed asynchronous disk writeback throughout the application so
   command input, view switching, rendering and request handling never wait for a
   disk flush. The newest tail is best effort; session resume restores the last

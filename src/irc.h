@@ -45,7 +45,7 @@ struct snag_irc_destination {
     enum snag_irc_casemapping casemapping[2u];
     char chantypes[2u][128u];
     char nicks[4096u];
-    bool joined;
+    bool joined, connecting;
 };
 
 struct snag_irc_destinations {

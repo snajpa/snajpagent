@@ -18,7 +18,7 @@ struct snag_irc_view {
     char chantypes[2u][128u];
     char text[32768u];
     char nicks[4096u]; /* Newline-separated current members, without op prefixes. */
-    bool joined;
+    bool joined, connecting;
 };
 
 struct snag_irc_core;

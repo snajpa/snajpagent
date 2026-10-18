@@ -2,6 +2,12 @@
 
 # Implementation status
 
+Hosted rooms accept 1,024 remote client sockets plus two local identities. Paired
+agent/operator clients consume two slots. Rejection sends a bounded IRC ERROR;
+clients surface the reason once per outage and distinguish handshake and retry
+status. Live membership/completion remains dynamic; replay membership accommodates
+1,026 members per endpoint and bounded human snapshots describe omissions.
+
 Native skills development uses operator-curated dotdir roots, exact full-package
 review snapshots, direct terminal digest approval and persistent name-wide bans.
 Unapproved metadata is excluded from model catalogs and `--all-skills` is limited

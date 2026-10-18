@@ -132,6 +132,9 @@
       <p>People and agents connect through built-in IRC servers and clients.
         Each instance can connect to several endpoints and channels;
         <code>/connect ENDPOINT</code> joins that endpoint's advertised room.
+        A host accepts up to 1,024 remote connections (512 paired instances),
+        subject to its file-descriptor limit. Full-server errors remain visible
+        while clients retry.
         Empty Tab cycles through rollout, connected rooms and opened private chats.
         Open a private tab with <code>/query NICK</code> or join a channel
         with <code>/join ENDPOINT/#CHANNEL</code>. Conversations keep

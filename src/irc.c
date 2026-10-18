@@ -16,8 +16,8 @@
 
 #define IRC_DEFAULT_ENDPOINT "localhost:6667"
 #define IRC_DEFAULT_PORT "6667"
-#define IRC_SERVER_PEERS 64u
-#define IRC_MEMBERS_MAX 128u
+#define IRC_SERVER_PEERS 1024u
+#define IRC_MEMBERS_MAX (IRC_SERVER_PEERS + 2u)
 #define IRC_REPLAY_MEMBERS_MAX (IRC_MEMBERS_MAX * (SNAG_CONFIG_IRC_CLIENT_MAX + 1u))
 #define IRC_OUTPUT_MAX (6u * 1024u * 1024u)
 #define IRC_PENDING_MAX (2u * 1024u * 1024u + 64u * 1024u)
@@ -2459,6 +2459,8 @@ server_drop_peer(struct snag_irc_core *irc, struct irc_conn *peer, const char *r
             if (query_lifecycle(irc, &irc->conns[role], SNAG_IRC_QUIT, nick, reason, 0u) < 0)
                 irc->callback_failed = true;
     conn_release(peer);
+    while (irc->conn_count > 2u && !irc->conns[irc->conn_count - 1u].used)
+        --irc->conn_count;
     if (announced) (void)server_publish(irc, SNAG_IRC_QUIT, nick, user, reason, op, false);
 }
 
@@ -2949,6 +2951,8 @@ private_receipt(struct irc_conn *link, const struct irc_message *message, bool *
     return 0;
 }
 
+static void link_disconnect(struct snag_irc_core *, struct irc_conn *, const char *);
+
 static int
 client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
 {
@@ -3371,7 +3375,15 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
                 message.params[message.param_count - 1u], false, timestamp_ms);
         return connection_notice(irc, link, message.params[message.param_count - 1u]);
     }
-    if (!strcmp(message.command, "ERROR")) return 1;
+    if (!strcmp(message.command, "ERROR")) {
+        char reason[SNAG_IRC_TEXT_MAX + 1u];
+        const char *text = message.param_count ? message.params[message.param_count - 1u]
+                                              : "server closed connection";
+        size_t take = utf8_chunk(text, strlen(text), sizeof(reason) - sizeof("; retrying"));
+        (void)snprintf(reason, sizeof(reason), "%.*s; retrying", (int)take, text);
+        link_disconnect(irc, link, reason);
+        return 1;
+    }
     if (link->registered && strlen(message.command) == 3u &&
         strspn(message.command, "0123456789") == 3u) {
         struct snag_buf text = {.max = SNAG_IRC_LINE_MAX};
@@ -3408,7 +3420,10 @@ link_disconnect(struct snag_irc_core *irc, struct irc_conn *link, const char *re
         if (was_registered) {
             if (query_epoch_end(irc, reason) < 0) irc->callback_failed = true;
             link->private_broken = false;
+        } else if (!link->outage_reported && connection_event(irc, link, reason) < 0) {
+            irc->callback_failed = true;
         }
+        link->outage_reported = true;
         return;
     }
     if (link_emit_enabled(link) && !link->outage_reported) {
@@ -3480,7 +3495,12 @@ accept_peers(struct snag_irc_core *irc)
                 peer = &irc->conns[i];
                 break;
             }
+        if (!peer && irc->conn_count < IRC_SERVER_PEERS + 2u)
+            peer = &irc->conns[irc->conn_count++];
         if (!peer) {
+            static const char full[] = "ERROR :Server full (1024 client connections)\r\n";
+            /* Rejection must not allocate another peer or stall the room. */
+            (void)snag_socket_send(fd, full, sizeof(full) - 1u);
             (void)snag_socket_close(fd);
             continue;
         }
@@ -3587,8 +3607,9 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
     irc->event_opaque = event_opaque;
     irc->history_limit = config->irc.history_lines;
     irc->history = calloc(irc->history_limit, sizeof(*irc->history));
-    irc->conn_count = network && irc->hosting ? IRC_SERVER_PEERS + 2u : 2u;
-    irc->conns = calloc(irc->conn_count, sizeof(*irc->conns));
+    size_t capacity = network && irc->hosting ? IRC_SERVER_PEERS + 2u : 2u;
+    irc->conn_count = 2u;
+    irc->conns = calloc(capacity, sizeof(*irc->conns));
     irc->replay_members = calloc(IRC_REPLAY_MEMBERS_MAX, sizeof(*irc->replay_members));
     if (!irc->conns) goto fail;
     for (size_t i = 0; i < irc->conn_count; ++i) conn_init(&irc->conns[i], irc);
@@ -3904,6 +3925,10 @@ snag_irc_core_tick(
                 link_disconnect(irc, conn, "protocol error; retrying");
             else
                 server_drop_peer(irc, conn, "malformed or oversized input");
+            if (irc->callback_failed) goto fail;
+            continue;
+        }
+        if (conn->fd == SNAG_SOCKET_INVALID) {
             if (irc->callback_failed) goto fail;
             continue;
         }
@@ -4228,7 +4253,7 @@ snapshot_network(const struct snag_irc_core *irc, struct snag_buf *out, struct s
         if (snag_buf_printf(out, "endpoint[%s]: %s%s%s\n", link->endpoint,
                 link->joined       ? "joined "
                 : link->registered ? "registered"
-                : link->connecting ? "connecting"
+                : link->fd != SNAG_SOCKET_INVALID ? "connecting"
                                    : "disconnected",
                 link->joined ? link->room : "", link->joined && link->op ? " as operator" : "") < 0)
             goto fail;
@@ -4238,7 +4263,7 @@ snapshot_network(const struct snag_irc_core *irc, struct snag_buf *out, struct s
         const struct irc_channel *primary = channel_find(link, link->room);
         if (snag_buf_printf(out, "agent[%s]: %s%s\n", agent->endpoint,
                 agent->joined ? "joined " : agent->registered ? "registered"
-                    : agent->connecting ? "connecting" : "disconnected",
+                    : agent->fd != SNAG_SOCKET_INVALID ? "connecting" : "disconnected",
                 agent->joined ? agent->room : "") < 0)
             goto fail;
         if (snapshot_channel(link, primary, out, nicks) < 0) goto fail;
@@ -4309,6 +4334,8 @@ snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
     (void)snag_strcpy(view->model, sizeof(view->model), snag_irc_core_model_nick(irc));
     (void)snag_strcpy(view->operator, sizeof(view->operator), snag_irc_core_operator_nick(irc));
     view->joined = irc->hosting || irc->conns[LINK_AGENT].joined;
+    view->connecting = !irc->hosting && !view->joined &&
+                       irc->conns[LINK_AGENT].fd != SNAG_SOCKET_INVALID;
     if (irc->hosting || irc->conns[LINK_AGENT].outgoing)
         (void)snag_strcpy(view->room, sizeof(view->room),
             irc->hosting            ? irc->room

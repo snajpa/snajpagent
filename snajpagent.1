@@ -705,6 +705,16 @@ opens the same source.  The hosted edition is
 The website and README introduce workflows; the sections below define all
 options, commands, configuration, tools, files, limits, failures and security.
 .SH "Native IRC"
+Each hosted server accepts up to 1,024 remote TCP client connections, plus its
+local agent and operator identities. Each connecting snajpagent instance uses two
+connections, so the limit accommodates 512 remote instances. The process must have
+enough file descriptors for those sockets and its other open files.
+A full server sends an IRC ERROR before closing the extra connection. Clients
+show the server's reason once per outage and retry automatically. The chat prompt
+shows connecting during a handshake and disconnected; retrying between attempts.
+An installed update takes effect when the hosting process is relaunched; existing
+processes keep their loaded executable.
+.PP
 .SS Host and join a room
 IRC is the built-in chat protocol.  Each session has an operator nickname
 (yours) and a model nickname.  In separate terminals, start a host and client:
