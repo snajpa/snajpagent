@@ -173,14 +173,16 @@ class ClassicTests(unittest.TestCase):
         self.owner.finish(attached, b'/s d')
 
     def test_classic_signal_restores_terminal_and_preserves_owner(self):
-        child = self.start('-N', 'signal')
-        child.command('classic ' + self.owner.sid)
-        child.until('›'.encode())
-        child.signal(signal.SIGTERM)
-        child.wait_exit()
-        self.assertEqual(frontend.normalized_modes(child.state()['modes']), child.original)
-        self.owner.status('detached')
-        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        for caught in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=caught):
+                child = self.start('-N', 'signal-' + str(caught))
+                child.command('classic ' + self.owner.sid)
+                child.until('›'.encode())
+                child.signal(caught)
+                child.wait_exit()
+                self.assertEqual(frontend.normalized_modes(child.state()['modes']), child.original)
+                self.owner.status('detached')
+                self.assertEqual(self.owner.identity(), self.owner.owner_identity)
 
     def test_classic_suspend_resume_and_owner_exit_return_to_workspace(self):
         child = self.start('-N', 'suspend')
