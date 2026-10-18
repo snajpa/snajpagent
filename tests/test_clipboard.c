@@ -240,7 +240,9 @@ main(int argc, char **argv)
     copy = snag_clipboard_open(-1, text, strlen(text), &backend);
     prepared(copy, text, strlen(text));
     assert(snag_clipboard_publish(copy) == 0);
+    assert(snag_clipboard_publish(copy) == 0);
     (void)wait_state(copy, SNAG_CLIPBOARD_WRITTEN);
+    assert(snag_clipboard_publish(copy) == 0);
     assert(!snag_clipboard_cancel(copy));
     snag_clipboard_close(copy);
     read_exact(path, text, strlen(text));
@@ -284,6 +286,7 @@ main(int argc, char **argv)
     prepared(copy, text, strlen(text));
     assert(snag_clipboard_publish(copy) == 0);
     (void)wait_state(copy, SNAG_CLIPBOARD_PUBLISHING);
+    assert(snag_clipboard_publish(copy) == 0);
     assert(!snag_clipboard_cancel(copy));
     uint64_t stopping = snag_monotonic_ms();
     snag_clipboard_close(copy);
