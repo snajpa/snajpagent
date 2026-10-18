@@ -1630,6 +1630,14 @@ read_tool_result(const json_t *data, struct snag_binary_tool_result *result,
             return -1;
         }
         excerpt->encoding = (enum snag_binary_excerpt_encoding)encoding;
+        /* These are validated, NUL-terminated JSON strings. Retain a shared
+         * view when the model text already contains the exact excerpt; the
+         * native result encoder can then store it once without a new buffer. */
+        if (excerpt->retained.size > 4u && excerpt->retained.size <= result->model_text.size) {
+            const char *shared = strstr((const char *)result->model_text.data,
+                (const char *)excerpt->retained.data);
+            if (shared) excerpt->retained.data = (const unsigned char *)shared;
+        }
     }
     if (ref) {
         struct snag_binary_tool_output_ref *out = &result->output_ref;

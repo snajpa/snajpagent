@@ -15,6 +15,7 @@ struct fields {
     const unsigned char *data;
     size_t size, offset;
     bool references;
+    bool result_text_references;
 };
 
 #define SNAG_BINARY_INSTRUCTIONS_LABELS (1u << 31)
@@ -2615,13 +2616,24 @@ tool_result_valid(const struct snag_binary_tool_result *result)
 }
 
 static int
-write_tool_excerpt(struct snag_buf *out, const struct snag_binary_tool_excerpt *value)
+write_tool_excerpt(struct snag_buf *out, const struct snag_binary_tool_excerpt *value,
+    struct snag_binary_text model_text)
 {
-    if (write_uint(out, value->encoding, 1u) < 0 ||
+    /* A shared view is already byte-identical; no substring scan, allocation or
+     * second text copy is needed here. Four literal length bytes become eight
+     * reference bytes, so keep small excerpts literal. */
+    uintptr_t base = (uintptr_t)model_text.data, at = (uintptr_t)value->retained.data;
+    bool shared = value->retained.size > 4u && at >= base &&
+        at - base <= model_text.size && value->retained.size <= model_text.size - (at - base);
+    if (write_uint(out, value->encoding + (shared ? 2u : 0u), 1u) < 0 ||
         write_uint(out, value->discarded_bytes, 8u) < 0 ||
         write_uint(out, value->original_bytes, 8u) < 0 ||
         write_uint(out, value->retained_bytes, 8u) < 0) {
         return -1;
+    }
+    if (shared) {
+        return write_uint(out, at - base, 4u) < 0 ? -1 :
+            write_uint(out, value->retained.size, 4u);
     }
     return write_text(out, value->retained, 0u, SNAG_MAX_EVENT_LINE);
 }
@@ -2661,8 +2673,8 @@ write_tool_result(struct snag_buf *out, const struct snag_binary_tool_result *va
         snag_buf_append(out, value->signal.data, value->signal.size) < 0 ||
         (value->has_handle && snag_buf_append(out, value->handle, 16u) < 0) ||
         write_text(out, value->model_text, 0u, SNAG_MAX_EVENT_LINE) < 0 ||
-        write_tool_excerpt(out, &value->streams[0]) < 0 ||
-        write_tool_excerpt(out, &value->streams[1]) < 0 ||
+        write_tool_excerpt(out, &value->streams[0], value->model_text) < 0 ||
+        write_tool_excerpt(out, &value->streams[1], value->model_text) < 0 ||
         (value->output_limit_bytes && write_uint(out, value->output_limit_bytes, 8u) < 0) ||
         (value->has_output_ref && write_tool_output_ref(out, &value->output_ref) < 0)) {
         return -1;
@@ -2671,14 +2683,24 @@ write_tool_result(struct snag_buf *out, const struct snag_binary_tool_result *va
 }
 
 static bool
-read_tool_excerpt(struct fields *fields, struct snag_binary_tool_excerpt *out)
+read_tool_excerpt(struct fields *fields, struct snag_binary_tool_excerpt *out,
+    struct snag_binary_text model_text)
 {
     uint64_t encoding;
     if (!read_uint(fields, 1u, &encoding) ||
         !read_uint(fields, 8u, &out->discarded_bytes) ||
         !read_uint(fields, 8u, &out->original_bytes) ||
-        !read_uint(fields, 8u, &out->retained_bytes) ||
-        !read_text(fields, &out->retained, 0u, SNAG_MAX_EVENT_LINE)) {
+        !read_uint(fields, 8u, &out->retained_bytes)) {
+        return false;
+    }
+    if (encoding == 3u || encoding == 4u) {
+        uint64_t offset, size;
+        if (!fields->result_text_references || !read_uint(fields, 4u, &offset) ||
+            !read_uint(fields, 4u, &size) || offset > model_text.size ||
+            size > model_text.size - offset) return false;
+        out->retained = (struct snag_binary_text){model_text.data + offset, (size_t)size};
+        encoding -= 2u;
+    } else if (!read_text(fields, &out->retained, 0u, SNAG_MAX_EVENT_LINE)) {
         return false;
     }
     out->encoding = (enum snag_binary_excerpt_encoding)encoding;
@@ -2727,8 +2749,8 @@ read_tool_result(struct fields *fields, struct snag_binary_tool_result *out)
     out->output_ref.native = (flags & 8u) != 0u;
     if ((out->has_handle && !read_bytes(fields, out->handle, 16u)) ||
         !read_text(fields, &out->model_text, 0u, SNAG_MAX_EVENT_LINE) ||
-        !read_tool_excerpt(fields, &out->streams[0]) ||
-        !read_tool_excerpt(fields, &out->streams[1]) ||
+        !read_tool_excerpt(fields, &out->streams[0], out->model_text) ||
+        !read_tool_excerpt(fields, &out->streams[1], out->model_text) ||
         ((flags & 1u) && (!read_uint(fields, 8u, &out->output_limit_bytes) ||
             !out->output_limit_bytes)) ||
         (out->has_output_ref && !read_tool_output_ref(fields, &out->output_ref)) ||
@@ -4741,7 +4763,7 @@ snag_binary_event_version(enum snag_binary_kind kind)
         return 1u;
     }
     if (kind == SNAG_BINARY_TOOL_FINISHED || kind == SNAG_BINARY_PROCESS_CLOSED) {
-        return 2u;
+        return 3u;
     }
     return 0u;
 }
@@ -4938,7 +4960,8 @@ snag_binary_event_decode(const struct snag_binary_record *record,
     struct snag_binary_event decoded = {.kind = (enum snag_binary_kind)record->kind};
     struct fields fields = {
         .data = record->payload, .size = record->size,
-        .references = record->version >= 2u || record->kind == SNAG_BINARY_TURN_STARTED
+        .references = record->version >= 2u || record->kind == SNAG_BINARY_TURN_STARTED,
+        .result_text_references = record->version >= 3u
     };
     if (!decode_fields(&fields, &decoded) || fields.offset != fields.size) return invalid();
     *out = decoded;

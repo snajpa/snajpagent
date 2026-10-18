@@ -13,6 +13,11 @@
   compaction and resume. Keep these inputs outside the summary until the next
   response consumes them, avoiding repeated local snapshot-validation failures.
 
+- Store tool-output excerpts only once when their exact bytes already occur in
+  the same result's model text. Native result references preserve the original
+  transcript, byte accounting and older journal readability without a session
+  size quota.
+
 - Keep prices and unmatched shell-style dollar words literal in prompts. Restrict
   skill shorthand to the approved catalog and keep interactive sessions open
   when an explicit skill selection is unavailable.

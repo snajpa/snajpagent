@@ -31,6 +31,24 @@ state and recovery work depend on the retained working set and a bounded suffix,
 while history may grow to the filesystem and checked 64-bit representation
 limits. There is no session byte, event or turn quota.
 
+### Tool-result text sharing
+
+Native `tool_finished` and `process_closed` payload version 3 can share an
+excerpt with the same result's already-retained model text. Excerpt tags 1/2
+remain literal UTF-8/base64. Tags 3/4 retain the corresponding encoding and
+carry a checked 32-bit offset and length into that result's model text instead
+of repeating the string. Use a reference only when its eight bytes are smaller
+than the four-byte literal length plus text. No other event, stream, journal
+offset or lifetime can be named by this local reference.
+
+The JSON adapter recognizes exact substrings in the validated strings and
+borrows the existing model-text storage. Encoding adds no text buffer; decoding
+validates the span and original excerpt rules and returns a borrowed view.
+Canonical JSON, provider text, truncation accounting, process-output references
+and immutable history are unchanged. Versions 1/2 stay readable; older readers
+reject the new required version rather than appending through it. This reduces
+new record growth; it does not silently rewrite an existing journal.
+
 The measured failure makes the first optimization clear: 422 embedded full
 checkpoints accounted for 2,050,400,577 of 2,113,498,737 journal bytes. Changing
 serialization alone would leave that repeated-state growth intact.

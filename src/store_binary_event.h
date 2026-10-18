@@ -747,7 +747,8 @@ enum snag_binary_excerpt_encoding { SNAG_BINARY_EXCERPT_UTF8 = 1, SNAG_BINARY_EX
 struct snag_binary_tool_excerpt {
     enum snag_binary_excerpt_encoding encoding;
     uint64_t discarded_bytes, original_bytes, retained_bytes;
-    /* Preserve the original string. Legacy base64 admission checks length only. */
+    /* Preserve the original string. A view inside model_text is encoded once
+     * in v3 results. Legacy base64 admission checks length only. */
     struct snag_binary_text retained;
 };
 
