@@ -235,6 +235,7 @@ class ReportTests(unittest.TestCase):
         self.escape(child)
         child.command('report')
         child.repaint_until(b'REPORT')
+        child.repaint_until(b'/status')
         report, = self.reports(1)
         path = self.owner.directory / ('.view-report-' + report['id'])
         original = path.read_bytes()
