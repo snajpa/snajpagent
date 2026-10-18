@@ -352,10 +352,11 @@ snag_clipboard_result(struct snag_clipboard *copy, struct snag_clipboard_result 
 int
 snag_clipboard_publish(struct snag_clipboard *copy)
 {
+    if (atomic_load(&copy->request) == REQUEST_PUBLISH) return 0;
     if (atomic_load(&copy->state) != SNAG_CLIPBOARD_READY) return snag_errno(EAGAIN);
     int expected = REQUEST_NONE;
     if (!atomic_compare_exchange_strong(&copy->request, &expected, REQUEST_PUBLISH))
-        return snag_errno(expected == REQUEST_CANCEL ? ECANCELED : EALREADY);
+        return expected == REQUEST_PUBLISH ? 0 : snag_errno(ECANCELED);
     snag_wakeup_send(copy->control[1]);
     return 0;
 }

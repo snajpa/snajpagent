@@ -42,6 +42,8 @@ snag_wake_fd snag_clipboard_fd(const struct snag_clipboard *);
 void snag_clipboard_result(struct snag_clipboard *, struct snag_clipboard_result *);
 /* Exact immutable source reads also serve a checked remote transfer. */
 int snag_clipboard_read(const struct snag_clipboard *, uint64_t offset, void *, size_t);
+/* Request publication once READY; repeated accepted requests are idempotent.
+ * Acceptance is separate from the worker's eventual publication result. */
 int snag_clipboard_publish(struct snag_clipboard *);
 /* True means cancellation was accepted before publication. Once committed,
  * report the actual result; cancellation cannot promise to restore a clipboard. */

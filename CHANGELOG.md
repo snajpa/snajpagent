@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep workstation clipboard publication exactly once when rapid terminal polls
+  repeat an already-accepted background publication request.
+
 - Restore the selected chat/rollout view when restarting a saved session. Save
   view and operator-verbosity changes immediately for interrupted-process resume;
   `--view chat|rollout` overrides the saved view on interactive startup. Reuse
