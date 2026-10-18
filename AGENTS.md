@@ -33,6 +33,15 @@ briefly downgraded.
 
 ## Autonomous delivery and design ownership
 
+Lead assigns complete outcomes; assigned agents deliver them through authorized
+shipment. Own process and resource-accounting repairs as part of the outcome.
+Routine design, review, validation and bookkeeping never require a return trip to
+Lead, an ACK or another GO. Resolve stale aggregates from their actual components;
+propagate evidenced retirements through derived comparisons and retain real peer
+demand, positive uncertainty and safety floors. Use one-way material results when
+coordination helps, without request/reply status loops. Hold only a genuinely
+unavailable dependency and continue other ready work.
+
 Agents own ordinary engineering decisions, including tool designs, schemas and
 implementation approach. A written design is a normal deliverable and is
 followed by implementation, tests and landing in the same autonomous flow; it
