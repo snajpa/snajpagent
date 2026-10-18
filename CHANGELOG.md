@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Preserve pending IRC reply reminders and output corrections through active-turn
+  compaction and resume. Keep these inputs outside the summary until the next
+  response consumes them, avoiding repeated local snapshot-validation failures.
+
 - Keep prices and unmatched shell-style dollar words literal in prompts. Restrict
   skill shorthand to the approved catalog and keep interactive sessions open
   when an explicit skill selection is unavailable.

@@ -3540,10 +3540,13 @@ compact_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
         }
         builder->compact_current = true;
     }
-    if (builder->compact_current && !strcmp(type, "steering_added")) {
-        const char *id = snag_json_string(data, "steering_id");
-        for (size_t i = 0u; i < builder->session->pending_steering_count; ++i)
-            if (!strcmp(id, builder->session->pending_steering[i].steering_id)) return 0;
+    /* Pending control input belongs to the next response, even after admission.
+     * A correction's public prefix remains eligible for the history summary. */
+    if (builder->compact_current &&
+        snag_string_in(type, "steering_added irc_reply_reminder response_output_correction") &&
+        pending_steering_at_seq(builder->session, seq)) {
+        return !strcmp(type, "response_output_correction") ?
+            append_interrupted_prefix(builder, data, error, error_size) : 0;
     }
     if (!strcmp(type, "compaction_completed")) return 0;
     if (context_event(builder, state, seq, type, data, error, error_size) < 0) return -1;

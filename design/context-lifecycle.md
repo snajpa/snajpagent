@@ -37,6 +37,10 @@ routine reopen reads that boundary and its suffix, not the lifetime prefix.
    move past unadmitted steering, swallow an unconsumed room event, or confuse
    another turn with the current one. Repeated cuts in one long turn must work
    live and after reopening when the original turn-start event is already covered.
+   Pending steering, IRC reply reminders and output corrections share that
+   boundary: admission alone does not let a summary consume them. Preserve a
+   correction's preceding public output; validate the captured input snapshot
+   when building the next response rather than the compaction source.
 6. Keep successful summaries unless there is an explicit reason they cannot be
    used. An initial over-budget measurement is not permission to discard a
    later successful, fitting compacted request.

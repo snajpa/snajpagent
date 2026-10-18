@@ -4122,6 +4122,10 @@ During compaction, Ctrl-C with an empty draft interrupts preparation or the prov
 nonempty draft is cleared first.  Cancelling a turn does not cancel a later
 manual compaction.  Text entered during idle compaction is saved as a future
 turn and runs afterwards; during active-turn compaction it remains steering.
+Pending steering, IRC reply reminders and output corrections stay outside the
+active summary, including after admission to a request that has yet to start.
+The next response retains them once, with any preceding public output preserved
+in history. This state survives checkpoint and resume.
 Interrupted or failed compaction retains the previous context.  Provider errors
 leave the interactive session open; use
 .B /compact
