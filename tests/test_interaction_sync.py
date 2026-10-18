@@ -120,10 +120,11 @@ def check_resume_tail(binary, root, legacy=False):
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='snag-sync-') as directory:
         binary = os.path.abspath(sys.argv[1])
+        root = Path(directory).resolve()
         if sys.platform == 'linux':
-            check(binary, Path(directory))
+            check(binary, root)
         else:
             print('interaction sync delay: Linux syscall seam only')
-        check_resume_tail(binary, Path(directory) / 'resume')
-        check_resume_tail(binary, Path(directory) / 'legacy', legacy=True)
+        check_resume_tail(binary, root / 'resume')
+        check_resume_tail(binary, root / 'legacy', legacy=True)
     print('interaction writeback and resume: ok')
