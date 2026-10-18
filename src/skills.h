@@ -24,14 +24,13 @@ json_t *snag_skills_activate(const json_t *catalog, const char *id,
     const char *arguments, bool explicit_selection, char *error, size_t size);
 json_t *snag_skills_settings_load(const char *dotdir, char *error, size_t size);
 int snag_skills_settings_save(const char *, const json_t *, char *, size_t);
-json_t *snag_skills_review(const char *dotdir, const json_t *entry, char *error, size_t size);
-int snag_skills_approve(const char *dotdir, const char *id, const char *digest,
-    char *error, size_t size);
 json_t *snag_skills_manage(const char *dotdir, const char *action, const char *target,
     const char *git, const char *ref, const char *subdir, char *error, size_t size);
 json_t *snag_skill_arguments(const char *, char *, size_t);
 json_t *snag_skill_resources(const char *root, size_t budget, char *, size_t);
 bool snag_skill_bindings_valid(const json_t *active);
+struct snag_session;
+bool snag_skill_binding_active(const struct snag_session *, const json_t *entry);
 int snag_skills_main(int argc, char **argv);
 
 #endif

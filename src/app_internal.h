@@ -329,6 +329,9 @@ int snag_app_consent(struct app_state *app, const char *reason, char *error, siz
 int snag_app_sync_destinations(struct app_state *app);
 int snag_app_skills_command(struct app_state *, const char *, bool *);
 int snag_app_skills_refresh(struct app_state *, char *, size_t);
+json_t *snag_app_skills_catalog(struct app_state *, const char *, const json_t *, char *, size_t);
+int snag_app_work_context_tool(struct app_state *, const struct snag_response_item *, json_t **,
+    char *, size_t);
 int snag_app_skills_begin(struct app_state *, const char *, bool, bool, char *, size_t);
 int snag_app_skills_tool(struct app_state *, const struct snag_response_item *, json_t **,
     char *, size_t);

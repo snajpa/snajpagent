@@ -427,9 +427,6 @@ snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *th
         json_decref(data);
         if (applied < 0) goto done;
         value.skills = json_incref(staged->active_skills);
-        value.skills_revoked_seq = staged->skills_revoked_seq;
-        memcpy(value.skills_policy_digest, staged->skills_policy_digest,
-            sizeof(value.skills_policy_digest));
     }
     if (view->work_context) {
         struct snag_binary_batch batch;

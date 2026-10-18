@@ -12,100 +12,34 @@
 
 static int save_bindings(struct app_state *, json_t *, char *, size_t);
 
-static int
-retire_revoked(struct app_state *app, const json_t *settings, const json_t *catalog,
+json_t *
+snag_app_skills_catalog(struct app_state *app, const char *cwd, const json_t *work_context,
     char *error, size_t size)
 {
-    json_t *active = json_array();
-    if (!active) return -1;
-    int rc = 0;
-    for (size_t i = 0; i < json_array_size(app->session.active_skills); ++i) {
-        json_t *pin = json_array_get(app->session.active_skills, i);
-        const char *id = snag_json_string(pin, "id");
-        const char *digest = snag_json_string(pin, "manifest_digest");
-        const char *root = snag_json_string(pin, "root");
-        json_t *approval = json_object_get(json_object_get(settings, "approvals"), id);
-        const char *approved_digest = snag_json_string(approval, "digest");
-        const char *approved_root = snag_json_string(approval, "root");
-        bool retained = digest && approved_digest && approved_root &&
-            !strcmp(digest, approved_digest) && !strcmp(root, approved_root);
-        const char *source = snag_json_string(approval, "source");
-        json_t *roots = json_object_get(catalog, "roots");
-        bool selected = false;
-        for (size_t j = 0; source && j < json_array_size(roots); ++j) {
-            const json_t *item = json_array_get(roots, j);
-            const char *path = snag_json_string(item, "canonical");
-            if (!path || !*path) path = snag_json_string(item, "path");
-            size_t length = path ? strlen(path) : 0u;
-            if (length && !strncmp(source, path, length) &&
-                (!source[length] || path[length - 1u] == '/' || source[length] == '/')) {
-                selected = true;
-            }
-        }
-        retained = retained && selected;
-        const char *arrays[] = {"banned", "disabled"};
-        for (size_t j = 0; retained && j < 2u; ++j) {
-            json_t *values = json_object_get(settings, arrays[j]);
-            for (size_t k = 0; k < json_array_size(values); ++k) {
-                const char *value = json_string_value(json_array_get(values, k));
-                const char *identity = j == 0u ? snag_json_string(pin, "name") : id;
-                if (!strcmp(value, identity)) retained = false;
-            }
-        }
-        if (retained) {
-            json_t *manifest = snag_skill_manifest(root, error, size);
-            const char *actual = snag_json_string(manifest, "digest");
-            retained = actual && !strcmp(actual, digest);
-            json_decref(manifest);
-        }
-        if (retained && json_array_append(active, pin) < 0) { rc = -1; break; }
+    json_t *settings = snag_skills_settings_load(app->store.root_path, error, size);
+    if (!settings) return NULL;
+    if (app->config->skills_roots &&
+        json_object_set(settings, "roots", app->config->skills_roots) < 0) {
+        json_decref(settings);
+        return NULL;
     }
-    json_t *policy = json_pack("{s:O,s:O,s:O,s:O}",
-        "approvals", json_object_get(settings, "approvals") ?
-            json_object_get(settings, "approvals") : json_null(),
-        "banned", json_object_get(settings, "banned") ?
-            json_object_get(settings, "banned") : json_null(),
-        "disabled", json_object_get(settings, "disabled") ?
-            json_object_get(settings, "disabled") : json_null(),
-        "roots", json_object_get(settings, "roots") ?
-            json_object_get(settings, "roots") : json_null());
-    char digest[SNAG_SHA256_HEX_LEN + 1u];
-    bool meaningful = *app->session.skills_policy_digest ||
-        json_array_size(app->session.active_skills) ||
-        json_object_size(json_object_get(settings, "approvals")) ||
-        json_array_size(json_object_get(settings, "banned")) ||
-        json_array_size(json_object_get(settings, "disabled"));
-    if (rc == 0 && meaningful && (!policy ||
-        snag_json_digest_bounded(policy, SNAG_MAX_EVENT_LINE, digest, NULL) < 0)) rc = -1;
-    bool changed = rc == 0 && meaningful && strcmp(digest, app->session.skills_policy_digest);
-    bool revoked = json_array_size(active) < json_array_size(app->session.active_skills);
-    if (rc == 0 && (changed || revoked)) {
-        uint64_t boundary = changed || revoked ? app->session.next_seq :
-            app->session.skills_revoked_seq;
-        rc = snag_app_commit_event(app, "skills_updated", json_pack("{s:O,s:s,s:I}",
-            "active", active, "policy_digest", meaningful ? digest : "",
-            "revoked_seq", (json_int_t)boundary), error, size);
-    } else if (rc == 0) rc = save_bindings(app, active, error, size);
-    json_decref(policy);
-    json_decref(active);
-    return rc;
+    const char *root = snag_json_string(work_context, "root");
+    if (root && json_object_set_new(settings, "visit_root", json_string(root)) < 0) {
+        json_decref(settings);
+        return NULL;
+    }
+    json_t *catalog = snag_skills_discover(cwd, app->store.root_path,
+        settings, error, size);
+    json_decref(settings);
+    return catalog;
 }
 
 int
 snag_app_skills_refresh(struct app_state *app, char *error, size_t size)
 {
-    json_t *settings = snag_skills_settings_load(app->store.root_path, error, size);
-    if (!settings) return -1;
-    if (app->config->skills_roots &&
-        json_object_set(settings, "roots", app->config->skills_roots) < 0) {
-        json_decref(settings);
-        return -1;
-    }
-    json_t *catalog = snag_skills_discover(app->session.cwd, app->store.root_path,
-        settings, error, size);
-    int rc = catalog ? retire_revoked(app, settings, catalog, error, size) : -1;
-    json_decref(settings);
-    if (rc < 0) { json_decref(catalog); return -1; }
+    json_t *catalog = snag_app_skills_catalog(app, app->session.cwd,
+        app->session.work_context, error, size);
+    if (!catalog) return -1;
     if (!json_equal(catalog, app->session.skills_catalog)) {
         snag_context_skills_changed(&app->session);
     }
@@ -122,12 +56,7 @@ active_bindings(const struct snag_session *session)
     if (!active) return NULL;
     for (size_t i = 0; i < json_array_size(session->active_skills); ++i) {
         json_t *entry = json_array_get(session->active_skills, i);
-        const char *goal = snag_json_string(entry, "goal_id");
-        const char *turn = snag_json_string(entry, "turn_id");
-        bool retained = goal && *goal ? snag_goal_unfinished(session->goal_status) &&
-            !strcmp(goal, session->goal_id) :
-            turn && (!strcmp(turn, session->active_turn_id) || session->active_read_only);
-        if (retained && json_array_append(active, entry) < 0) {
+        if (snag_skill_binding_active(session, entry) && json_array_append(active, entry) < 0) {
             json_decref(active);
             return NULL;
         }
@@ -141,9 +70,7 @@ save_bindings(struct app_state *app, json_t *active, char *error, size_t size)
     if (json_equal(active, app->session.active_skills) ||
         (!app->session.active_skills && !json_array_size(active))) return 0;
     return snag_app_commit_event(app, "skills_updated",
-        json_pack("{s:O,s:s,s:I}", "active", active,
-            "policy_digest", app->session.skills_policy_digest,
-            "revoked_seq", (json_int_t)app->session.skills_revoked_seq), error, size);
+        json_pack("{s:O}", "active", active), error, size);
 }
 
 static json_t *
@@ -203,8 +130,22 @@ activate(struct app_state *app, const char *id, const char *arguments, bool expl
     json_t *skill = snag_skills_activate(app->session.skills_catalog, id, arguments,
         explicit_selection, error, size);
     if (!skill) return NULL;
+    /* Revalidate instructions, then reuse the binding before collecting resources
+     * or capability diagnostics that are already part of its pinned snapshot. */
+    for (size_t i = 0; i < json_array_size(app->session.active_skills); ++i) {
+        json_t *previous = json_array_get(app->session.active_skills, i);
+        if (snag_skill_binding_active(&app->session, previous) &&
+            !strcmp(snag_json_string(previous, "id"), snag_json_string(skill, "id")) &&
+            !strcmp(snag_json_string(previous, "digest"), snag_json_string(skill, "digest")) &&
+            !strcmp(snag_json_string(previous, "arguments"),
+                snag_json_string(skill, "arguments"))) {
+            json_decref(skill);
+            return json_incref(previous);
+        }
+    }
     json_t *active = active_bindings(&app->session);
-    const char *goal = app->session.goal_status == SNAG_GOAL_ACTIVE &&
+    const char *visit = snag_json_string(app->session.work_context, "id");
+    const char *goal = !visit && app->session.goal_status == SNAG_GOAL_ACTIVE &&
         !app->session.active_read_only ? app->session.goal_id : "";
     json_t *dependencies = dependency_state(app, skill);
     json_t *allowed = allowed_tools(app, skill);
@@ -213,6 +154,7 @@ activate(struct app_state *app, const char *id, const char *arguments, bool expl
     if (!active || !dependencies || !allowed || !resources ||
         json_object_set_new(skill, "turn_id", json_string(app->session.active_turn_id)) < 0 ||
         json_object_set_new(skill, "goal_id", json_string(goal)) < 0 ||
+        (visit && json_object_set_new(skill, "visit_id", json_string(visit)) < 0) ||
         json_object_set(skill, "dependencies", dependencies) < 0 ||
         json_object_set(skill, "allowed_tools", allowed) < 0 ||
         json_object_set(skill, "resources", resources) < 0) {
@@ -226,18 +168,6 @@ activate(struct app_state *app, const char *id, const char *arguments, bool expl
     json_decref(dependencies);
     json_decref(allowed);
     json_decref(resources);
-    for (size_t i = 0; i < json_array_size(active); ++i) {
-        const json_t *previous = json_array_get(active, i);
-        if (!strcmp(snag_json_string(previous, "id"), snag_json_string(skill, "id")) &&
-            !strcmp(snag_json_string(previous, "digest"), snag_json_string(skill, "digest")) &&
-            !strcmp(snag_json_string(previous, "arguments"),
-                snag_json_string(skill, "arguments"))) {
-            json_t *result = json_incref((json_t *)previous);
-            json_decref(active);
-            json_decref(skill);
-            return result;
-        }
-    }
     if (json_array_append(active, skill) < 0 || save_bindings(app, active, error, size) < 0) {
         json_decref(skill);
         skill = NULL;
@@ -270,8 +200,8 @@ int
 snag_app_skills_begin(struct app_state *app, const char *prompt, bool continuing,
     bool retry_binding, char *error, size_t size)
 {
-    if (!app->session.skills_catalog && snag_app_skills_refresh(app, error, size) < 0) return -1;
-    if (continuing) return 0;
+    if (continuing) return app->session.skills_catalog ? 0 :
+        snag_app_skills_refresh(app, error, size);
     if (retry_binding && app->session.active_skills) {
         json_t *active = json_deep_copy(app->session.active_skills);
         if (!active) return -1;
@@ -356,8 +286,9 @@ snag_app_skills_tool(struct app_state *app, const struct snag_response_item *cal
     const char *query = snag_json_string(call->arguments, "query");
     if (!action || !snag_json_arg_keys(call->arguments, "action",
         "id arguments query offset limit", error, size)) goto refused;
-    if (snag_app_skills_refresh(app, error, size) < 0) goto refused;
-    if (!strcmp(action, "list")) {
+    if ((!app->session.skills_catalog || !strcmp(action, "refresh")) &&
+        snag_app_skills_refresh(app, error, size) < 0) goto refused;
+    if (!strcmp(action, "list") || !strcmp(action, "refresh")) {
         uint64_t offset = 0;
         uint64_t limit = 30;
         bool known;
@@ -370,9 +301,18 @@ snag_app_skills_tool(struct app_state *app, const struct snag_response_item *cal
         const json_t *entry = snag_skills_resolve(app->session.skills_catalog, id, error, size);
         if (entry) *result = snag_skill_snapshot(entry, error, size);
     } else if (!strcmp(action, "activate") && id) {
-        *result = activate(app, id, arguments, false, error, size);
+        json_t *binding = activate(app, id, arguments, false, error, size);
+        *result = binding ? json_copy(binding) : NULL;
+        json_decref(binding);
+        /* The current-state projection supplies the pinned instructions once.
+         * Keep the terminal receipt useful without duplicating them in history. */
+        if (*result) {
+            json_object_del(*result, "body");
+            json_object_del(*result, "instructions");
+        }
     } else {
-        (void)snag_errorf(error, size, "skills requires list, show or activate and a matching id");
+        (void)snag_errorf(error, size,
+            "skills requires list, refresh, show or activate and a matching id");
     }
     if (*result) {
         if (json_object_set(*result, "skills_generation",
@@ -398,8 +338,7 @@ manage_command(struct app_state *app, const char *action, const char *operand,
     json_t *words = snag_skill_arguments(operand ? operand : "", error, size);
     const char *fixed[] = {program, "skills", "--dotdir", app->store.root_path,
         "--config", app->config->source_path, "--cwd",
-        app->session.cwd ? app->session.cwd : ".", "--json", action,
-        app->cli->all_skills ? "--all-skills" : "--json"};
+        app->session.cwd ? app->session.cwd : ".", "--json", action};
     size_t fixed_count = sizeof(fixed) / sizeof(fixed[0]);
     const char **argv = calloc(fixed_count + json_array_size(words) + 1u, sizeof(*argv));
     struct snag_child child;
@@ -498,32 +437,13 @@ snag_app_skills_command(struct app_state *app, const char *line, bool *handled)
         while (isspace((unsigned char)*operand)) ++operand;
     }
     json_t *result = NULL;
-    if (app->cli->all_skills && (!strcmp(copy, "list") || !strcmp(copy, "show"))) {
-        int rc = manage_command(app, copy, operand, error, sizeof(error));
-        free(copy);
-        return rc < 0 ? snag_app_report(app, SNAG_UI_ERROR, error) : rc;
-    }
     if (snag_string_in(copy,
-        "install update remove create validate enable disable ban unban paths review")) {
+        "install update remove create validate paths")) {
         int rc = manage_command(app, copy, operand, error, sizeof(error));
         free(copy);
         return rc < 0 ? snag_app_report(app, SNAG_UI_ERROR, error) : rc;
     }
-    if (!strcmp(copy, "approve")) {
-        json_t *words = snag_skill_arguments(operand ? operand : "", error, sizeof(error));
-        const char *id = json_string_value(json_array_get(words, 0u));
-        const char *option = json_string_value(json_array_get(words, 1u));
-        const char *digest = json_string_value(json_array_get(words, 2u));
-        if (json_array_size(words) == 3u && option && !strcmp(option, "--digest") &&
-            snag_skills_approve(app->store.root_path, id, digest, error, sizeof(error)) == 0 &&
-            snag_app_skills_refresh(app, error, sizeof(error)) == 0) {
-            result = json_pack("{s:s,s:s,s:s}", "action", "approve", "id", id, "digest", digest);
-        } else if (!*error) {
-            (void)snag_errorf(error, sizeof(error),
-                "use /skills approve ID --digest HASH after review");
-        }
-        json_decref(words);
-    } else if (!strcmp(copy, "clear")) {
+    if (!strcmp(copy, "clear")) {
         json_t *active = json_array();
         if (!active) { free(copy); return -1; }
         for (size_t i = 0; i < json_array_size(app->session.active_skills); ++i) {

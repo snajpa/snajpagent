@@ -3,6 +3,7 @@
 #include "base.h"
 #include "fs.h"
 #include "json.h"
+#include "instructions.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -33,6 +34,10 @@ snag_skill_bindings_valid(const json_t *active)
         for (size_t j = 0; j < sizeof(fields) / sizeof(fields[0]); ++j) {
             if (!snag_json_string(entry, fields[j])) return false;
         }
+        const char *visit = snag_json_string(entry, "visit_id");
+        if (json_object_get(entry, "visit_id") && (!visit ||
+            strlen(visit) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(visit, SNAG_ID_HEX_LEN)))
+            return false;
         const char *manifest = snag_json_string(entry, "manifest_digest");
         if (json_object_get(entry, "manifest_digest") && (!manifest ||
             strlen(manifest) != SNAG_SHA256_HEX_LEN ||
@@ -466,8 +471,7 @@ snag_skill_load(const char *directory, bool strict, char *error, size_t size)
     json_t *result = NULL;
     json_t *metadata = NULL;
     json_t *vendor = NULL;
-    json_t *manifest = root ? snag_skill_manifest(root, error, size) : NULL;
-    if (!manifest || !root || !path || !metadata_path) goto done;
+    if (!root || !path || !metadata_path) goto done;
     if (instruction_origin(&path, root, error, size) < 0 ||
         read_text(path, &text, error, size) < 0) goto done;
     const char *source = (const char *)text.data;
@@ -586,7 +590,12 @@ snag_skill_load(const char *directory, bool strict, char *error, size_t size)
         (void)snag_errorf(error, size, "%s: %s", metadata_path, strerror(errno));
         goto done;
     }
-    if (strict && resource_references(root, body, vendor, error, size) < 0) goto done;
+    if (strict) {
+        if (resource_references(root, body, vendor, error, size) < 0) goto done;
+        json_t *manifest = snag_skill_manifest(root, error, size);
+        if (!manifest) goto done;
+        json_decref(manifest);
+    }
     bool implicit = !boolean_value(metadata, "disable-model-invocation", false) &&
         boolean_value(json_object_get(vendor, "policy"), "allow_implicit_invocation", true);
     bool invocable = boolean_value(metadata, "user-invocable", true);
@@ -606,17 +615,8 @@ snag_skill_load(const char *directory, bool strict, char *error, size_t size)
         "openai", vendor ? vendor : json_null(), "implicit", implicit,
         "user_invocable", invocable, "unsupported_execution", unsupported,
         "naming_warning", !naming);
-    json_t *after = result ? snag_skill_manifest(root, error, size) : NULL;
-    if (result && (!after || !json_equal(manifest, after) ||
-        json_object_set(result, "manifest_digest", json_object_get(manifest, "digest")) < 0)) {
-        (void)snag_errorf(error, size, "package changed during skill inspection");
-        json_decref(result);
-        result = NULL;
-    }
-    json_decref(after);
 
 done:
-    json_decref(manifest);
     json_decref(metadata);
     json_decref(vendor);
     free(root);
@@ -668,10 +668,6 @@ snag_skill_invocation(const json_t *skill, const char *arguments, char *error, s
     json_t *words = NULL;
     json_t *result = NULL;
     if (!body || !root) return NULL;
-    if (json_is_true(json_object_get(skill, "unsupported_execution"))) {
-        (void)snag_errorf(error, size, "skill requires unsupported foreign execution extensions");
-        return NULL;
-    }
     if (!arguments) arguments = "";
     words = snag_skill_arguments(arguments, error, size);
     if (!words) goto done;
@@ -708,7 +704,8 @@ snag_skill_invocation(const json_t *skill, const char *arguments, char *error, s
         }
     }
     if (snag_buf_terminate(&rendered) < 0) goto done;
-    result = json_deep_copy(skill);
+    /* Invocation edits only top-level fields; package metadata stays immutable. */
+    result = json_copy((json_t *)skill);
     if (result && (json_object_set_new(result, "arguments", json_string(arguments)) < 0 ||
         json_object_set_new(result, "instructions", json_string((char *)rendered.data)) < 0)) {
         json_decref(result);
@@ -749,7 +746,6 @@ struct skill_scan {
     const json_t *settings;
     const char *origin;
     size_t priority;
-    bool trusted;
 };
 
 static int
@@ -773,20 +769,6 @@ scan_directory(struct skill_scan *scan, const char *path, char *error, size_t si
     if (rc < 0 || !skill_path) { free(canonical); free(skill_path); return -1; }
     snag_file_info info;
     if (snag_stat(skill_path, &info) == 0) {
-        bool approved_source = false;
-        const char *approved_id;
-        json_t *approval_record;
-        json_object_foreach(json_object_get(scan->settings, "approvals"),
-            approved_id, approval_record) {
-            (void)approved_id;
-            const char *source = snag_json_string(approval_record, "source");
-            if (source && !strcmp(source, canonical)) approved_source = true;
-        }
-        if (!approved_source && !json_is_true(json_object_get(scan->settings, "inspect_all"))) {
-            free(canonical);
-            free(skill_path);
-            return 0;
-        }
         json_t *skill = snag_skill_load(canonical, false, error, size);
         if (!skill) {
             rc = catalog_diagnostic(scan->catalog, canonical, error);
@@ -795,8 +777,6 @@ scan_directory(struct skill_scan *scan, const char *path, char *error, size_t si
             snag_sha256_hex(canonical, strlen(canonical), digest);
             struct snag_buf id = {.max = SNAG_PATH_MAX_BYTES};
             const char *name = snag_json_string(skill, "name");
-            bool admitted = path_below(canonical, scan->origin);
-            bool trusted = scan->trusted && admitted;
             const char *managed_id = NULL;
             const char *managed_name;
             json_t *receipt;
@@ -817,55 +797,12 @@ scan_directory(struct skill_scan *scan, const char *path, char *error, size_t si
                 json_object_set_new(skill, "origin", json_string(scan->origin)) < 0 ||
                 json_object_set_new(skill, "priority",
                     json_integer((json_int_t)scan->priority)) < 0 ||
-                json_object_set_new(skill, "trusted", json_boolean(trusted)) < 0 ||
-                json_object_set_new(skill, "origin_admitted", json_boolean(admitted)) < 0 ||
-                json_object_set_new(skill, "enabled", json_boolean(!array_has_text(
-                    json_object_get(scan->settings, "disabled"), (char *)id.data))) < 0) {
+                json_object_set_new(skill, "state", json_string("available")) < 0) {
                 rc = -1;
             } else {
-                bool banned = array_has_text(json_object_get(scan->settings, "banned"), name);
-                bool enabled = json_is_true(json_object_get(skill, "enabled"));
-                json_t *approval = json_object_get(json_object_get(scan->settings, "approvals"),
-                    (char *)id.data);
-                const char *approved_digest = snag_json_string(approval, "digest");
-                const char *manifest_digest = snag_json_string(skill, "manifest_digest");
-                bool approved = !banned && approved_digest && manifest_digest &&
-                    !strcmp(approved_digest, manifest_digest);
-                const char *state = banned ? "banned" : !approval ? "pending" :
-                    !approved ? "changed" : !enabled ? "disabled" : "approved";
-                rc = json_object_set_new(skill, "approved", json_boolean(approved));
-                if (rc == 0) rc = json_object_set_new(skill, "state", json_string(state));
-                if (approved && rc == 0) {
-                    const char *snapshot = snag_json_string(approval, "root");
-                    json_t *checked = snapshot ? snag_skill_manifest(snapshot, error, size) : NULL;
-                    const char *digest = snag_json_string(checked, "digest");
-                    if (!digest || strcmp(digest, approved_digest)) {
-                        rc = json_object_set_new(skill, "approved", json_false());
-                        if (rc == 0) {
-                            rc = json_object_set_new(skill, "state", json_string("changed"));
-                        }
-                    } else {
-                        char *snapshot_path = snag_path_join(snapshot, "SKILL.md");
-                        rc = snapshot_path ? json_object_set(skill, "source_root",
-                            json_object_get(skill, "root")) : -1;
-                        if (rc == 0) rc = json_object_set_new(skill, "root", json_string(snapshot));
-                        if (rc == 0) {
-                            rc = json_object_set_new(skill, "path", json_string(snapshot_path));
-                        }
-                        free(snapshot_path);
-                    }
-                    json_decref(checked);
-                }
-                if (rc == 0) rc = json_object_set(skill, "trusted",
-                    json_object_get(skill, "approved"));
                 json_object_del(skill, "body");
-                if (rc == 0) {
-                    rc = json_array_append(json_object_get(scan->catalog, "entries"), skill);
-                }
-                if (!admitted) {
-                    (void)catalog_diagnostic(scan->catalog, canonical,
-                        "linked package origin is outside configured root");
-                }
+                json_object_del(skill, "metadata");
+                rc = json_array_append(json_object_get(scan->catalog, "entries"), skill);
             }
             snag_buf_free(&id);
             json_decref(skill);
@@ -875,13 +812,6 @@ scan_directory(struct skill_scan *scan, const char *path, char *error, size_t si
         return rc;
     }
     free(skill_path);
-    if (!path_below(canonical, scan->origin)) {
-        rc = catalog_diagnostic(scan->catalog, canonical,
-            "linked collection is outside configured root; "
-            "configure its canonical root explicitly");
-        free(canonical);
-        return rc;
-    }
     int fd = snag_open_inspect_path(NULL, canonical);
     struct snag_directory *directory = fd >= 0 ? snag_directory_open(fd) : NULL;
     if (!directory) {
@@ -921,16 +851,68 @@ scan_directory(struct skill_scan *scan, const char *path, char *error, size_t si
 }
 
 static int
-scan_root(struct skill_scan *scan, const char *path, bool trusted, char *error, size_t size)
+scan_root(struct skill_scan *scan, const char *path, const char *configured, bool defaults,
+    char *error, size_t size)
 {
     char *canonical = snag_realpath(path);
-    if (!canonical) return errno == ENOENT || errno == ENOTDIR ? 0 :
-        catalog_diagnostic(scan->catalog, path, strerror(errno));
-    scan->origin = canonical;
-    scan->trusted = trusted;
-    int rc = scan_directory(scan, canonical, error, size);
+    int code = canonical ? 0 : errno;
+    if (!canonical && !configured) return code == ENOENT || code == ENOTDIR ? 0 :
+        catalog_diagnostic(scan->catalog, path, strerror(code));
+    json_t *item = json_pack("{s:s,s:s,s:b}", "path", path,
+        "canonical", canonical ? canonical : "", "present", canonical != NULL);
+    if (item && configured &&
+        (json_object_set_new(item, "configured", json_string(configured)) < 0 ||
+            json_object_set_new(item, "default", json_boolean(defaults)) < 0)) {
+        json_decref(item);
+        item = NULL;
+    }
+    if (item && code && json_object_set_new(item, "diagnostic",
+        json_string(strerror(code))) < 0) {
+        json_decref(item);
+        item = NULL;
+    }
+    int rc = item ? json_array_append_new(json_object_get(scan->catalog, "roots"), item) : -1;
+    if (rc == 0 && canonical) {
+        scan->origin = canonical;
+        rc = scan_directory(scan, canonical, error, size);
+    }
     ++scan->priority;
     free(canonical);
+    return rc;
+}
+
+static int
+project_skills(struct skill_scan *scan, const char *cwd, char *error, size_t size)
+{
+    char *current = cwd ? snag_realpath(cwd) : NULL;
+    char *root = NULL;
+    if (!current) return 0; /* A disappeared cwd retains the global catalog/recovery tools. */
+    snag_file_info info;
+    if (snag_stat(current, &info) < 0) {
+        int saved = errno;
+        free(current);
+        if (saved == ENOENT || saved == ENOTDIR) return 0;
+        return snag_fail(error, size, saved, "cannot inspect project skill directory");
+    }
+    if (!S_ISDIR(info.st_mode)) {
+        free(current);
+        return 0;
+    }
+    int rc = snag_instructions_project_root(current, &root, error, size);
+    while (rc == 0) {
+        const char *names[] = {".snajpagent/skills", ".agents/skills", ".claude/skills"};
+        for (size_t i = 0; rc == 0 && i < sizeof(names) / sizeof(names[0]); ++i) {
+            char *path = snag_path_join(current, names[i]);
+            rc = path ? scan_root(scan, path, NULL, false, error, size) : -1;
+            free(path);
+        }
+        if (rc < 0 || !strcmp(current, root)) break;
+        char *slash = strrchr(current, '/');
+        if (!slash || slash == current) current[1] = '\0';
+        else *slash = '\0';
+    }
+    free(root);
+    free(current);
     return rc;
 }
 
@@ -938,40 +920,31 @@ json_t *
 snag_skills_discover(const char *cwd, const char *dotdir, const json_t *settings,
     char *error, size_t size)
 {
-    json_t *catalog = json_pack("{s:[],s:[],s:[]}",
-        "entries", "diagnostics", "linked_origins");
+    json_t *catalog = json_pack("{s:[],s:[],s:[],s:[]}",
+        "entries", "diagnostics", "linked_origins", "roots");
     struct skill_scan scan = {.catalog = catalog, .settings = settings,
         .visited = json_array()};
     if (!catalog || !scan.visited) goto fail;
-    (void)cwd;
+    const char *visit_root = snag_json_string(settings, "visit_root");
+    if (visit_root && (!cwd || strcmp(cwd, visit_root)) &&
+        project_skills(&scan, visit_root, error, size) < 0) goto fail;
+    if (project_skills(&scan, cwd, error, size) < 0) goto fail;
     json_t *roots = json_object_get(settings, "roots");
     bool defaults = !roots;
-    json_t *paths = json_array();
-    if (!paths || json_object_set_new(catalog, "roots", paths) < 0) goto fail;
     for (size_t i = 0; i < (defaults ? 1u : json_array_size(roots)); ++i) {
         const char *configured = defaults ? "skills" : json_string_value(json_array_get(roots, i));
         char *path = configured && snag_path_root_len(configured) ? strdup(configured) :
             configured ? snag_path_join(dotdir, configured) : NULL;
         char *canonical = path ? snag_realpath(path) : NULL;
-        int path_errno = canonical ? 0 : errno;
         if (!path) { free(canonical); goto fail; }
-        json_t *item = json_pack("{s:s,s:s,s:b,s:b,s:s}", "configured", configured,
-            "path", path, "default", defaults, "present", canonical != NULL,
-            "canonical", canonical ? canonical : "");
-        if (item && path_errno && json_object_set_new(item, "diagnostic",
-            json_string(strerror(path_errno))) < 0) {
-            json_decref(item);
-            item = NULL;
-        }
-        int rc = item ? json_array_append_new(paths, item) : -1;
-        if (rc == 0) rc = scan_root(&scan, path, true, error, size);
+        int rc = scan_root(&scan, path, configured, defaults, error, size);
         const char *name;
         json_t *receipt;
         json_object_foreach(json_object_get(settings, "installed"), name, receipt) {
             (void)name;
             const char *root = snag_json_string(receipt, "root");
             if (rc == 0 && canonical && root && path_below(root, canonical)) {
-                rc = scan_root(&scan, root, true, error, size);
+                rc = scan_root(&scan, root, NULL, false, error, size);
             }
         }
         free(canonical);
@@ -979,25 +952,13 @@ snag_skills_discover(const char *cwd, const char *dotdir, const json_t *settings
         if (rc < 0) goto fail;
     }
     json_t *entries = json_object_get(catalog, "entries");
-    if (!json_is_true(json_object_get(settings, "inspect_all"))) {
-        for (size_t i = json_array_size(entries); i > 0; --i) {
-            json_t *entry = json_array_get(entries, i - 1u);
-            if (!json_is_true(json_object_get(entry, "approved")) ||
-                !json_is_true(json_object_get(entry, "enabled"))) {
-                if (json_array_remove(entries, i - 1u) < 0) goto fail;
-            }
-        }
-        if (json_object_set_new(catalog, "diagnostics", json_array()) < 0) goto fail;
-    }
     for (size_t i = 0; i < json_array_size(entries); ++i) {
         json_t *entry = json_array_get(entries, i);
         const char *name = snag_json_string(entry, "name");
         bool selected = true;
         for (size_t j = 0; j < i; ++j) {
             json_t *previous = json_array_get(entries, j);
-            if (json_is_true(json_object_get(previous, "approved")) &&
-                json_is_true(json_object_get(previous, "enabled")) &&
-                !strcmp(name, snag_json_string(previous, "name")) &&
+            if (!strcmp(name, snag_json_string(previous, "name")) &&
                 json_integer_value(json_object_get(previous, "priority")) <
                     json_integer_value(json_object_get(entry, "priority"))) {
                 selected = false;
@@ -1074,16 +1035,17 @@ json_t *
 snag_skill_snapshot(const json_t *entry, char *error, size_t size)
 {
     const char *root = snag_json_string(entry, "root");
-    const char *expected = snag_json_string(entry, "manifest_digest");
+    const char *expected = snag_json_string(entry, "digest");
     if (!root || !expected) {
         (void)snag_errorf(error, size, "skill unavailable");
         return NULL;
     }
     json_t *skill = snag_skill_load(root, false, error, size);
     if (!skill) return NULL;
-    const char *actual = snag_json_string(skill, "manifest_digest");
+    const char *actual = snag_json_string(skill, "digest");
     if (!actual || strcmp(expected, actual)) {
-        (void)snag_errorf(error, size, "skill package changed since discovery; refresh before use");
+        (void)snag_errorf(error, size,
+            "skill instructions changed since discovery; refresh before use");
         json_decref(skill);
         return NULL;
     }
@@ -1096,15 +1058,7 @@ snag_skills_activate(const json_t *catalog, const char *id, const char *argument
 {
     const json_t *entry = snag_skills_resolve(catalog, id, error, size);
     if (!entry) return NULL;
-    if (!json_is_true(json_object_get(entry, "approved")) ||
-        !json_is_true(json_object_get(entry, "enabled")) ||
-        (!explicit_selection && (!json_is_true(json_object_get(entry, "trusted")) ||
-            !json_is_true(json_object_get(entry, "implicit")))) ||
-        (explicit_selection && !json_is_true(json_object_get(entry, "user_invocable")))) {
-        (void)snag_errorf(error, size,
-            "skill is disabled or requires explicit origin/invocation trust");
-        return NULL;
-    }
+    (void)explicit_selection; /* Vendor invocation preferences remain metadata. */
     json_t *skill = snag_skill_snapshot(entry, error, size);
     if (!skill) return NULL;
     json_t *result = snag_skill_invocation(skill, arguments, error, size);
@@ -1115,32 +1069,6 @@ snag_skills_activate(const json_t *catalog, const char *id, const char *argument
     }
     json_decref(skill);
     return result;
-}
-
-static bool
-policy_records_valid(const json_t *settings, const char *key, const char *storage)
-{
-    json_t *records = json_object_get(settings, key);
-    if (records && !json_is_object(records)) return false;
-    const char *id;
-    json_t *record;
-    json_object_foreach(records, id, record) {
-        const char *name = snag_json_string(record, "name");
-        const char *digest = snag_json_string(record, "digest");
-        const char *root = snag_json_string(record, "root");
-        const char *source = snag_json_string(record, "source");
-        if (!*id || !name || !snag_skill_name_valid(name) || !digest ||
-            strlen(digest) != SNAG_SHA256_HEX_LEN ||
-            !snag_hex_is_lower(digest, SNAG_SHA256_HEX_LEN) ||
-            !source || !snag_path_root_len(source) || !root ||
-            !snag_path_root_len(root) || !path_below(root, storage) ||
-            !strcmp(root, storage) || strstr(root, "/../") || strstr(root, "/./") ||
-            json_string_length(json_object_get(record, "root")) != strlen(root) ||
-            json_string_length(json_object_get(record, "source")) != strlen(source)) return false;
-        if (!strcmp(key, "reviews") && (!json_is_object(json_object_get(record, "manifest")) ||
-            !json_is_object(json_object_get(record, "skill")))) return false;
-    }
-    return true;
 }
 
 json_t *
@@ -1189,20 +1117,6 @@ snag_skills_settings_load(const char *dotdir, char *error, size_t size)
         }
     }
     if (settings) {
-        const char *arrays[] = {"disabled", "banned"};
-        for (size_t i = 0; settings && i < sizeof(arrays) / sizeof(arrays[0]); ++i) {
-            json_t *array = json_object_get(settings, arrays[i]);
-            bool valid = !array || json_is_array(array);
-            for (size_t j = 0; valid && j < json_array_size(array); ++j) {
-                const char *value = json_string_value(json_array_get(array, j));
-                valid = value && *value;
-            }
-            if (!valid) {
-                (void)snag_errorf(error, size, "invalid skills settings field: %s", arrays[i]);
-                json_decref(settings);
-                settings = NULL;
-            }
-        }
         json_t *installed = json_object_get(settings, "installed");
         if (installed && !json_is_object(installed)) {
             (void)snag_errorf(error, size, "installed skills settings must be a mapping");
@@ -1231,16 +1145,16 @@ snag_skills_settings_load(const char *dotdir, char *error, size_t size)
     }
     if (settings) {
         json_t *version = json_object_get(settings, "version");
-        char *storage = snag_path_join(dotdir, "skills/.store");
-        bool records = storage && policy_records_valid(settings, "approvals", storage) &&
-            policy_records_valid(settings, "reviews", storage);
-        free(storage);
-        if ((version && (!json_is_integer(version) || json_integer_value(version) != 1)) ||
-            !records) {
-            (void)snag_errorf(error, size, "invalid skills policy version or package records");
+        if (version && (!json_is_integer(version) || json_integer_value(version) != 1)) {
+            (void)snag_errorf(error, size, "invalid skills settings version");
             json_decref(settings);
             settings = NULL;
         } else {
+            /* Old curation records are inert; retain files, never gate discovery. */
+            json_object_del(settings, "approvals");
+            json_object_del(settings, "reviews");
+            json_object_del(settings, "disabled");
+            json_object_del(settings, "banned");
             json_object_del(settings, "roots");
             json_object_del(settings, "trusted_workspaces");
             json_object_del(settings, "admitted_origins");

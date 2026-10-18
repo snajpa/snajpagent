@@ -218,7 +218,6 @@ parse_options(
         {"--no-client", 0, false, NULL, &cli->irc_no_client},
         {NULL, 'e', false, NULL, &cli->execute},
         {NULL, 'l', true, NULL, &cli->list},
-        {"--all-skills", 0, false, NULL, &cli->all_skills},
         {"--help", 'h', false, NULL, &cli->help},
         {"--update-model-cache", 0, false, NULL, &cli->update_model_cache},
         {NULL, 'V', false, NULL, &cli->version},

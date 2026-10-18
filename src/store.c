@@ -782,6 +782,21 @@ snag_goal_unfinished(enum snag_goal_status status)
 }
 
 bool
+snag_skill_binding_active(const struct snag_session *session, const json_t *entry)
+{
+    const char *visit = snag_json_string(entry, "visit_id");
+    const char *current = snag_json_string(session->work_context, "id");
+    if (visit && *visit) return current && !strcmp(visit, current);
+    const char *goal = snag_json_string(entry, "goal_id");
+    if (goal && *goal) return snag_goal_unfinished(session->goal_status) &&
+        !strcmp(goal, session->goal_id);
+    const char *turn = snag_json_string(entry, "turn_id");
+    const char *back = snag_json_string(session->work_context, "return_turn_id");
+    return turn && (!strcmp(turn, session->active_turn_id) || session->active_read_only ||
+        (back && !strcmp(turn, back)));
+}
+
+bool
 snag_goal_wait_valid(const char *wait_for)
 {
     if (!snag_text_valid(wait_for, 1u, SNAG_MAX_GOAL_BLOCKER)) return false;
@@ -1088,9 +1103,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
         }
         if (policy && *policy && (strlen(policy) != SNAG_SHA256_HEX_LEN ||
             !snag_hex_is_lower(policy, SNAG_SHA256_HEX_LEN))) goto invalid;
-        session->skills_revoked_seq = revoked;
-        if (policy) (void)snag_strcpy(session->skills_policy_digest,
-            sizeof(session->skills_policy_digest), policy);
         json_decref(session->active_skills);
         session->active_skills = json_incref(active);
     } else if (!strcmp(type, "download_queued")) {

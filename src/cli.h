@@ -37,7 +37,6 @@ struct snag_cli {
     bool manual;
     bool update_model_cache;
     bool version;
-    bool all_skills; /* Operator inspection only; never changes model catalogs. */
     uint8_t view; /* enum snag_cli_view, packed with flags to preserve CLI copy size. */
     unsigned int verbosity;
     /* Immutable option values borrow argv for the lifetime of the CLI. */

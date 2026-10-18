@@ -2664,7 +2664,9 @@ snag_ui_view_state(struct snag_ui *ui, const struct snag_session *session)
         session->service_tier ? session->service_tier : "", "name",
         session->name ? session->name : "");
     if (!state) return -1;
-    if ((session->skills_catalog && json_object_set(state, "skills_catalog",
+    if ((session->work_context && json_object_set(state, "work_context",
+            session->work_context) < 0) ||
+        (session->skills_catalog && json_object_set(state, "skills_catalog",
         session->skills_catalog) < 0) || (session->active_skills &&
         json_object_set(state, "active_skills", session->active_skills) < 0)) {
         json_decref(state);

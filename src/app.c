@@ -5815,8 +5815,8 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         }
     } else {
         if (app->config->read_agents_md) {
-            if (snag_instructions_discover(
-                    &app->turn_instructions, app->session.cwd, error, sizeof(error)) < 0)
+            if (snag_instructions_discover_context(&app->turn_instructions, app->session.cwd,
+                    snag_json_string(app->session.work_context, "root"), error, sizeof(error)) < 0)
                 goto fail;
         } else
             snag_instructions_free(&app->turn_instructions);

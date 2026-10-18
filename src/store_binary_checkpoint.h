@@ -341,8 +341,6 @@ struct snag_binary_checkpoint_payloads {
 struct snag_binary_checkpoint_payloads_state {
     json_t *instructions, *compact_output, *response_public, *downloads;
     json_t *resume_options, *skills, *work_context;
-    uint64_t skills_revoked_seq;
-    char skills_policy_digest[SNAG_SHA256_HEX_LEN + 1u];
     size_t response_public_bytes;
 };
 

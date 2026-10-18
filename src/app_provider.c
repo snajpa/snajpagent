@@ -747,6 +747,9 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         return snag_app_goal_list(app, call, result, error, error_size);
     if (call && call->name && !strcmp(call->name, "skills"))
         return snag_app_skills_tool(app, call, result, error, error_size);
+    if (call && call->name &&
+        (!strcmp(call->name, "work_context") || !strcmp(call->name, "cd")))
+        return snag_app_work_context_tool(app, call, result, error, error_size);
     if (call && call->name && !strcmp(call->name, "download_queue"))
         return download_queue_tool(app, call, result, error, error_size);
     if (call && call->name &&
@@ -794,38 +797,6 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         return snag_tools_write_file(call, app->session.cwd, result, error, error_size);
     if (call && call->name && strcmp(call->name, "edit_file") == 0)
         return snag_tools_edit_file(call, app->session.cwd, result, error, error_size);
-
-    if (call && call->name && !strcmp(call->name, "cd")) {
-        const char *path = NULL;
-        char *joined = NULL;
-        char *resolved = NULL;
-
-        *result = NULL;
-        if (!snag_json_arg_keys(call->arguments, "path", "", error, error_size) ||
-            !snag_json_arg_text(call->arguments, "path", 1u, SNAG_PATH_MAX_BYTES, false, &path,
-                error, error_size)) {
-            *result = snag_tool_result_terminal(false, error);
-            return *result ? 0 : -1;
-        }
-        joined = snag_path_root_len(path) ? strdup(path) : snag_path_join(app->session.cwd, path);
-        if (joined) resolved = snag_cwd_resolve(joined, "requested", error, error_size);
-        free(joined);
-        if (!resolved) {
-            *result =
-                snag_tool_result_terminal(false, error[0] ? error : "cannot resolve directory");
-            return *result ? 0 : -1;
-        }
-        if (strcmp(resolved, app->session.cwd) != 0 &&
-            snag_app_commit_event(app, "cwd_changed",
-                json_pack("{s:s,s:s}", "old_cwd", app->session.cwd, "new_cwd", resolved), error,
-                error_size) < 0) {
-            free(resolved);
-            return -1;
-        }
-        *result = snag_tool_result_terminal(true, app->session.cwd);
-        free(resolved);
-        return *result ? 0 : -1;
-    }
 
     if (call && call->name && !strcmp(call->name, "select_model"))
         return snag_app_select_model_tool(app, call, result, error, error_size);

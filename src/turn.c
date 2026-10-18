@@ -76,7 +76,7 @@ snag_read_only_tool(const char *name)
     return snag_string_in(name,
         "get_cwd list_files read_file grep view_image view_video read_document "
         "listen_audio transcribe_audio read_tool_output read_session_history "
-        "list_goals download_queue skills");
+        "list_goals download_queue skills work_context");
 }
 
 const char *

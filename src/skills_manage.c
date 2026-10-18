@@ -143,130 +143,6 @@ package_storage(const char *dotdir)
     return storage;
 }
 
-json_t *
-snag_skills_review(const char *dotdir, const json_t *entry, char *error, size_t size)
-{
-    const char *source = snag_json_string(entry, "source_root");
-    if (!source) source = snag_json_string(entry, "root");
-    json_t *before = source ? snag_skill_manifest(source, error, size) : NULL;
-    char *storage = before ? package_storage(dotdir) : NULL;
-    int parent = storage ? snag_open_inspect_path(NULL, storage) : -1;
-    char random[SNAG_ID_HEX_LEN + 1u];
-    char name[64] = {0};
-    char *root = NULL;
-    json_t *result = NULL;
-    json_t *ancestors = json_array();
-    struct snag_directory_lock lock = {.fd = -1};
-    int local = -1;
-    if (parent < 0 || !ancestors || snag_random_id(random) < 0) goto done;
-    (void)snprintf(name, sizeof(name), "review-%s", random);
-    root = snag_path_join(storage, name);
-    if (!root || copy_package(source, source, parent, name, ancestors, error, size) < 0) goto done;
-    json_t *manifest = snag_skill_manifest(root, error, size);
-    json_t *after = snag_skill_manifest(source, error, size);
-    json_t *skill = manifest ? snag_skill_load(root, false, error, size) : NULL;
-    if (skill && json_equal(before, after) && json_equal(before, manifest)) {
-        result = json_pack("{s:s,s:s,s:s,s:s,s:s,s:O,s:O,s:b}",
-            "id", snag_json_string(entry, "id"), "name", snag_json_string(skill, "name"),
-            "source", source, "root", root, "digest", snag_json_string(manifest, "digest"),
-            "manifest", manifest, "skill", skill, "adversarial", true);
-        json_t *provenance = json_object_get(entry, "provenance");
-        if (result && provenance && json_object_set(result, "provenance", provenance) < 0) {
-            json_decref(result);
-            result = NULL;
-        }
-    } else {
-        (void)snag_errorf(error, size, "package changed while preparing review snapshot");
-    }
-    json_decref(manifest);
-    json_decref(after);
-    json_decref(skill);
-    if (!result) goto done;
-    local = snag_open_inspect_path(NULL, dotdir);
-    if (local < 0 || snag_directory_lock_acquire(local, &lock) < 0) goto fail;
-    json_t *settings = snag_skills_settings_load(dotdir, error, size);
-    if (!settings) goto fail;
-    json_t *reviews = json_object_get(settings, "reviews");
-    if (!reviews) {
-        reviews = json_object();
-        if (!reviews || json_object_set_new(settings, "reviews", reviews) < 0) {
-            json_decref(settings);
-            goto fail;
-        }
-    }
-    int rc = json_object_set(reviews, snag_json_string(entry, "id"), result);
-    if (rc == 0) rc = snag_sync_dir(parent);
-    if (rc == 0) rc = snag_skills_settings_save(dotdir, settings, error, size);
-    json_decref(settings);
-    if (rc < 0) goto fail;
-    goto done;
-fail:
-    json_decref(result);
-    result = NULL;
-done:
-    if (lock.fd >= 0) (void)snag_directory_lock_release(&lock);
-    if (local >= 0) close(local);
-    if (!result && parent >= 0 && *name) (void)remove_stage(parent, name);
-    if (parent >= 0) close(parent);
-    free(storage);
-    free(root);
-    json_decref(ancestors);
-    json_decref(before);
-    return result;
-}
-
-/* Only direct operator command admission calls this; management CLI and model tools cannot. */
-int
-snag_skills_approve(const char *dotdir, const char *id, const char *digest,
-    char *error, size_t size)
-{
-    if (!id || !digest || strlen(digest) != SNAG_SHA256_HEX_LEN ||
-        !snag_hex_is_lower(digest, SNAG_SHA256_HEX_LEN)) {
-        return snag_errorf(error, size, "approval requires a reviewed id and exact --digest HASH");
-    }
-    int parent = snag_open_inspect_path(NULL, dotdir);
-    struct snag_directory_lock lock = {.fd = -1};
-    if (parent < 0) return -1;
-    json_t *settings = NULL;
-    int rc = -1;
-    if (snag_directory_lock_acquire(parent, &lock) < 0) goto done;
-    settings = snag_skills_settings_load(dotdir, error, size);
-    if (!settings) goto done;
-    json_t *review = json_object_get(json_object_get(settings, "reviews"), id);
-    const char *name = snag_json_string(review, "name");
-    const char *root = snag_json_string(review, "root");
-    const char *expected = snag_json_string(review, "digest");
-    json_t *banned = json_object_get(settings, "banned");
-    bool allowed = name && snag_skill_name_valid(name);
-    for (size_t i = 0; allowed && i < json_array_size(banned); ++i) {
-        if (!strcmp(name, json_string_value(json_array_get(banned, i)))) allowed = false;
-    }
-    json_t *manifest = allowed && root ? snag_skill_manifest(root, error, size) : NULL;
-    const char *actual = snag_json_string(manifest, "digest");
-    if (!actual || !expected || strcmp(digest, expected) || strcmp(digest, actual)) {
-        json_decref(manifest);
-        (void)snag_errorf(error, size,
-            "approval refused: banned, missing or changed review digest");
-        goto done;
-    }
-    json_decref(manifest);
-    json_t *approvals = json_object_get(settings, "approvals");
-    if (!approvals) {
-        approvals = json_object();
-        if (!approvals || json_object_set_new(settings, "approvals", approvals) < 0) goto done;
-    }
-    json_t *approval = json_pack("{s:s,s:s,s:s,s:s}", "name", name, "root", root,
-        "digest", digest, "source", snag_json_string(review, "source"));
-    if (approval && json_object_set_new(approvals, id, approval) == 0) {
-        rc = snag_skills_settings_save(dotdir, settings, error, size);
-    }
-done:
-    json_decref(settings);
-    if (lock.fd >= 0) (void)snag_directory_lock_release(&lock);
-    close(parent);
-    return rc;
-}
-
 static volatile sig_atomic_t retrieval_canceled;
 
 static void
@@ -543,11 +419,11 @@ snag_skills_manage(const char *dotdir, const char *action, const char *target,
     free(identity_path);
     struct snag_buf id = {.max = SNAG_PATH_MAX_BYTES};
     if (snag_buf_printf(&id, "%s@%.16s", name, identity) == 0 && snag_buf_terminate(&id) == 0) {
-        result = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:b,s:s,s:b}",
+        result = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:b,s:s}",
             "id", (char *)id.data, "name", name, "root", root, "source", source,
             "ref", revision, "subdir", relative, "commit", git ? (char *)commit.data : "",
             "digest", snag_json_string(skill, "digest"), "git", git,
-            "generation", random, "enabled", false);
+            "generation", random);
     }
     snag_buf_free(&id);
     if (!result) goto done;

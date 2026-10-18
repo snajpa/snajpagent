@@ -569,9 +569,6 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     state->pending_steering_count = state->pending_steering_capacity = input_state.steering_count;
     json_decref(input_state.strings);
     input_state = (struct snag_binary_checkpoint_inputs_state){0};
-    state->skills_revoked_seq = payload_state.skills_revoked_seq;
-    memcpy(state->skills_policy_digest, payload_state.skills_policy_digest,
-        sizeof(state->skills_policy_digest));
     state->work_context = payload_state.work_context;
     payload_state.work_context = NULL;
     state->active_skills = payload_state.skills;
