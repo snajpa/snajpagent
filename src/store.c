@@ -4201,6 +4201,12 @@ read_checkpoint_at(struct snag_session *session, int64_t checkpoint_offset, int6
     restored->checkpoint_seq = seq;
     restored->log_end = record_end;
     restored->next_seq = seq + 1u;
+    if (session->snapshot_read_only) {
+        restored->history_cursor = (struct snag_journal_cursor){
+            .offset = record_end, .next_seq = seq + 1u};
+        memcpy(restored->history_cursor.prev_sha256, snag_json_string(record, "event_sha256"),
+            sizeof(restored->history_cursor.prev_sha256));
+    }
     json_decref(record);
     return 0;
 invalid:

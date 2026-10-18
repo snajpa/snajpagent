@@ -591,7 +591,12 @@ list_cells(
 
     const char *topology = snag_json_string(session->strings, "irc_snapshot");
     if (list_irc_prompt(&irc) < 0) goto out;
-    irc.topology_found = topology && !*topology;
+    /* The saved disconnected snapshot needs no nick history. Old checkpoints
+     * may retain this state after its original IRC event leaves recent context. */
+    irc.topology_found = topology && (!*topology ||
+        (strstr(topology, "\nhosted: no\nno active endpoints\n") &&
+         !strstr(topology, "\ndestination[") && !strstr(topology, "\nendpoint[") &&
+         !strstr(topology, "\nhistory:\n")));
     const json_t *recent = json_object_get(session->checkpoint_context, "recent");
     const json_t *history = json_object_get(session->checkpoint_context, "history_sources");
     bool captured = snag_context_capture_seam(session, &recent, &history) == 0;
@@ -633,14 +638,28 @@ list_cells(
             }
         }
         if (irc.topology_found) irc.checkpoint_seq = session->checkpoint_seq;
-        if (!irc.topology_found || !irc.prompt_found) {
+        size_t scan_bytes = SIZE_MAX;
+        if (irc.checkpoint_seq && !session->binary &&
+            session->history_cursor.next_seq == irc.checkpoint_seq + 1u &&
+            session->history_cursor.offset >= 0 &&
+            session->history_cursor.offset <= session->log_end) {
+            uint64_t suffix_bytes = (uint64_t)(session->log_end - session->history_cursor.offset);
+            if (suffix_bytes <= SIZE_MAX) {
+                /* The admitted checkpoint already supplies the next lookup.
+                 * Spend the existing reverse-scan budget only on its suffix. */
+                scan_bytes = (size_t)suffix_bytes;
+                before = irc.checkpoint_seq;
+            }
+        }
+        if (scan_bytes && (!irc.topology_found || !irc.prompt_found)) {
             (void)snag_session_each_event_reverse(
-                session, 0u, SIZE_MAX, list_irc_event, &irc, &before, NULL, 0u);
+                session, 0u, scan_bytes, list_irc_event, &irc, &before, NULL, 0u);
         }
         if (irc.checkpoint_seq) {
             /* Apply fresh suffix events before the verified recent checkpoint data.
              * The snapshot boundary keeps old or unrelated renames out of the list. */
             irc.checkpoint_seq = 0u;
+            if (before == session->checkpoint_seq + 1u) before = session->checkpoint_seq;
             for (size_t i = json_array_size(recent);
                  i && (!irc.topology_found || !irc.prompt_found);) {
                 const json_t *entry = json_array_get(recent, --i);

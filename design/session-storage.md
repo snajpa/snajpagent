@@ -94,6 +94,10 @@ A redirected monitor or ordinary listing waits for a complete verified snapshot.
 Ordinary listings query live owners through the read-only, version-compatible
 status exchange. Attachment state is independent of cached display cells and old
 metrics files; the interactive monitor uses metrics to keep its repaint loop nonblocking.
+Legacy snapshot admission retains its verified checkpoint cursor. Display lookups
+that use recent checkpoint metadata spend their reverse-scan byte budget only on
+the fresh suffix, and disconnected snapshots need no older nick history. Missing
+topology and older prompt lookups retain the verified history fallback.
 
 Session-prefix calculation sorts retained row identities once and streams session
 and trash selectors once each, including unreadable directories. It uses adjacent
