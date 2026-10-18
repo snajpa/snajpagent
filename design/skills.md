@@ -183,6 +183,9 @@ nor discovery executes scripts, installs dependencies or contacts a service.
 
 `/skills use ID -- REQUEST` and unambiguous `$skill-name` in direct operator input
 select approved versions. Recognize references outside code and escaped text.
+Dollar shorthand selects only matching eligible catalog entries; unmatched tokens
+remain literal prompt text, including prices and shell variables. `/skills use`
+requires an available selection and rejects the turn recoverably when it fails.
 Explicit selection does not approve pending or banned packages. Model text cannot
 fake an explicit selection for a skill whose policy requires one. Queued requests
 resolve and check approval/bans at actual admission, and save their exact binding.

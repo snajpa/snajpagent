@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep prices and unmatched shell-style dollar words literal in prompts. Restrict
+  skill shorthand to the approved catalog and keep interactive sessions open
+  when an explicit skill selection is unavailable.
+
 - Reuse compatible provider HTTP/1.1 connections across session tool cycles,
   token counting and compaction, while retaining TLS verification and safe
   replacement of closed or interrupted connections. Connection reuse requires

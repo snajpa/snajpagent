@@ -246,6 +246,21 @@ activate(struct app_state *app, const char *id, const char *arguments, bool expl
     return skill;
 }
 
+static const char *
+prompt_skill(const json_t *catalog, const char *text, size_t length)
+{
+    json_t *entries = json_object_get(catalog, "entries");
+    for (size_t i = 0; i < json_array_size(entries); ++i) {
+        const json_t *entry = json_array_get(entries, i);
+        const char *id = snag_json_string(entry, "id");
+        const char *name = snag_json_string(entry, "name");
+        if (strlen(id) == length && !memcmp(id, text, length)) return id;
+        if (json_is_true(json_object_get(entry, "selected")) &&
+            strlen(name) == length && !memcmp(name, text, length)) return name;
+    }
+    return NULL;
+}
+
 int
 snag_app_skills_begin(struct app_state *app, const char *prompt, bool continuing,
     bool retry_binding, char *error, size_t size)
@@ -284,14 +299,16 @@ snag_app_skills_begin(struct app_state *app, const char *prompt, bool continuing
         while (isspace((unsigned char)*arguments)) ++arguments;
         if (strncmp(arguments, "--", 2u) ||
             (arguments[2] && !isspace((unsigned char)arguments[2]))) {
-            return snag_errorf(error, size, "use /skills use ID -- REQUEST");
+            (void)snag_errorf(error, size, "use /skills use ID -- REQUEST");
+            return 1;
         }
         arguments += 2u;
         while (isspace((unsigned char)*arguments)) ++arguments;
         char *id = strndup(start, (size_t)(end - start));
-        json_t *skill = id ? activate(app, id, arguments, true, error, size) : NULL;
+        if (!id) return -1;
+        json_t *skill = activate(app, id, arguments, true, error, size);
         free(id);
-        if (!skill) return -1;
+        if (!skill) return 1;
         json_decref(skill);
         return 0;
     }
@@ -315,10 +332,10 @@ snag_app_skills_begin(struct app_state *app, const char *prompt, bool continuing
         while (isalnum((unsigned char)prompt[i]) || prompt[i] == '-' || prompt[i] == '_' ||
             prompt[i] == '@') ++i;
         if (start == i) continue;
-        char *id = strndup(prompt + start, i - start);
-        json_t *skill = id ? activate(app, id, "", true, error, size) : NULL;
-        free(id);
-        if (!skill) return -1;
+        const char *id = prompt_skill(app->session.skills_catalog, prompt + start, i - start);
+        if (!id) continue;
+        json_t *skill = activate(app, id, "", true, error, size);
+        if (!skill) return 1;
         json_decref(skill);
     }
     return 0;

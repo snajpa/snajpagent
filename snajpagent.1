@@ -4443,6 +4443,11 @@ approval remains valid, even if the original source disappears.
 .SS "Invoke, disable and ban"
 Use $my-skill in a direct task, or /skills use my-skill -- REQUEST, to explicitly
 select an eligible package. Quoted or fenced references remain ordinary text.
+Dollar references activate only matching entries in the approved catalog.
+Other dollar-prefixed text, including prices and shell variables, stays literal.
+Use /skills use ID -- REQUEST when an unavailable selection should reject the
+request. Selection errors leave the interactive session open for correction;
+one-shot execution returns a failure status before contacting the provider.
 The native model skills tool supports list, show and activate; activation pins
 attributed lower-priority instructions to the current task or persistent goal.
 Arguments are literal text. Package scripts use ordinary declared file/process

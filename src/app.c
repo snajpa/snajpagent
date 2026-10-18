@@ -5863,8 +5863,17 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             content, error, sizeof(error)) < 0) {
         goto fail;
     }
-    if (snag_app_skills_begin(app, (goal_turn || timer_turn) ? NULL : prompt,
-        continuing, retry_skills, error, sizeof(error)) < 0) goto fail;
+    int skills_rc = snag_app_skills_begin(app, (goal_turn || timer_turn) ? NULL : prompt,
+        continuing, retry_skills, error, sizeof(error));
+    if (skills_rc < 0) goto fail;
+    if (skills_rc > 0) {
+        if (commit_event(app, "turn_failed",
+                snag_app_turn_failed_data(turn_id, "tool", error), error, sizeof(error)) < 0)
+            goto fail;
+        (void)app_error(app, error);
+        result = app->execute ? 4 : 0;
+        goto out;
+    }
     if (!continuing && queued && !app->execute && render_prompt(app, false, prompt) < 0) {
         report_message = "queued prompt could not be rendered";
         goto output_fail;
