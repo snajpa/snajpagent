@@ -288,7 +288,7 @@ choose_model(const struct snag_cli *cli, const struct snag_config *config,
     if (!*answer || snag_string_in(answer, "y Y")) {
         tokens->credential.root_fd = -1; /* Uncommitted credentials. */
         if (snag_provider_models_list(
-                (struct snag_provider_connection){
+                &(struct snag_provider_connection){
                     config, provider, &tokens->credential, NULL, login_pump, NULL, NULL, 0, NULL,
                     NULL, NULL, NULL},
                 &models, error, error_size) < 0) {
@@ -476,7 +476,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         if (probe_model) {
             char probe_error[256] = {0};
             int probe = snag_provider_native_compaction_probe(
-                (struct snag_provider_connection){
+                &(struct snag_provider_connection){
                     &config, &provider, &tokens.credential, NULL, NULL, NULL, NULL, 0, NULL, NULL,
                     NULL, NULL},
                 probe_model, probe_error, sizeof(probe_error));

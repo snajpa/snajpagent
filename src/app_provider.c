@@ -95,7 +95,7 @@ fail:
             snag_app_active_input_pump, app, error, error_size) < 0)
         return -1;
     rc = snag_provider_models_list(
-        (struct snag_provider_connection){app->config, provider, &credential, &app->ui,
+        &(struct snag_provider_connection){app->config, provider, &credential, &app->ui,
             snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL,
             NULL, &app->provider_transport},
         models, error, error_size);
@@ -235,7 +235,7 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
         return SNAG_APP_COUNT_SKIPPED;
     }
     rc = snag_provider_responses_count(
-        (struct snag_provider_connection){app->config, app->turn_provider, credential, &app->ui,
+        &(struct snag_provider_connection){app->config, app->turn_provider, credential, &app->ui,
             snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL,
             NULL, &app->provider_transport},
         count_request, &exact_tokens, &endpoint_unsupported, error, error_size, NULL);
@@ -299,7 +299,7 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
     return rc;
 #else
     return snag_provider_responses_compact(
-        (struct snag_provider_connection){app->config, app->turn_provider, credential, &app->ui,
+        &(struct snag_provider_connection){app->config, app->turn_provider, credential, &app->ui,
             snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL,
             NULL, &app->provider_transport},
         compact_request, output, error, error_size, NULL);
@@ -378,7 +378,7 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
     (void)steering;
     (void)cycle;
     if (retry_count) *retry_count = 0u;
-    return snag_provider_responses_create((struct snag_provider_connection){.config = app->config,
+    return snag_provider_responses_create(&(struct snag_provider_connection){.config = app->config,
                                               .provider = app->turn_provider,
                                               .credential = credential,
                                               .render = &app->ui,

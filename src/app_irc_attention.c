@@ -131,7 +131,7 @@ summary_owner(void *opaque)
     const struct snag_config config = {0};
     struct snag_provider_failure failure = {0};
 
-    job->outcome = snag_provider_responses_create((struct snag_provider_connection){
+    job->outcome = snag_provider_responses_create(&(struct snag_provider_connection){
         .config = &config, .provider = &job->provider, .credential = &job->credential,
         .protection = &job->secrets,
         .pump = summary_pump, .pump_opaque = job, .retry_allowed = summary_retry_allowed,

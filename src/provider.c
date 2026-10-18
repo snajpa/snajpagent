@@ -1329,10 +1329,10 @@ provider_ctx_init(struct provider_ctx *ctx, const struct snag_provider_connectio
 }
 
 static bool
-connection_valid(struct snag_provider_connection connection)
+connection_valid(const struct snag_provider_connection *connection)
 {
-    return connection.config && connection.provider && connection.credential &&
-           connection.credential->len;
+    return connection && connection->config && connection->provider && connection->credential &&
+           connection->credential->len;
 }
 
 static void
@@ -1589,8 +1589,8 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure, char *er
 }
 
 static int
-provider_models_list(struct snag_provider_connection connection, json_t **models, char *error,
-    size_t error_size, const char *compact_model, bool *compact_v2)
+provider_models_list(const struct snag_provider_connection *connection, json_t **models,
+    char *error, size_t error_size, const char *compact_model, bool *compact_v2)
 {
     struct provider_ctx ctx;
     const char *path;
@@ -1601,10 +1601,10 @@ provider_models_list(struct snag_provider_connection connection, json_t **models
     if (models) *models = NULL;
     if (!connection_valid(connection) || !models)
         return snag_fail(error, error_size, EINVAL, "invalid model-list request");
-    provider_ctx_init(&ctx, &connection, SNAG_WIRE_BODY_MAX, SNAG_WIRE_BODY_MAX);
-    codex = provider_uses_codex_catalog(connection.provider);
+    provider_ctx_init(&ctx, connection, SNAG_WIRE_BODY_MAX, SNAG_WIRE_BODY_MAX);
+    codex = provider_uses_codex_catalog(connection->provider);
     path = codex ? SNAG_CODEX_CATALOG_PATH : "/v1/models";
-    if (provider_request_setup(&ctx, connection.credential, path, "application/json", NULL, NULL,
+    if (provider_request_setup(&ctx, connection->credential, path, "application/json", NULL, NULL,
             count_write_cb, error, error_size) == 0 &&
         provider_request_perform(&ctx, "model discovery failed", error, error_size, &retry_count) ==
             0)
@@ -1620,14 +1620,14 @@ provider_models_list(struct snag_provider_connection connection, json_t **models
 }
 
 int
-snag_provider_models_list(
-    struct snag_provider_connection connection, json_t **models, char *error, size_t error_size)
+snag_provider_models_list(const struct snag_provider_connection *connection, json_t **models,
+    char *error, size_t error_size)
 {
     return provider_models_list(connection, models, error, error_size, NULL, NULL);
 }
 
 int
-snag_provider_native_compaction_protocol(struct snag_provider_connection connection,
+snag_provider_native_compaction_protocol(const struct snag_provider_connection *connection,
     const char *model, bool *responses_v2, char *error, size_t error_size)
 {
     json_t *models = NULL;
@@ -1640,7 +1640,7 @@ snag_provider_native_compaction_protocol(struct snag_provider_connection connect
 }
 
 int
-snag_provider_responses_count(struct snag_provider_connection connection,
+snag_provider_responses_count(const struct snag_provider_connection *connection,
     const json_t *count_request, uint64_t *input_tokens, bool *endpoint_unsupported, char *error,
     size_t error_size, unsigned int *retry_count)
 {
@@ -1652,13 +1652,13 @@ snag_provider_responses_count(struct snag_provider_connection connection,
     if (!connection_valid(connection) || !count_request || !input_tokens)
         return snag_fail(error, error_size, EINVAL, "invalid input-token count request");
     *input_tokens = 0u;
-    if (snag_auth_uses_codex(connection.provider->auth)) {
+    if (snag_auth_uses_codex(connection->provider->auth)) {
         if (endpoint_unsupported) *endpoint_unsupported = true;
         return snag_fail(error, error_size, ENOTSUP,
             "direct Codex does not provide exact input-token preflight");
     }
-    provider_ctx_init(&ctx, &connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
-    if (provider_request_setup(&ctx, connection.credential, "/v1/responses/input_tokens",
+    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
+    if (provider_request_setup(&ctx, connection->credential, "/v1/responses/input_tokens",
             "application/json", count_request,
             "input-token count request exceeds the bounded body limit", count_write_cb, error,
             error_size) == 0)
@@ -1768,7 +1768,7 @@ codex_compact_output(struct provider_ctx *ctx, const json_t *request,
 }
 
 int
-snag_provider_responses_compact(struct snag_provider_connection connection,
+snag_provider_responses_compact(const struct snag_provider_connection *connection,
     const json_t *compact_request, struct snag_json_document *output, char *error,
     size_t error_size, unsigned int *retry_count)
 {
@@ -1779,16 +1779,16 @@ snag_provider_responses_compact(struct snag_provider_connection connection,
     if (output) snag_json_document_free(output);
     if (!connection_valid(connection) || !compact_request || !output)
         return snag_fail(error, error_size, EINVAL, "invalid compact request");
-    bool codex = snag_auth_uses_codex(connection.provider->auth);
-    provider_ctx_init(&ctx, &connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
+    bool codex = snag_auth_uses_codex(connection->provider->auth);
+    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
     /* A summary can stay silent for minutes while the provider ingests a large
      * source; the request timeout bounds it, not the provider idle timeout. */
-    ctx.low_speed_ms = connection.provider->request_timeout_ms;
+    ctx.low_speed_ms = connection->provider->request_timeout_ms;
     if (codex) {
         snag_responses_stream_init(&ctx.stream, NULL, NULL);
         snag_sse_init(&ctx.sse, codex_compact_record, &ctx);
     }
-    if (provider_request_setup(&ctx, connection.credential,
+    if (provider_request_setup(&ctx, connection->credential,
             codex ? "/v1/responses" : "/v1/responses/compact",
             codex ? "text/event-stream" : "application/json", compact_request,
             "compact request exceeds the bounded body limit", codex ? write_cb : count_write_cb,
@@ -1812,8 +1812,8 @@ snag_provider_responses_compact(struct snag_provider_connection connection,
 }
 
 int
-snag_provider_native_compaction_probe(
-    struct snag_provider_connection connection, const char *model, char *error, size_t error_size)
+snag_provider_native_compaction_probe(const struct snag_provider_connection *connection,
+    const char *model, char *error, size_t error_size)
 {
     struct provider_ctx ctx;
     struct snag_json_document probe = {0};
@@ -1825,7 +1825,7 @@ snag_provider_native_compaction_probe(
     probe.value = json_pack(
         "{s:s,s:[{s:s,s:s}]}", "model", model, "input", "role", "user", "content", "ping");
     if (!probe.value) return -1;
-    if (snag_auth_uses_codex(connection.provider->auth)) {
+    if (snag_auth_uses_codex(connection->provider->auth)) {
         struct snag_json_document output = {0};
         if (snag_context_codex_compact_request(probe.value) == 0)
             rc = snag_provider_responses_compact(
@@ -1834,8 +1834,8 @@ snag_provider_native_compaction_probe(
         snag_json_document_free(&probe);
         return rc == 0 ? 1 : -1;
     }
-    provider_ctx_init(&ctx, &connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
-    if (provider_request_setup(&ctx, connection.credential, "/v1/responses/compact",
+    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
+    if (provider_request_setup(&ctx, connection->credential, "/v1/responses/compact",
             "application/json", probe.value,
             "native compaction probe exceeds the bounded body limit", count_write_cb, error,
             error_size) == 0)
@@ -1876,7 +1876,7 @@ response_record(void *opaque, const struct snag_sse_record *record)
 }
 
 int
-snag_provider_responses_create(struct snag_provider_connection connection,
+snag_provider_responses_create(const struct snag_provider_connection *connection,
     const json_t *create_request, snag_responses_emit_fn emit, void *emit_opaque,
     snag_responses_hosted_fn hosted, void *hosted_opaque, snag_provider_ready_fn ready,
     void *ready_opaque, struct snag_response_graph *graph, struct snag_provider_failure *failure,
@@ -1890,14 +1890,14 @@ snag_provider_responses_create(struct snag_provider_connection connection,
     if (retry_count) *retry_count = 0u;
     if (!connection_valid(connection) || !create_request || !graph)
         return snag_fail(error, error_size, EINVAL, "invalid provider request");
-    provider_ctx_init(&ctx, &connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
+    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
     ctx.ready = ready;
     ctx.protection_out = protection;
     ctx.ready_opaque = ready_opaque;
     snag_responses_stream_init(&ctx.stream, emit, emit_opaque);
     snag_responses_stream_set_hosted(&ctx.stream, hosted, hosted_opaque);
     snag_sse_init(&ctx.sse, response_record, &ctx);
-    if (provider_request_setup(&ctx, connection.credential, "/v1/responses", "text/event-stream",
+    if (provider_request_setup(&ctx, connection->credential, "/v1/responses", "text/event-stream",
             create_request, "provider request exceeds the bounded body limit", write_cb, error,
             error_size) == 0)
         rc = provider_request_perform(

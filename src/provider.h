@@ -40,7 +40,8 @@ struct snag_provider_transport {
 };
 void snag_provider_transport_close(struct snag_provider_transport *);
 
-/* Borrowed for one synchronous call; refreshed credentials remain private. */
+/* Borrowed during synchronous setup. Request state is captured before pumping;
+ * refreshed credentials remain private to the request. */
 struct snag_provider_connection {
     const struct snag_config *config;
     const struct snag_provider_config *provider;
@@ -116,32 +117,32 @@ int snag_provider_auth_post(const char *issuer, const char *path, const char *ty
     void *opaque, char *error, size_t error_size);
 
 /* Responses operations return 1 for steering or 2 for cancellation. */
-int snag_provider_responses_count(struct snag_provider_connection connection, const json_t *request,
-    uint64_t *input_tokens, bool *endpoint_unsupported, char *error, size_t error_size,
-    unsigned int *retry_count);
+int snag_provider_responses_count(const struct snag_provider_connection *connection,
+    const json_t *request, uint64_t *input_tokens, bool *endpoint_unsupported, char *error,
+    size_t error_size, unsigned int *retry_count);
 
-int snag_provider_responses_compact(struct snag_provider_connection connection,
+int snag_provider_responses_compact(const struct snag_provider_connection *connection,
     const json_t *request, struct snag_json_document *output, char *error, size_t error_size,
     unsigned int *retry_count);
 
 /* Probe native compaction after login: 1 supported, 0 absent on the API route,
  * -1 inconclusive. Codex requires a completed encrypted compaction result. */
-int snag_provider_native_compaction_probe(
-    struct snag_provider_connection connection, const char *model, char *error, size_t error_size);
+int snag_provider_native_compaction_probe(const struct snag_provider_connection *connection,
+    const char *model, char *error, size_t error_size);
 
 /* Optional protection receives the transport's owned secret snapshot, including
  * refreshed credentials. Initialize it to zero; a call replaces prior contents.
  * Public consumers retain it before releasing output; private graphs stay intact. */
-int snag_provider_responses_create(struct snag_provider_connection connection,
+int snag_provider_responses_create(const struct snag_provider_connection *connection,
     const json_t *request, snag_responses_emit_fn emit, void *emit_opaque,
     snag_responses_hosted_fn hosted, void *hosted_opaque, snag_provider_ready_fn ready,
     void *ready_opaque, struct snag_response_graph *graph, struct snag_provider_failure *failure,
     struct snag_secret_set *protection, char *error, size_t error_size, unsigned int *retry_count);
 
-int snag_provider_models_list(
-    struct snag_provider_connection connection, json_t **models, char *error, size_t error_size);
+int snag_provider_models_list(const struct snag_provider_connection *connection, json_t **models,
+    char *error, size_t error_size);
 
-int snag_provider_native_compaction_protocol(struct snag_provider_connection connection,
+int snag_provider_native_compaction_protocol(const struct snag_provider_connection *connection,
     const char *model, bool *responses_v2, char *error, size_t error_size);
 
 const char *snag_provider_catalog_protocol(const struct snag_provider_config *provider);

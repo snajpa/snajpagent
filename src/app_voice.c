@@ -459,7 +459,7 @@ request_owner(void *opaque)
     if (!request->outcome) {
         struct snag_provider_failure failure = {0};
         request->outcome = snag_provider_responses_create(
-            (struct snag_provider_connection){.config = request->config,
+            &(struct snag_provider_connection){.config = request->config,
                 .provider = &request->provider,
                 .credential = &request->credential,
                 .pump = request_pump,
