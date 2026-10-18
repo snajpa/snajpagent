@@ -11,6 +11,7 @@ import time
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import tmux_terminal as harness
@@ -172,13 +173,14 @@ def check_network(binary, previous=None):
             resumed = start(["--resume", sid], b"changedop@")
             topology(f"s/saved@{hosted},c/saved@{clients[2]}")
             finish(resumed)
-            stopped = start(["--resume", sid, "--no-listen", "--no-client"], "›".encode())
+            # Disabling network roles leaves the saved chat view selected.
+            stopped = start(["--resume", sid, "--no-listen", "--no-client"], b"changedop@")
             topology("-")
             finish(stopped)
             # Saved disabled roles must win over newly enabled config defaults.
             with config.open("a") as out:
                 out.write(f"\n[irc]\nlisten={hosted}\nclient={clients[0]}\n")
-            stopped = start(["--resume", sid], "›".encode())
+            stopped = start(["--resume", sid], b"changedop@")
             topology("-")
             finish(stopped)
             print("resume IRC inheritance, per-role overrides, disabled roles and legacy topology: ok")
@@ -350,6 +352,141 @@ def check_hosted_peer_reuse(binary):
         provider.close()
 
 
+def check_view_preferences(binary):
+    provider = harness.FakeResponses()
+    seen, release = threading.Event(), threading.Event()
+
+    def respond(handler, request, sequence):
+        seen.set()
+        assert release.wait(15), "UI commands did not release the held response"
+        provider.reply(handler, provider.response_body(sequence, "view-state-final").encode(),
+                       close_header=True)
+
+    provider.runtime_handler = respond
+
+    def persisted(journal, view, level):
+        # The renderer can acknowledge a local command before its owner polls it.
+        # Wait for the actual durable record, then kill without graceful shutdown.
+        deadline = time.monotonic() + 5
+        while True:
+            args = [e["data"]["args"] for e in read_events(journal)
+                    if e["type"] == "session_options"][-1]
+            if args[-2:] == ["--view", view] and args.count("-v") == level:
+                return
+            assert time.monotonic() < deadline, args
+            time.sleep(.01)
+
+    try:
+        for legacy in (False, True):
+            seen.clear()
+            release.clear()
+            with tempfile.TemporaryDirectory(prefix="snag-resume-view-") as tmp, socket.socket() as peer:
+                root = Path(tmp).resolve()
+                config, state = root / "config.ini", root / "state"
+                harness.write_irc_config(config, provider.port, "host-model")
+                config.write_text(config.read_text().replace("idle_timeout_ms = 3000", "idle_timeout_ms = 15000")
+                                  .replace("request_timeout_ms = 5000", "request_timeout_ms = 20000"))
+                with config.open("a") as out:
+                    out.write("prompt = {chat:CHAT-RESTORED>}{rollout-idle:ROLLOUT-RESTORED>}"
+                              "{rollout-active:WORKING>}\n")
+                peer.bind(("127.0.0.1", 0))
+                peer.listen(16)
+                base = [str(binary), "--dotdir", str(state), "--config", str(config)]
+                env = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+                if not legacy:
+                    for flags, message in (
+                            (["--view", "invalid"], b"--view requires chat or rollout"),
+                            (["--view", "chat", "--view", "rollout"], b"duplicate --view option"),
+                            (["--view", "chat", "-e", "--", "unused"],
+                             b"--view selects an interactive view"),
+                            (["--attach", "unused", "--view", "chat"],
+                             b"--attach accepts only")):
+                        invalid = subprocess.run([*base, *flags], cwd=root,
+                                                 capture_output=True, timeout=5)
+                        assert invalid.returncode and message in invalid.stderr, invalid.stderr
+                sid = create_legacy(state, root, "fake", "host-model").parent.name if legacy else None
+                first = ["--resume", sid] if sid else []
+                child = RemoteProcess(root, [*base, *first, "--no-listen", "--client",
+                    f"127.0.0.1:{peer.getsockname()[1]}"], wrapped=None, extra_env=env)
+                try:
+                    child.until(b"CHAT-RESTORED>", 10)
+                    os.write(child.master, b"/rollout\rremember the selected view\r")
+                    assert seen.wait(10), "provider never received the turn"
+                    child.until(b"WORKING>", 10)
+                    child.output.clear()
+                    os.write(child.master, b"/chat\r")
+                    child.until(b"CHAT-RESTORED>", 10)
+                    child.output.clear()
+                    os.write(child.master, b"/verbose 3\r")
+                    child.until_after(b"verbosity: 3", b"CHAT-RESTORED>", 10)
+                    child.output.clear()
+                    os.write(child.master, b"/rollout\r")
+                    child.until(b"WORKING>", 10)
+                    release.set()
+                    child.until_after(b"view-state-final", b"ROLLOUT-RESTORED>", 10)
+                    child.output.clear()
+                    os.write(child.master, b"/verbose\r")
+                    child.until_after(b"verbosity: 3", b"ROLLOUT-RESTORED>", 10)
+                    journal, = journal_paths(state)
+                    sid = journal.parent.name
+                    persisted(journal, "rollout", 3)
+                finally:
+                    # Kill the verified fixture tree, including its detached owner:
+                    # graceful exit must not be what saves the presentation choices.
+                    release.set()
+                    child.close()
+                for view, level, next_view, next_level in (
+                        ("rollout", 3, "chat", 1), ("chat", 1, "rollout", 2)):
+                    child = RemoteProcess(root, [*base, "--resume", sid], wrapped=None, extra_env=env)
+                    marker = f"{view.upper()}-RESTORED>".encode()
+                    try:
+                        child.until(marker, 10)
+                        child.output.clear()
+                        os.write(child.master, b"/verbose\r")
+                        child.until_after(f"verbosity: {level}".encode(), marker, 10)
+                        before = len([e for e in read_events(journal) if e["type"] == "session_options"])
+                        child.output.clear()
+                        os.write(child.master, f"/{view}\r/verbose {level}\r".encode())
+                        child.until_after(f"verbosity: {level}".encode(), marker, 10)
+                        assert len([e for e in read_events(journal)
+                                    if e["type"] == "session_options"]) == before
+                        child.output.clear()
+                        os.write(child.master, f"/{next_view}\r/verbose {next_level}\r".encode())
+                        child.until_after(f"verbosity: {next_level}".encode(),
+                                          f"{next_view.upper()}-RESTORED>".encode(), 10)
+                        persisted(journal, next_view, next_level)
+                    finally:
+                        child.close()
+                child = RemoteProcess(root, [*base, "--resume", sid, "--view=chat"],
+                                      wrapped=None, extra_env=env)
+                try:
+                    child.until(b"CHAT-RESTORED>", 10)
+                    os.write(child.master, b"/exit\r")
+                    child.wait(0)
+                finally:
+                    child.close()
+                result = subprocess.run([*base, "--resume", sid, "-e", "--", "scripted resume"],
+                                        cwd=root, env={**os.environ, **env}, capture_output=True,
+                                        timeout=20)
+                assert result.returncode == 0, result.stderr
+                assert b"view-state-final" in result.stdout, result.stdout
+                child = RemoteProcess(root, [*base, "--resume", sid], wrapped=None, extra_env=env)
+                try:
+                    child.until(b"CHAT-RESTORED>", 10)
+                    os.write(child.master, b"/exit\r")
+                    child.wait(0)
+                finally:
+                    child.close()
+                options = [e["data"]["args"] for e in read_events(journal)
+                           if e["type"] == "session_options"][-1]
+                assert options[options.index("--view") + 1] == "chat", options
+                print(f"resume UI legacy={legacy}: active changes, crash, repeated choices and override: ok")
+        assert not provider.failure, provider.failure
+    finally:
+        release.set()
+        provider.close()
+
+
 def check_display_preferences(binary):
     provider = harness.FakeResponses()
     provider.runtime_handler = lambda handler, request, sequence: provider.reply(
@@ -414,3 +551,4 @@ if __name__ == "__main__":
     check_hosted_rename_resume(binary)
     check_hosted_peer_reuse(binary)
     check_display_preferences(binary)
+    check_view_preferences(binary)

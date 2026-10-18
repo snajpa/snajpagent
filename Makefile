@@ -378,6 +378,7 @@ tests/test_context: src/store_binary_index.c src/store_binary_index_tree.c src/s
 tests/test_store: src/store_binary_index_tree.c tests/test_store_binary_index_tree.c
 tests/test_store: src/store_binary_io.c src/store_binary_io.h tests/test_store_binary_io.c
 tests/test_store: src/store_binary_publish.c src/store_binary_publish.h tests/test_store_binary_publish.c
+tests/test_store: src/app_resume.c src/cli.c tests/test_resume_preferences.c $(HEADERS)
 
 tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
 

@@ -6,6 +6,7 @@
 #include "store_internal.h"
 #include "fixture_store_history.h"
 #include "fixture_store_legacy.h"
+
 #include "media.h"
 #include "fs.h"
 #include "instructions.h"
@@ -25,6 +26,8 @@
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
+
+void test_resume_preferences(struct snag_store *store, const char *cwd);
 
 static void append_import_fixture(struct snag_session *, const char *, json_t *, bool);
 static bool cancel_history_read(void *);
@@ -3757,6 +3760,7 @@ main(int argc, char **argv)
         assert(strstr(error, "blank event line") != NULL);
         snag_session_close(&long_line);
     }
+    test_resume_preferences(&store, cwd);
     snag_store_close(&store);
     free(temp);
     puts("test_store: ok");
