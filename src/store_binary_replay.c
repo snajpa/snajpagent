@@ -21,6 +21,8 @@ struct replay_context {
     uint64_t sequence;
     uint64_t response_sequence;
     bool source_projection; /* Pinned source hydration, without semantic reduction. */
+    bool cache_host;
+    struct snag_binary_host_source *host;
     struct snag_binary_anchor through;
     const struct snag_binary_checkpoint_index *access;
     struct snag_binary_checkpoint_sources sources;
@@ -468,7 +470,101 @@ project_voice(const struct replay_context *context, const struct snag_binary_rec
 }
 
 static int
-project_record(const struct replay_context *context, const struct snag_session *state,
+project_host(struct replay_context *context, const struct snag_binary_record *record,
+    const char **type, json_t **data)
+{
+    struct snag_binary_event event;
+    if (snag_binary_event_decode(record, &event) < 0) return -1;
+    const struct snag_binary_response_start *start = &event.data.response_started;
+    if (!start->host_context.size || (!start->host_references && !context->cache_host))
+        return snag_binary_legacy_decode(record, type, data);
+    json_t *host = json_array();
+    if (!host) return -1;
+    struct snag_binary_host_source *next = NULL;
+    if (context->cache_host) {
+        size_t count = 0u;
+        for (size_t i = 0u; i < 4u; ++i) count |= (size_t)start->host_context.data[i] << (8u * i);
+        next = snag_binary_host_source_new(host, count);
+        if (!next) {
+            json_decref(host);
+            return -1;
+        }
+    }
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_batch batch = {0};
+    struct snag_binary_anchor before;
+    struct snag_binary_text text;
+    struct snag_binary_ref reference;
+    size_t offset = 0u, index = 0u;
+    size_t bytes = (size_t)(start->host_context.data - record->payload) + 4u;
+    int rc, result = -1;
+    while ((rc = snag_binary_host_next(start, &offset, &text, &reference)) == 0) {
+        if (context->cancelled && context->cancelled(context->cancel_opaque)) {
+            errno = ECANCELED;
+            goto done;
+        }
+        json_t *item = NULL;
+        if (reference.sequence) {
+            if (reference.sequence >= context->sequence) {
+                errno = EINVAL;
+                goto done;
+            }
+            for (size_t i = 0u; context->host && i < context->host->count; ++i) {
+                const struct snag_binary_ref *prior = &context->host->parts[i];
+                if (prior->sequence == reference.sequence && prior->offset == reference.offset &&
+                    prior->size == reference.size) {
+                    item = json_incref(json_array_get(context->host->snapshot, i));
+                    json_t *content = json_object_get(item, "content");
+                    text = (struct snag_binary_text){
+                        (const unsigned char *)json_string_value(content),
+                        json_string_length(content)};
+                    break;
+                }
+            }
+            if (!item) {
+                if ((!batch.count || reference.sequence < batch.first_seq ||
+                     reference.sequence - batch.first_seq >= batch.count) &&
+                    snag_binary_checkpoint_batch_find(context->fd, &context->through,
+                        context->access, reference.sequence, &scratch, &batch, &before) < 0) {
+                    goto done;
+                }
+                if (snag_binary_host_ref_resolve(&reference, &batch, &text) < 0) goto done;
+            }
+        } else {
+            reference = (struct snag_binary_ref){context->sequence,
+                (uint32_t)(text.data - record->payload), (uint32_t)text.size};
+        }
+        /* Preserve the existing expanded event bound through references. */
+        if (bytes > SNAG_MAX_EVENT_LINE - 5u || text.size > SNAG_MAX_EVENT_LINE - bytes - 5u) {
+            json_decref(item);
+            errno = EOVERFLOW;
+            goto done;
+        }
+        bytes += 5u + text.size;
+        if (!item) item = json_pack("{s:s,s:o}", "role", "user", "content",
+            json_stringn((const char *)text.data, text.size));
+        if (!item || json_array_append_new(host, item) < 0) goto done;
+        if (next) next->parts[index] = reference;
+        ++index;
+    }
+    if (rc != 1 || (next && index != next->count) ||
+        snag_binary_response_start_legacy(start, host, data) < 0) goto done;
+    *type = "response_started";
+    if (context->cache_host) {
+        snag_binary_host_source_release(context->host);
+        context->host = next;
+        next = NULL;
+    }
+    result = 0;
+ done:
+    snag_binary_host_source_release(next);
+    snag_buf_free(&scratch);
+    json_decref(host);
+    return result;
+}
+
+static int
+project_record(struct replay_context *context, const struct snag_session *state,
     const struct snag_binary_record *record, const char **type, json_t **data)
 {
     if (record->kind == SNAG_BINARY_TOOL_FINISHED || record->kind == SNAG_BINARY_PROCESS_CLOSED) {
@@ -484,6 +580,8 @@ project_record(const struct replay_context *context, const struct snag_session *
             if (result->output_ref.end_sequence > context->sequence) return snag_errno(EINVAL);
         }
     }
+    if (record->kind == SNAG_BINARY_RESPONSE_STARTED)
+        return project_host(context, record, type, data);
     if (record->kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED)
         return project_voice(context, record, type, data);
     if (record->kind == SNAG_BINARY_RESPONSE_INTERRUPTED ||
@@ -930,7 +1028,8 @@ reconcile_binary(struct snag_session *source, struct snag_session *restored,
     if (!state) return snag_errno(ENOMEM);
     snag_session_init(state);
     memcpy(state->id, id, sizeof(state->id));
-    struct replay_context context = {.fd = source->log_fd, .fn = fn, .opaque = opaque};
+    struct replay_context context = {.fd = source->log_fd, .fn = fn, .opaque = opaque,
+        .cache_host = true};
     int rc = -1;
     if (replay_batches(&context, state, &identity, &anchor, boundary, recovery,
         error, error_size) < 0) goto done;
@@ -967,6 +1066,7 @@ reconcile_binary(struct snag_session *source, struct snag_session *restored,
     if (rc < 0) snag_session_close(state);
     free(state);
     snag_binary_checkpoint_sources_free(&context.sources);
+    snag_binary_host_source_release(context.host);
     return rc;
 }
 
@@ -1054,7 +1154,8 @@ reduce_binary_suffix(struct snag_session *source, struct snag_session *state,
         return snag_fail(error, error_size, EINVAL, "native suffix identity/boundary mismatch");
     }
     struct replay_context context = {.fd = source->log_fd, .fn = fn, .opaque = opaque,
-        .sequence = anchor.next_seq - 1u, .through = anchor, .sources = *sources,
+        .cache_host = true, .sequence = anchor.next_seq - 1u, .through = anchor,
+        .sources = *sources,
         .access = access, .cancelled = cancelled, .cancel_opaque = cancel_opaque,
         .response_sequence = state->response_open ? sources->response_start : 0u};
     context.sources.process_capacity = sources->process_count;
@@ -1082,6 +1183,7 @@ reduce_binary_suffix(struct snag_session *source, struct snag_session *state,
         recovery->incomplete_tail_bytes = boundary - anchor.end;
         recovery->problem_seq = recovery->problem_start = recovery->problem_end = 0u;
     }
+    snag_binary_host_source_release(context.host);
     return rc;
 }
 

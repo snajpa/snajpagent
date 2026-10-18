@@ -1154,12 +1154,13 @@ new capacity limit.
 
 ### Response-start accounting payload
 
-Draft kind 160, payload version 1, preserves both the legacy identity/accounting
+Draft kind 160, payload version 2, preserves both the legacy identity/accounting
 shape and the full accounting shape. It begins with a two-byte flag mask:
 bit 0 full accounting, bit 1 IRC watermark present, bit 2 host snapshot present,
 bit 3 baseline hash nonnull, bit 4 compaction ID nonnull, bit 5 source-bound capacity,
-bit 6 hard-input limit nonnull, bit 7 requested-output limit nonnull. Higher bits
-are reserved. Bits 2/5/6/7 require the full shape. Missing legacy accounting fields
+bit 6 hard-input limit nonnull, bit 7 requested-output limit nonnull, bit 8 host
+references present (version 2). Higher bits are reserved. Bits 2/5/6/7 require
+the full shape; bit 8 also requires bit 2. Missing legacy accounting fields
 stay absent; the codec never fills them from current settings. For the full
 shape, an unset limit bit means a recorded null, not an omitted field.
 
@@ -1180,12 +1181,32 @@ counts are positive. The hard-input field preserves zero as allowed by the
 existing reducer; a nonnull output limit is positive and retains the existing
 configuration bound. An optional IRC watermark 8 follows either shape.
 
-The optional host snapshot is last. It reuses the typed content-list encoding
-but permits only nonempty text parts and at least two entries; each entry is a
-user-role data message. Literal snapshot text is preserved, not parsed as control
-or a general JSON object. The reducer checks the actual boundary texts, current
-turn/response cycle, provider/profile identity, admitted steering, watermark and
-compaction/accounting relationships before adoption. This codec remains test-only.
+The optional host snapshot is last. Its counted list contains at least two
+nonempty text parts, each a user-role data message. Version 1 literal snapshots
+remain readable. Version 2 adds flag bit 8 for host-only references: part kind 4
+carries an original sequence 8, payload offset 4 and text size 4. Each target is
+one exact literal host text part in an earlier authenticated response-start record
+of the same journal. References to other references and future records fail.
+The writer substitutes a reference only when its seventeen bytes save space over
+the five-byte literal header plus text. It retains the original tuple across
+successive snapshots and compacts the trailing field in place. The producer
+checks exact counted literal bytes against the already reduced and encoded JSON
+facts; it reuses that validation instead of decoding the complete snapshot again.
+Reader validation and original-source checks remain independent.
+
+Writer staging shares an immutable latest-snapshot cache. Linear readers retain
+that same bounded working set and reuse verified JSON facts by exact original
+tuple, so stable facts require neither text copies nor historical scans on each
+response. Cold point and suffix readers resolve original sources through the
+existing verified batch/index path. Checkpoint closures retain each referenced
+literal source as a field dependency. Checkpoint acknowledgement and resume clear
+the writer cache; the next snapshot seeds fresh literal sources. Cache loss affects
+storage reuse only. Expanded snapshots retain the existing native event size bound.
+
+Canonical history and context replay receive complete ordered snapshots. The
+provider still receives only changed host facts. The reducer checks boundary
+texts, current turn/response cycle, provider/profile identity, admitted steering,
+watermark and compaction/accounting relationships before adoption.
 
 ### Streamed public output and canonical fragments
 

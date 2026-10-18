@@ -13,6 +13,9 @@
   compaction and resume. Keep these inputs outside the summary until the next
   response consumes them, avoiding repeated local snapshot-validation failures.
 
+- Reuse unchanged host facts through native original-text references while
+  preserving complete historical snapshots and changed-fact provider input.
+
 - Show automatic recovery as consecutive yellow retry status lines, with one
   diagnostic for a terminal failure.
 

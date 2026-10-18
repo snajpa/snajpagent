@@ -291,6 +291,20 @@ collect_dependencies(struct closure_capture *capture,
             event.data.voice_transfer_adopted.begin_seq >= owner)
             return snag_errno(EINVAL);
         return need(capture, &capture->needed, event.data.voice_transfer_adopted.begin_seq);
+    case SNAG_BINARY_RESPONSE_STARTED: {
+        const struct snag_binary_response_start *start = &event.data.response_started;
+        if (!start->host_context.size) return 0;
+        size_t offset = 0u;
+        struct snag_binary_text text;
+        struct snag_binary_ref reference;
+        while ((rc = snag_binary_host_next(start, &offset, &text, &reference)) == 0) {
+            if (!reference.sequence) continue;
+            if (reference.sequence >= owner) return snag_errno(EINVAL);
+            /* Only the original literal field is consumed from this record. */
+            if (need(capture, &capture->needed, reference.sequence) < 0) return -1;
+        }
+        return rc < 0 ? -1 : 0;
+    }
     case SNAG_BINARY_RESPONSE_INTERRUPTED:
         return collect_public(capture, &event.data.response_interrupted.partial, owner);
     case SNAG_BINARY_RESPONSE_FAILED:

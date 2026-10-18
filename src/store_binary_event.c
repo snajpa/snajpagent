@@ -1087,19 +1087,48 @@ decode_metadata(struct fields *fields, struct snag_binary_event *event)
     }
 }
 
-static bool
-response_host_context_valid(const struct snag_binary_content *content)
+int
+snag_binary_host_next(const struct snag_binary_response_start *start, size_t *offset,
+    struct snag_binary_text *text, struct snag_binary_ref *reference)
 {
-    struct snag_binary_content decoded;
-    if (snag_binary_content_decode(content->data, content->size, &decoded) < 0) return false;
-    struct snag_binary_part part;
+    if (!start || !offset || !text || !reference || !start->host_context.data ||
+        start->host_context.size < 4u || start->host_context.size > SNAG_MAX_EVENT_LINE ||
+        (*offset && *offset < 4u) || *offset > start->host_context.size) return invalid();
+    struct fields fields = {.data = start->host_context.data, .size = start->host_context.size,
+        .offset = *offset ? *offset : 4u};
+    if (fields.offset == fields.size) return 1;
+    uint64_t kind, sequence, at, size;
+    struct snag_binary_text literal = {0};
+    struct snag_binary_ref source = {0};
+    if (!read_uint(&fields, 1u, &kind)) return invalid();
+    if (kind == SNAG_BINARY_PART_TEXT) {
+        if (!read_text(&fields, &literal, 1u, SNAG_MAX_EVENT_LINE)) return invalid();
+    } else if (kind == 4u && start->host_references) {
+        if (!read_uint(&fields, 8u, &sequence) || !sequence || sequence == UINT64_MAX ||
+            !read_uint(&fields, 4u, &at) || !read_uint(&fields, 4u, &size) || !size ||
+            at > SNAG_MAX_EVENT_LINE || size > SNAG_MAX_EVENT_LINE - at) return invalid();
+        source = (struct snag_binary_ref){sequence, (uint32_t)at, (uint32_t)size};
+    } else {
+        return invalid();
+    }
+    *text = literal;
+    *reference = source;
+    *offset = fields.offset;
+    return 0;
+}
+
+static bool
+response_host_context_valid(const struct snag_binary_response_start *start)
+{
+    struct fields fields = {.data = start->host_context.data, .size = start->host_context.size};
+    uint64_t expected;
+    if (!fields.data || !read_uint(&fields, 4u, &expected) || expected < 2u) return false;
+    struct snag_binary_text text;
+    struct snag_binary_ref reference;
     size_t offset = 0u, count = 0u;
     int rc;
-    while ((rc = snag_binary_content_next(&decoded, &offset, &part)) == 0) {
-        if (part.kind != SNAG_BINARY_PART_TEXT || !part.text.size) return false;
-        ++count;
-    }
-    return rc == 1 && count >= 2u;
+    while ((rc = snag_binary_host_next(start, &offset, &text, &reference)) == 0) ++count;
+    return rc == 1 && count == expected;
 }
 
 static bool
@@ -1111,13 +1140,14 @@ response_start_valid(const struct snag_binary_response_start *start)
         start->has_baseline != (start->count_method == SNAG_BINARY_COUNT_ANCHORED_UPPER_BOUND))
         return false;
     if (!start->full_accounting) return !start->source_bound && !start->has_hard_input &&
-        !start->has_requested_output && !start->host_context.size;
+        !start->has_requested_output && !start->host_context.size && !start->host_references;
     return start->capacity_source >= SNAG_BINARY_CAPACITY_UNKNOWN &&
         start->capacity_source <= SNAG_BINARY_CAPACITY_STALE_CATALOG_IGNORED &&
         start->model_input_bytes && start->request_input_bytes &&
         (!start->has_requested_output || (start->requested_output_tokens &&
          start->requested_output_tokens <= SNAG_CONFIG_TOKEN_LIMIT_MAX)) &&
-        (!start->host_context.size || response_host_context_valid(&start->host_context));
+        (!start->host_references || start->host_context.size) &&
+        (!start->host_context.size || response_host_context_valid(start));
 }
 
 static int
@@ -1127,7 +1157,8 @@ encode_response_start(struct snag_buf *out, const struct snag_binary_response_st
     unsigned int flags = (start->full_accounting ? 1u : 0u) | (start->has_irc_seq ? 2u : 0u) |
         (start->host_context.size ? 4u : 0u) | (start->has_baseline ? 8u : 0u) |
         (start->has_compact ? 16u : 0u) | (start->source_bound ? 32u : 0u) |
-        (start->has_hard_input ? 64u : 0u) | (start->has_requested_output ? 128u : 0u);
+        (start->has_hard_input ? 64u : 0u) | (start->has_requested_output ? 128u : 0u) |
+        (start->host_references ? 256u : 0u);
     if (write_uint(out, flags, 2u) < 0 || snag_buf_append(out, start->turn, 16u) < 0 ||
         snag_buf_append(out, start->response, 16u) < 0 || write_uint(out, start->cycle, 4u) < 0 ||
         write_uint(out, start->count_method, 1u) < 0 ||
@@ -1163,13 +1194,15 @@ static bool
 decode_response_start(struct fields *fields, struct snag_binary_response_start *start)
 {
     uint64_t flags, value;
-    if (!read_uint(fields, 2u, &flags) || flags > 255u) return false;
+    if (!read_uint(fields, 2u, &flags) || flags > 511u ||
+        ((flags & 256u) && (!(flags & 4u) || !fields->references))) return false;
     /* Snapshot and capacity fields require the full-accounting shape. */
     if (!(flags & 1u) && (flags & (4u | 32u | 64u | 128u))) return false;
     if (!read_id(fields, start->turn) ||
         !read_id(fields, start->response) || !read_uint(fields, 4u, &value)) return false;
     start->cycle = (uint32_t)value;
     start->full_accounting = (flags & 1u) != 0u;
+    start->host_references = (flags & 256u) != 0u;
     start->has_irc_seq = (flags & 2u) != 0u;
     start->has_baseline = (flags & 8u) != 0u;
     start->has_compact = (flags & 16u) != 0u;
@@ -1204,7 +1237,12 @@ decode_response_start(struct fields *fields, struct snag_binary_response_start *
             !read_uint(fields, 8u, &start->requested_output_tokens)) return false;
     }
     if (start->has_irc_seq && !read_uint(fields, 8u, &start->irc_seq)) return false;
-    if ((flags & 4u) && !read_content(fields, &start->host_context)) return false;
+    if (flags & 4u) {
+        if (fields->offset == fields->size) return false;
+        start->host_context = (struct snag_binary_content){fields->data + fields->offset,
+            fields->size - fields->offset};
+        fields->offset = fields->size;
+    }
     return response_start_valid(start);
 }
 
@@ -4735,7 +4773,7 @@ snag_binary_event_kind(const char *name, enum snag_binary_kind *out)
 uint16_t
 snag_binary_event_version(enum snag_binary_kind kind)
 {
-    if (kind == SNAG_BINARY_SKILLS_UPDATED) return 2u;
+    if (kind == SNAG_BINARY_SKILLS_UPDATED || kind == SNAG_BINARY_RESPONSE_STARTED) return 2u;
     if (control_kind(kind) ||
         kind == SNAG_BINARY_RULE_LOG || kind == SNAG_BINARY_RULE_TRANSFORM ||
         kind == SNAG_BINARY_AUDIO_USAGE || kind == SNAG_BINARY_VOICE_EVENT ||
@@ -5050,6 +5088,31 @@ find_record(const struct snag_binary_batch *batch, uint64_t sequence,
         return 0;
     }
     return rc < 0 ? rc : invalid();
+}
+
+int
+snag_binary_host_ref_resolve(const struct snag_binary_ref *reference,
+    const struct snag_binary_batch *batch, struct snag_binary_text *out)
+{
+    if (!reference || !out) return invalid();
+    struct snag_binary_record record;
+    struct snag_binary_event event;
+    if (find_record(batch, reference->sequence, &record) < 0 ||
+        record.kind != SNAG_BINARY_RESPONSE_STARTED ||
+        snag_binary_event_decode(&record, &event) < 0) return invalid();
+    struct snag_binary_text text;
+    struct snag_binary_ref source;
+    size_t offset = 0u;
+    int rc;
+    while ((rc = snag_binary_host_next(
+        &event.data.response_started, &offset, &text, &source)) == 0) {
+        if (!source.sequence && text.size == reference->size &&
+            (size_t)(text.data - record.payload) == reference->offset) {
+            *out = text;
+            return 0;
+        }
+    }
+    return invalid();
 }
 
 static int

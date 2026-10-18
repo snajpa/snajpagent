@@ -8,6 +8,112 @@
 #include <stdlib.h>
 #include <string.h>
 
+struct snag_binary_host_source *
+snag_binary_host_source_new(json_t *snapshot, size_t count)
+{
+    if (!json_is_array(snapshot) || count < 2u ||
+        count > (SIZE_MAX - sizeof(struct snag_binary_host_source)) /
+        sizeof(struct snag_binary_ref)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    struct snag_binary_host_source *host = malloc(sizeof(*host) + count * sizeof(*host->parts));
+    if (host) *host = (struct snag_binary_host_source){.owners = 1u, .count = count,
+        .snapshot = json_incref(snapshot)};
+    return host;
+}
+
+void
+snag_binary_host_source_release(struct snag_binary_host_source *host)
+{
+    if (!host || --host->owners) return;
+    json_decref(host->snapshot);
+    free(host);
+}
+
+static void
+write_host_reference(unsigned char *out, struct snag_binary_ref source)
+{
+    *out++ = 4u;
+    for (size_t i = 0u; i < 8u; ++i) *out++ = (unsigned char)(source.sequence >> (8u * i));
+    for (size_t i = 0u; i < 4u; ++i) *out++ = (unsigned char)(source.offset >> (8u * i));
+    for (size_t i = 0u; i < 4u; ++i) *out++ = (unsigned char)(source.size >> (8u * i));
+}
+
+static int
+reference_host(struct snag_binary_producer *writer, uint64_t sequence,
+    const struct snag_binary_record *record, const json_t *data)
+{
+    if (record->kind != SNAG_BINARY_RESPONSE_STARTED) return 0;
+    json_t *snapshot = json_object_get(data, "host_context");
+    if (record->size < 2u || (record->payload[1] & 1u)) return snag_errno(EINVAL);
+    if (!snapshot) return record->payload[0] & 4u ? snag_errno(EINVAL) : 0;
+    if (!(record->payload[0] & 1u) || !(record->payload[0] & 4u)) return snag_errno(EINVAL);
+    size_t count = json_array_size(snapshot), size = 4u;
+    if (count < 2u || count > UINT32_MAX) return snag_errno(EINVAL);
+    for (size_t i = 0u; i < count; ++i) {
+        json_t *content = json_object_get(json_array_get(snapshot, i), "content");
+        size_t length = json_string_length(content);
+        if (!json_is_string(content) || !length || size > SNAG_MAX_EVENT_LINE - 5u ||
+            length > SNAG_MAX_EVENT_LINE - size - 5u) return snag_errno(EINVAL);
+        size += 5u + length;
+    }
+    if (size > record->size) return snag_errno(EINVAL);
+    size_t base = record->size - size;
+    const unsigned char *literal = record->payload + base;
+    for (size_t i = 0u; i < 4u; ++i) {
+        if (literal[i] != (unsigned char)(count >> (8u * i))) return snag_errno(EINVAL);
+    }
+    struct snag_binary_host_source *host = snag_binary_host_source_new(snapshot, count);
+    if (!host) return -1;
+    size_t read = 4u, written = 4u;
+    bool referenced = false;
+    for (size_t index = 0u; index < count; ++index) {
+        json_t *fact = json_array_get(snapshot, index);
+        json_t *content = json_object_get(fact, "content");
+        size_t length = json_string_length(content);
+        /* Strict reduction and literal encoding already validated UTF-8 and
+         * host shape. Verify their exact byte correspondence without decoding
+         * and rescanning the complete literal snapshot a second time. */
+        if (literal[read] != SNAG_BINARY_PART_TEXT) goto fail;
+        for (size_t i = 0u; i < 4u; ++i) {
+            if (literal[read + 1u + i] != (unsigned char)(length >> (8u * i))) goto fail;
+        }
+        if (memcmp(literal + read + 5u, json_string_value(content), length)) goto fail;
+        struct snag_binary_ref source = {0};
+        /* A reference costs seventeen bytes, a literal five plus its text. */
+        if (length > 12u && writer->host) {
+            for (size_t j = 0u; j < writer->host->count; ++j) {
+                if (json_equal(fact, json_array_get(writer->host->snapshot, j))) {
+                    source = writer->host->parts[j];
+                    break;
+                }
+            }
+        }
+        if (source.sequence) {
+            write_host_reference(writer->field.data + base + written, source);
+            written += 17u;
+            referenced = true;
+        } else {
+            memmove(writer->field.data + base + written, literal + read, length + 5u);
+            source = (struct snag_binary_ref){sequence, (uint32_t)(base + written + 5u),
+                (uint32_t)length};
+            written += length + 5u;
+        }
+        read += length + 5u;
+        host->parts[index] = source;
+    }
+    /* Host content is the final field, so compaction needs no second text buffer. */
+    writer->field.len = base + written;
+    if (referenced) writer->field.data[1] |= 1u;
+    snag_binary_host_source_release(writer->host);
+    writer->host = host;
+    return 0;
+ fail:
+    snag_binary_host_source_release(host);
+    return snag_errno(EINVAL);
+}
+
 static int
 replace_event(struct snag_binary_producer *writer, const struct snag_binary_event *event)
 {
@@ -365,6 +471,7 @@ snag_binary_producer_free(struct snag_binary_producer *producer)
     for (size_t i = 0u; i < producer->queue_count; ++i) clear_input(&producer->queue[i]);
     free(producer->queue);
     clear_output(producer);
+    snag_binary_host_source_release(producer->host);
     snag_buf_free(&producer->field);
     *producer = (struct snag_binary_producer){0};
 }
@@ -381,6 +488,14 @@ snag_binary_producer_clone(struct snag_binary_producer *destination,
     struct snag_binary_producer staged = {.field = {.max = SNAG_MAX_EVENT_LINE},
         .input = source->input, .public = json_incref(source->public)};
     staged.input.paths = json_incref(source->input.paths);
+    if (source->host) {
+        if (source->host->owners == SIZE_MAX) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        staged.host = source->host;
+        ++staged.host->owners;
+    }
     if (source->queue_count) {
         staged.queue = malloc(source->queue_count * sizeof(*staged.queue));
         if (!staged.queue) goto fail;
@@ -415,7 +530,8 @@ snag_binary_producer_reference(struct snag_binary_producer *producer,
         record->payload != producer->field.data || record->size != producer->field.len) {
         return snag_errno(EINVAL);
     }
-    if (remember_input(producer, state, sequence, record) < 0) return -1;
+    if (remember_input(producer, state, sequence, record) < 0 ||
+        reference_host(producer, sequence, record, data) < 0) return -1;
     uint16_t kind = record->kind;
     if (kind == SNAG_BINARY_TURN_STARTED ||
         (kind >= SNAG_BINARY_RESPONSE_OUTPUT && kind <= SNAG_BINARY_RESPONSE_COMPLETED)) {

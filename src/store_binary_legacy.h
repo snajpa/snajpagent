@@ -40,6 +40,11 @@ int snag_binary_legacy_encode(struct snag_buf *out, const char *type, const json
 int snag_binary_legacy_decode(const struct snag_binary_record *record, const char **type,
                               json_t **data);
 
+/* Project a decoded response start with a complete resolved host snapshot.
+ * The journal reader verifies each original native source before calling. */
+int snag_binary_response_start_legacy(const struct snag_binary_response_start *,
+    json_t *host_context, json_t **data);
+
 /* Project a resolved whole instruction list, preserving path-only entries and
  * optional original snapshot metadata. New ownership only on success. */
 int snag_binary_instructions_legacy(const struct snag_binary_instructions *, bool snapshots,

@@ -5756,6 +5756,9 @@ binary_prepare_checkpoint_receipt(struct snag_session *session, char *error, siz
         snag_binary_index_tree_root(&binary->checkpoint_tree, receipt.index_root) < 0 ||
         snag_binary_checkpoint_receipt_encode(&payload, &receipt) < 0)
         goto fail;
+    /* The new closure may prune old literals. Seed fresh sources after its ACK. */
+    snag_binary_host_source_release(binary->proposed.host);
+    binary->proposed.host = NULL;
     struct snag_binary_record record = {.kind = SNAG_BINARY_CHECKPOINT_RECEIPT,
         .version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION,
         .flags = SNAG_BINARY_RECORD_OPTIONAL,

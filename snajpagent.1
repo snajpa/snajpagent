@@ -6717,6 +6717,9 @@ An existing native journal takes precedence over
 the legacy log. Resume validates its checkpoint receipts and bounded suffix;
 damaged native storage or unavailable required checkpoint data stops recovery.
 Legacy fallback applies only when this file is absent.
+Repeated host facts and tool excerpts reuse original bytes through validated
+native references. History and resume reconstruct their complete values;
+existing journal records remain append-only.
 IRC messages can be admitted after a checkpoint even when compaction has removed
 them from its lookup table. Recovery verifies the required messages and neighbouring
 records in one journal pass and retains them for the next checkpoint.

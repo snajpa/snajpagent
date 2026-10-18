@@ -17,14 +17,25 @@ struct snag_binary_input_source {
     json_t *paths;
 };
 
+/* Immutable latest-snapshot cache shared by staged writers and used by linear
+ * readers. Original tuples let readers reuse verified JSON without old scans. */
+struct snag_binary_host_source {
+    size_t owners, count;
+    json_t *snapshot;
+    struct snag_binary_ref parts[];
+};
+struct snag_binary_host_source *snag_binary_host_source_new(json_t *, size_t count);
+void snag_binary_host_source_release(struct snag_binary_host_source *);
+
 /* Working provenance, not a session-wide source table. Only the pending input,
- * queue and open response own entries. Stage a clone before admission; adopt it
- * with the private reducer candidate after the canonical durable ACK. */
+ * queue, latest host snapshot and open response own entries. Stage a clone before
+ * admission; adopt it with the reducer candidate after the canonical durable ACK. */
 struct snag_binary_producer {
     struct snag_buf field;
     struct snag_binary_output_source *outputs;
     size_t output_count, output_capacity;
     json_t *public;
+    struct snag_binary_host_source *host;
     struct snag_binary_input_source input, *queue;
     size_t queue_count, queue_capacity;
 };

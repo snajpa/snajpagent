@@ -459,7 +459,15 @@ struct snag_binary_response_start {
     /* Absent when empty; otherwise at least two nonempty text-only user-role
      * data messages. Boundary text and admission remain reducer checks. */
     struct snag_binary_content host_context;
+    bool host_references; /* v2 host-only original text references. */
 };
+
+/* Host snapshots retain their complete ordered text parts. A reference names
+ * one exact original literal host part, never another reference. */
+int snag_binary_host_next(const struct snag_binary_response_start *, size_t *offset,
+    struct snag_binary_text *, struct snag_binary_ref *);
+int snag_binary_host_ref_resolve(const struct snag_binary_ref *,
+    const struct snag_binary_batch *, struct snag_binary_text *);
 
 enum snag_binary_item_kind {
     SNAG_BINARY_ITEM_ASSISTANT = 1, SNAG_BINARY_ITEM_REFUSAL = 2, SNAG_BINARY_ITEM_TOOL_CALL = 3

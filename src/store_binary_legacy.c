@@ -2719,7 +2719,7 @@ put_host_context(json_t *data, const struct snag_binary_content *host)
 }
 
 static int
-put_response_start(json_t *data, const struct snag_binary_response_start *start)
+put_response_start(json_t *data, const struct snag_binary_response_start *start, json_t *host)
 {
     if (start->input_tokens_bound > INT64_MAX ||
         (start->has_irc_seq && start->irc_seq > INT64_MAX) ||
@@ -2776,7 +2776,23 @@ put_response_start(json_t *data, const struct snag_binary_response_start *start)
         snag_json_set_new(data, "irc_seq", json_integer((json_int_t)start->irc_seq)) < 0) {
         return -1;
     }
-    return put_host_context(data, &start->host_context);
+    if (host) return snag_json_set_new(data, "host_context", json_incref(host));
+    return start->host_references ? unsupported() : put_host_context(data, &start->host_context);
+}
+
+int
+snag_binary_response_start_legacy(const struct snag_binary_response_start *start,
+    json_t *host_context, json_t **data)
+{
+    if (!start || !data || host_context_shape(host_context) < 0) return invalid();
+    json_t *result = json_object();
+    if (!result) return -1;
+    if (put_response_start(result, start, host_context) < 0) {
+        json_decref(result);
+        return -1;
+    }
+    *data = result;
+    return 0;
 }
 
 static int
@@ -3688,7 +3704,7 @@ snag_binary_legacy_decode(const struct snag_binary_record *record, const char **
     else if (event.kind == SNAG_BINARY_TURN_STARTED) {
         rc = put_turn_start(result, &event.data.started);
     } else if (event.kind == SNAG_BINARY_RESPONSE_STARTED) {
-        rc = put_response_start(result, &event.data.response_started);
+        rc = put_response_start(result, &event.data.response_started, NULL);
     } else if (event.kind == SNAG_BINARY_RESPONSE_OUTPUT) {
         rc = put_response_output(result, &event.data.response_output);
     } else if (response_end_kind(event.kind)) {
