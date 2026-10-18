@@ -3124,7 +3124,7 @@ configured credentials and access rules. Sessions using this feature require
 a binary with fallback support for replay and resume.
 .TP
 .BR /fast " [on|off|status]"
-Toggle fast service and print the resulting ON or OFF state. The optional
+Show the current fast-service state. The optional
 .B on
 and
 .B off
@@ -3406,6 +3406,9 @@ List available capture and playback device names without starting capture.
 Set capture_device and playback_device in [audio] to an exact listed name;
 empty values select system defaults. Ambiguous duplicate names are rejected.
 Stop local audio before reloading configuration or preparing attachments.
+.TP
+.B /voice
+Show whether voice is off, on, muted or stopping without starting capture.
 .TP
 .B /voice on
 Start a voice conversation using the selected provider and its credentials.
@@ -3762,8 +3765,11 @@ configured /fallback before policy-stop handling. Remaining policy stops survive
 restart and require clarification.
 .TP
 .B /retry auto [on|off]
-Toggle automatic transport and turn retries, or set them explicitly. The command
-prints ON or OFF and saves a session override that survives restart. The default
+Show the automatic transport and turn retry state and its source. Explicit
+.B on
+or
+.B off
+saves a session override that survives restart. The default
 comes from [agent] retry_auto=true. /status shows the value and its source.
 An explicit /configure reload changes the default when no session override exists.
 Disabling during backoff stops the next attempt. Healthy responses finish.

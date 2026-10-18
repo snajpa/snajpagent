@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Show current settings for bare `/fast`, `/retry auto` and `/voice` commands.
+  Explicit `on` or `off` changes fast service and retry policy; inspecting a
+  configured default keeps it eligible for configuration reload.
+
 - Show newly loaded skills with the same green lifecycle bullet as compaction,
   including prompt references, explicit selection and model activation.
 

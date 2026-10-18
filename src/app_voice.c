@@ -4154,6 +4154,12 @@ snag_app_voice_command(struct app_state *app, const char *line, bool *handled)
         *handled = false;
         return 0;
     }
+    if (!strcmp(line, "/voice"))
+        return snag_ui_text(&app->ui, SNAG_UI_HOST,
+            !app->voice                      ? "Voice: OFF"
+            : atomic_load(&app->voice->stop)  ? "Voice: stopping"
+            : atomic_load(&app->voice->muted) ? "Voice: ON (muted)"
+                                             : "Voice: ON");
     if (!strcmp(line, "/voice off")) {
         if (app->voice_switch) {
             if (app->voice_switch->sent)

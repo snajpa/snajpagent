@@ -2273,17 +2273,21 @@ change_retry_auto(struct app_state *app, const char *argument)
 
     if (*argument && strcmp(argument, "on") && strcmp(argument, "off"))
         return app_error(app, "usage: /retry auto [on|off]");
-    enabled = *argument ? !strcmp(argument, "on") : !enabled;
-    const char *value = enabled ? "on" : "off";
-    if (!app->session.retry_auto || strcmp(app->session.retry_auto, value)) {
-        char error[256] = {0};
-        if (commit_event(app, "retry_auto_changed", json_pack("{s:s}", "value", value), error,
-                sizeof(error)) < 0)
-            return app_error(app, error), -1;
+    if (*argument) {
+        enabled = !strcmp(argument, "on");
+        const char *value = enabled ? "on" : "off";
+        if (!app->session.retry_auto || strcmp(app->session.retry_auto, value)) {
+            char error[256] = {0};
+            if (commit_event(app, "retry_auto_changed", json_pack("{s:s}", "value", value), error,
+                    sizeof(error)) < 0)
+                return app_error(app, error), -1;
+        }
+        snag_app_irc_summary_retry_policy(app);
     }
-    snag_app_irc_summary_retry_policy(app);
-    return app_textf(
-        app, SNAG_UI_HOST, "Automatic retry: %s (session override)", enabled ? "ON" : "OFF");
+    return app_textf(app, SNAG_UI_HOST,
+        app->session.retry_auto ? "Automatic retry: %s (session override)"
+                                : "Automatic retry: %s (configuration)",
+        enabled ? "ON" : "OFF");
 }
 
 static int
@@ -2293,8 +2297,8 @@ change_fast(struct app_state *app, const char *argument)
     bool enabled = snag_string_in(current, "priority");
     if (argument && strcmp(argument, "on") && strcmp(argument, "off") && strcmp(argument, "status"))
         return app_error(app, "usage: /fast [on|off|status]");
-    if (!argument || strcmp(argument, "status")) {
-        enabled = argument ? !strcmp(argument, "on") : !enabled;
+    if (argument && strcmp(argument, "status")) {
+        enabled = !strcmp(argument, "on");
         const char *tier = enabled ? "priority" : "default";
         if (!current || strcmp(current, tier)) {
             char error[256] = {0};
