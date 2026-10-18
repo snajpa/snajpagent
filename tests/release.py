@@ -124,6 +124,18 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
         assert "›" in rendered.stdout and "»" in rendered.stdout, "manual lost UTF-8 prompt glyphs"
         assert not rendered.stderr, rendered.stderr
         print("PASS: documented manual rendering preserves UTF-8 prompt glyphs")
+    # Generated test binaries must not change the version in recursive make.
+    version_tree = tmp / "generated-version"
+    version_tree.mkdir()
+    subprocess.run(["git", "init", "-q", str(version_tree)], check=True)
+    shutil.copyfile(root / ".gitignore", version_tree / ".gitignore")
+    (version_tree / "tests").mkdir()
+    (version_tree / "tests/test_metrics").write_bytes(b"fixture executable")
+    ignored = subprocess.run(["git", "-c", "core.excludesFile=/dev/null", "check-ignore",
+        "--no-index", "--", "tests/test_metrics"], cwd=version_tree,
+        capture_output=True, text=True, timeout=5)
+    assert ignored.returncode == 0, "generated metrics executable dirties the build version"
+    print("PASS: generated metrics executable preserves the derived build version")
     # Implemented standalone targets need a matching user-manual build entry.
     makefile = (root / "Makefile").read_text()
     matrix = re.search(r"^PROD_TARGETS = (.+)$", makefile, re.M)
