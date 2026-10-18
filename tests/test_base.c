@@ -5058,6 +5058,32 @@ run_base(int argc, char **argv)
     assert(strcmp(digest, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") == 0);
     snag_sha256_hex("abc", 3u, digest);
     assert(strcmp(digest, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") == 0);
+    {
+        unsigned char input[1024];
+        static const size_t chunks[] = {1u, 3u, 63u, 64u, 65u, 127u, 257u, 1024u};
+        static const char expected[] =
+            "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9";
+        struct snag_sha256 hash;
+        for (size_t i = 0u; i < sizeof(input); ++i) input[i] = (unsigned char)i;
+        for (size_t i = 0u; i < sizeof(chunks) / sizeof(chunks[0]); ++i) {
+            snag_sha256_init(&hash);
+            for (size_t offset = 0u; offset < sizeof(input);) {
+                size_t take = sizeof(input) - offset;
+                if (take > chunks[i]) take = chunks[i];
+                snag_sha256_update(&hash, input + offset, take);
+                offset += take;
+            }
+            snag_sha256_final_hex(&hash, digest);
+            assert(!strcmp(digest, expected));
+        }
+        snag_sha256_init(&hash);
+        memset(hash.block, 0x5a, sizeof(hash.block));
+        snag_sha256_update(&hash, input, sizeof(input));
+        /* Whole input blocks are consumed in place, never staged in scratch. */
+        for (size_t i = 0u; i < sizeof(hash.block); ++i) assert(hash.block[i] == 0x5a);
+        snag_sha256_final_hex(&hash, digest);
+        assert(!strcmp(digest, expected));
+    }
     assert(snag_utf8_valid(valid, sizeof(valid) - 1u, true));
     assert(!snag_utf8_valid(invalid, sizeof(invalid), true));
     assert(!snag_utf8_valid((const unsigned char *)"a\0b", 3u, true));
