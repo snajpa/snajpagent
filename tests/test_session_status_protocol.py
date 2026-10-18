@@ -142,6 +142,14 @@ def check(binary):
                 ranks = [dict(attached=0, detached=1, running=2, stored=3)[row[4]] for row in rows]
                 assert ranks == sorted(ranks), rows
                 assert time.monotonic() - started < 5, "status retries multiplied the deadline"
+                if count:
+                    # A warm display catalog must still query the current owner,
+                    # rather than retain attachment state or use an old metrics file.
+                    for owner in owners:
+                        if owner.version == 5:
+                            owner.reply = bytes([not owner.reply[0]])
+                    expected["v5-attached"] = "detached"
+                    expected["v5-detached"] = "attached"
             for owner in owners:
                 assert owner.requests and not owner.errors, (owner.requests, owner.errors)
             assert all(hashlib.sha256(path.read_bytes()).digest() == digest
