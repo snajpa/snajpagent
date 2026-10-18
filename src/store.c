@@ -4263,6 +4263,63 @@ scan_checkpoint_suffix(struct snag_session *session, int64_t checkpoint_offset, 
         NULL, complete_end_out, next_seq_out, error, error_size);
 }
 
+/* Exclusive legacy resume uses the same verified-prefix rule as native journals.
+ * Reconcile independently: a failed checkpoint load may have changed the reducer. */
+static int
+repair_legacy_tail(struct snag_session *session, char *error, size_t error_size)
+{
+    snag_file_info before, after;
+    if (snag_fstat(session->log_fd, &before) < 0) return -1;
+    struct snag_session *restored = malloc(sizeof(*restored));
+    if (!restored) return snag_errno(ENOMEM);
+    snag_session_init(restored);
+    struct snag_legacy_recovery recovery = {0};
+    int rc = snag_store_reconcile_legacy(session, restored, NULL, NULL, &recovery,
+        error, error_size);
+    int cause = errno;
+    if (rc < 0 && (cause != EINVAL && cause != EPROTO)) goto done;
+    if (!recovery.verified_records || (rc < 0 && recovery.verified_end >= before.st_size)) {
+        rc = -1;
+        cause = EINVAL;
+        goto done;
+    }
+    if (snag_fstat(session->log_fd, &after) < 0 || !snag_file_unchanged(&before, &after)) {
+        rc = -1;
+        cause = EAGAIN;
+        goto done;
+    }
+    if (recovery.verified_end < before.st_size &&
+        (snag_truncate(session->log_fd, recovery.verified_end) < 0 ||
+            snag_store_reconcile_legacy(session, restored, NULL, NULL, &recovery,
+                error, error_size) < 0)) {
+        rc = -1;
+        cause = errno;
+        goto done;
+    }
+    int dir_fd = session->dir_fd, log_fd = session->log_fd, lock_fd = session->lock_fd;
+    char *dir_path = session->dir_path;
+    bool (*cancel)(void *) = session->history_cancel;
+    void *cancel_opaque = session->history_cancel_opaque;
+    session->dir_fd = session->log_fd = session->lock_fd = -1;
+    session->dir_path = NULL;
+    snag_session_close(session);
+    *session = *restored;
+    snag_session_init(restored);
+    session->dir_fd = dir_fd;
+    session->log_fd = log_fd;
+    session->lock_fd = lock_fd;
+    session->dir_path = dir_path;
+    session->history_cancel = cancel;
+    session->history_cancel_opaque = cancel_opaque;
+    if (error_size) error[0] = '\0';
+    rc = 0;
+ done:
+    snag_session_close(restored);
+    free(restored);
+    errno = cause;
+    return rc;
+}
+
 int
 snag_store_scan_log(
     struct snag_session *session, enum snag_tail_policy tail_policy, char *error, size_t error_size)
@@ -4272,14 +4329,14 @@ snag_store_scan_log(
     int indexed = session->pending_log ? 0
                                        : latest_checkpoint_pointer(session, tail_policy,
                                              &checkpoint_offset, &boundary, error, error_size);
-    if (indexed < 0) return -1;
+    if (indexed < 0) goto invalid;
     if (indexed && checkpoint_offset) {
         if (scan_checkpoint_suffix(session, checkpoint_offset, boundary, &complete_end, &next_seq,
                 error, error_size) < 0)
-            return -1;
+            goto invalid;
     } else if (read_event_log(session, session, boundary, tail_policy, NULL, NULL, NULL, false,
                    NULL, &complete_end, &next_seq, error, error_size) < 0)
-        return -1;
+        goto invalid;
     session->log_end = complete_end;
     session->next_seq = next_seq;
     if (next_seq == 1) return snag_fail(error, error_size, EINVAL, "session event log is empty");
@@ -4288,6 +4345,10 @@ snag_store_scan_log(
         snag_session_checkpoint(session, error, error_size) < 0)
         return -1;
     return 0;
+ invalid:
+    if (tail_policy != SNAG_TAIL_TRUNCATE || session->lock_fd < 0 ||
+        (errno != EINVAL && errno != EPROTO)) return -1;
+    return repair_legacy_tail(session, error, error_size);
 }
 
 static int native_history_each(

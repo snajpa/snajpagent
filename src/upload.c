@@ -664,7 +664,7 @@ receive_file(struct upload_io *io, struct upload_frame *frame,
     if (length != sizeof(digest) || memcmp(digest, announced, sizeof(digest))) {
         return snag_errno(EPROTO);
     }
-    if (fsync(file->fd) < 0) return -1;
+    if (snag_fsync(file->fd) < 0) return -1;
     int rc = close(file->fd);
     file->fd = -1;
     if (rc < 0) return -1;
@@ -973,7 +973,7 @@ client_publish(int dir, struct snag_upload_file *file, const char *path,
             result->landed = true;
             if (snag_unlink_at(dir, file->leaf, false) < 0) return -1;
             file->leaf[0] = '\0';
-            return fsync(dir);
+            return snag_fsync(dir);
         }
         if (errno != EEXIST || attempt) return -1;
         /* A collision gets the operation's unique suffix, never an overwrite.
@@ -1049,7 +1049,7 @@ snag_client_download(struct snag_child *child, int directory, const char *path,
         errno = EPROTO;
         goto done;
     }
-    if (fsync(file.fd) < 0) goto done;
+    if (snag_fsync(file.fd) < 0) goto done;
     int closed = close(file.fd);
     file.fd = -1;
     if (closed < 0) goto done;

@@ -7,6 +7,12 @@
 
 struct snag_binary_io;
 
+/* Production acknowledgement covers a complete checked write in the OS cache.
+ * Disk writeback is asynchronous; the newest tail may be lost on power failure.
+ * The historical `durable` anchor name denotes the acknowledged logical prefix,
+ * not a storage-barrier guarantee. Injected sync callbacks still exercise failed
+ * acknowledgement/retry ownership independently of the production policy. */
+
 /* Syscall seam for deterministic journal and checkpoint publication failures.
  * NULL callbacks use the platform functions. Callback state stays alive until
  * close; callbacks run only on the I/O thread and follow those syscall contracts.

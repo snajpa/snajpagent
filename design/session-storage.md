@@ -2,6 +2,22 @@
 
 # Binary session storage
 
+## Writeback and recovery
+
+Current development source uses kernel-managed asynchronous disk writeback across
+journals, checkpoints, presentation/history, configuration, credentials, caches,
+media, uploads, tools, skills and updater files. Successful writes and atomic
+renames are immediately visible; command, display and request handling never wait
+for an application-issued disk barrier. A process or power failure may lose the
+newest tail. The retained `durable` anchor names identify checked logical
+acknowledgements, not power-loss persistence guarantees.
+
+Session resume holds the exclusive session lock and restores a verified prefix.
+An incomplete or checksum-invalid newest suffix can be discarded back to that
+prefix; read-only and explicitly pinned readers retain strict validation. A lost
+creation/header has no preceding resumable session. Buffered stdio is flushed
+when its readers need the bytes; that user-space flush issues no disk barrier.
+
 ## Status and purpose
 
 Engineering design, September 27, 2026, with framing implementation begun

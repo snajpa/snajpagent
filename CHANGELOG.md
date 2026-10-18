@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Use kernel-managed asynchronous disk writeback throughout the application so
+  command input, view switching, rendering and request handling never wait for a
+  disk flush. The newest tail is best effort; session resume restores the last
+  verified prefix when a final journal suffix is incomplete or corrupt.
+
 - Shrink compaction history when native request tools or other envelope fields
   exceed the local byte limit. Stop irreducible local retries without disabling
   recovery from transient provider failures.

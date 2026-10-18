@@ -194,16 +194,12 @@ snag_metrics_write(int root_fd, const struct snag_metrics_sample *sample, char *
             "Whether a turn is active.", "gauge", sample->turn_active ? 1u : 0u) < 0 ||
         metric_typed_u64(&text, "snajpagent_session_response_open",
             "Whether a response stream is open.", "gauge", sample->response_open ? 1u : 0u) < 0 ||
-        snag_write_full(output, text.data, text.len) < 0 || snag_fsync(output) < 0 ||
+        snag_write_full(output, text.data, text.len) < 0 ||
         close(output) < 0)
         goto out;
     output = -1;
     if (snag_rename_at(metrics_fd, temporary, metrics_fd, path) < 0) {
         (void)snag_errorf(error, error_size, "cannot publish metrics file: %s", strerror(errno));
-        goto out;
-    }
-    if (snag_sync_dir(metrics_fd) < 0) {
-        (void)snag_errorf(error, error_size, "cannot sync metrics directory: %s", strerror(errno));
         goto out;
     }
     rc = 0;

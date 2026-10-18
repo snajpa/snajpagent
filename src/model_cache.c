@@ -344,7 +344,7 @@ write_cache(struct snag_store *store, const json_t *providers, uint64_t updated_
         goto out;
     }
     snag_file_info written;
-    if (snag_write_full(fd, data.data, data.len) < 0 || snag_sync_file(fd) < 0 ||
+    if (snag_write_full(fd, data.data, data.len) < 0 ||
         snag_fstat(fd, &written) < 0) {
         snag_errorf(error, error_size, "cannot write model cache: %s", strerror(errno));
         goto out;
@@ -354,10 +354,6 @@ write_cache(struct snag_store *store, const json_t *providers, uint64_t updated_
         goto out;
     }
     tmp_name[0] = '\0';
-    if (snag_sync_dir(store->root_fd) < 0) {
-        snag_errorf(error, error_size, "cannot sync model cache directory: %s", strerror(errno));
-        goto out;
-    }
     if (snag_fstat(fd, &written) < 0) {
         snag_errorf(error, error_size, "cannot stat model cache: %s", strerror(errno));
         goto out;

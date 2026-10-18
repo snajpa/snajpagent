@@ -1187,10 +1187,39 @@ snag_store_load_binary_session(struct snag_session *session, enum snag_tail_poli
         .opaque = session->history_cancel_opaque};
     if (control.cancelled && control.cancelled(control.opaque)) { errno = ECANCELED; goto done; }
     if (checkpoint_images_open(session, images, error, error_size) < 0) goto done;
-    if (source_header(session->log_fd, &identity, &initial) < 0 ||
-        snag_store_admit_binary_context_checkpoint(session, candidate, images, floor, NULL,
-            &recovery, &sources, &admission, &control, error, error_size) < 0 ||
-        restore_checkpoint_clock(session->log_fd, &admission, &recovery.verified, candidate) < 0 ||
+    if (source_header(session->log_fd, &identity, &initial) < 0) goto done;
+    if (snag_store_admit_binary_context_checkpoint(session, candidate, images, floor, NULL,
+            &recovery, &sources, &admission, &control, error, error_size) < 0) {
+        /* Writeback is asynchronous. A torn final batch may include its wire
+         * delimiter, so ordinary incomplete-tail detection is insufficient.
+         * Only the exclusive resume owner can discard an unverified suffix;
+         * strict readers and explicit prefix validation keep rejecting it. */
+        if (policy != SNAG_TAIL_TRUNCATE || (errno != EINVAL && errno != EPROTO)) goto done;
+        struct snag_binary_recovery prefix = {0};
+        int replay = snag_store_reconcile_binary(session, candidate, NULL, NULL, &prefix,
+            NULL, error, error_size);
+        int cause = errno;
+        snag_session_close(candidate);
+        snag_session_init(candidate);
+        errno = cause;
+        if (!replay || (cause != EINVAL && cause != EPROTO) ||
+            prefix.verified.next_seq <= 1u || prefix.verified.end >= (uint64_t)before.st_size)
+            goto done;
+        snag_file_info inspected;
+        if (snag_fstat(session->log_fd, &inspected) < 0 ||
+            !snag_file_unchanged(&before, &inspected)) {
+            errno = EAGAIN;
+            goto done;
+        }
+        if (snag_truncate(session->log_fd, (int64_t)prefix.verified.end) < 0 ||
+            snag_sync_file(session->log_fd) < 0 || snag_fstat(session->log_fd, &before) < 0)
+            goto done;
+        if (error_size) error[0] = '\0';
+        if (snag_store_admit_binary_context_checkpoint(session, candidate, images,
+                SNAG_BINARY_HEADER_SIZE, NULL, &recovery, &sources, &admission, &control,
+                error, error_size) < 0) goto done;
+    }
+    if (restore_checkpoint_clock(session->log_fd, &admission, &recovery.verified, candidate) < 0 ||
         snag_binary_producer_restore(&producer, session->log_fd, &recovery.verified,
             &admission.available, &sources, candidate,
             control.cancelled, control.opaque) < 0) goto done;

@@ -3679,30 +3679,25 @@ snag_monotonic_ms(void)
 #endif
 }
 
+/* Buffered writes already enter the kernel's asynchronous writeback cache.
+ * No caller waits for storage barriers. Keep descriptor validation for existing
+ * error paths; acknowledgement means written/visible, not power-loss durable. */
 int
 snag_sync_file(int fd)
 {
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
-    return fsync(fd);
-#else
-    if (fdatasync(fd) == 0) return 0;
-    if (errno != EINVAL && errno != ENOSYS) return -1;
-    return fsync(fd);
-#endif
+    return fcntl(fd, F_GETFD) < 0 ? -1 : 0;
 }
 
 int
 snag_sync_dir(int fd)
 {
-    if (fsync(fd) == 0) return 0;
-    if (errno == EINVAL || errno == ENOTSUP || errno == EROFS) return 1;
-    return -1;
+    return snag_sync_file(fd);
 }
 
 int
 snag_fsync(int fd)
 {
-    return fsync(fd);
+    return snag_sync_file(fd);
 }
 #endif
 

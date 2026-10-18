@@ -112,8 +112,7 @@ snag_presentation_writer_close(struct snag_presentation_writer *writer)
 }
 
 static int
-append_record(struct snag_presentation_writer *writer, const json_t *data, uint16_t kind,
-    bool sync)
+append_record(struct snag_presentation_writer *writer, const json_t *data, uint16_t kind)
 {
     char *text = json_dumps(data, JSON_COMPACT | JSON_ENCODE_ANY);
     if (!text) return -1;
@@ -127,7 +126,6 @@ append_record(struct snag_presentation_writer *writer, const json_t *data, uint1
     if (!rc) rc = snag_binary_wire_encode(&writer->wire, writer->batch.data, writer->batch.len);
     if (!rc) {
         rc = snag_write_full(writer->fd, writer->wire.data, writer->wire.len);
-        if (!rc && sync) rc = snag_sync_file(writer->fd);
         if (rc < 0) {
             int cause = errno;
             (void)snag_truncate(writer->fd, (int64_t)writer->tail.end);
@@ -156,12 +154,7 @@ snag_presentation_append(struct snag_presentation_writer *writer,
             return -1;
         }
     }
-    /* Streaming deltas share their closing operation's sync. */
-    bool sync = command->kind == SNAG_UI_SUBMITTED || command->kind == SNAG_UI_ROLLOUT_END ||
-        command->kind == SNAG_UI_ROLLOUT_ABORT || command->kind == SNAG_UI_ERROR ||
-        command->kind == SNAG_UI_HOST || command->kind == SNAG_UI_HELP ||
-        command->kind == SNAG_UI_CHOICES;
-    int rc = append_record(writer, data, 1u, sync);
+    int rc = append_record(writer, data, 1u);
     if (!rc && command->kind == SNAG_UI_DURABLE &&
         !strcmp(command->text, "response_completed")) {
         json_decref(writer->response);
@@ -222,7 +215,7 @@ snag_presentation_start(struct snag_presentation_writer *writer, uint64_t next_s
     }
     json_t *data = json_pack("{s:I}", "next_sequence", (json_int_t)next_sequence);
     if (!data) return -1;
-    int rc = append_record(writer, data, 2u, true);
+    int rc = append_record(writer, data, 2u);
     json_decref(data);
     if (!rc) writer->origin = next_sequence;
     return rc;

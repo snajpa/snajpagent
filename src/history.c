@@ -438,7 +438,8 @@ history_append(int fd, const struct snag_history_snapshot *snapshot, int64_t *en
         if (history_encode(&encoded, history_item(snapshot, i)) < 0 ||
             snag_buf_putc(&encoded, '\n') < 0 || snag_write_full(fd, encoded.data, encoded.len) < 0)
             goto out;
-    if (snag_sync_file(fd) < 0 || (*end = snag_seek(fd, 0, SEEK_END)) < 0) goto out;
+    /* A completed write is immediately available to concurrent history readers. */
+    if ((*end = snag_seek(fd, 0, SEEK_END)) < 0) goto out;
     rc = 0;
 out:
     if (rc < 0) (void)snag_truncate(fd, original);

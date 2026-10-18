@@ -177,9 +177,12 @@ bool snag_text_locale_init(void);
 struct tm *snag_localtime(const time_t *seconds, struct tm *out);
 struct tm *snag_gmtime(const time_t *seconds, struct tm *out);
 int snag_write_full(int fd, const void *data, size_t len);
+/* Kernel-managed asynchronous disk writeback. Successful writes/renames are
+ * immediately visible; these calls never wait for a disk barrier. A crash or
+ * power loss can discard the newest tail. Invalid descriptors still fail. */
 int snag_sync_file(int fd);
 int snag_sync_dir(int fd);
-/* Full data/metadata synchronization; unlike sync_dir, unsupported is failure. */
+/* Compatibility entry point with the same asynchronous writeback contract. */
 int snag_fsync(int fd);
 struct snag_file_privacy {
     bool real_owner, effective_owner, private_access;
