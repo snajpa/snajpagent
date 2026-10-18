@@ -115,8 +115,13 @@ Ban revokes approvals for that name and retires its active guidance before the
 next provider request. `/skills unban <skill>` removes the exclusion but restores
 no approval; a subsequent explicit review/approval is required.
 
+Bare `/skills` refreshes policy and reports the session's loaded bindings by name
+and qualified ID, with an explicit empty state. It uses the existing pinned
+bindings directly; `/skills list` inspects the available catalog. `--all-skills`
+widens catalog inspection while the loaded summary keeps its session scope.
+
 Normal catalogs, completion, model context, model list/show/activate results and
-operator `/skills` listings omit banned and unapproved contents. Unknown/hidden
+operator `/skills list` listings omit banned and unapproved contents. Unknown/hidden
 lookups give a generic unavailable response to the model rather than disclosing
 hidden descriptions. Operator-facing diagnostics may state the exclusion reason.
 

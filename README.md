@@ -33,6 +33,7 @@ Current source supports operator-curated task skills. Packages default to
 `~/.snajpagent/skills`; inspect effective roots with `/skills paths`. Import and
 review a package, then approve its exact full-package digest with
 `/skills approve ID --digest HASH`. Unapproved metadata stays out of model context.
+Use `/skills` to see loaded skills and `/skills list` to browse available packages.
 `/skills ban NAME` excludes that name across versions; `--all-skills` enables
 operator inspection only. See the manual's **Curated skills** workflow.
 

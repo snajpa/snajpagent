@@ -455,6 +455,26 @@ done:
     return rc;
 }
 
+static int
+report_loaded_skills(struct app_state *app)
+{
+    size_t count = json_array_size(app->session.active_skills);
+    if (!count) {
+        return snag_app_report(app, SNAG_UI_HOST,
+            "No skills loaded. Use /skills list to browse available skills.");
+    }
+    struct snag_buf text = {.max = SIZE_MAX};
+    int rc = snag_buf_printf(&text, "Loaded skills (%zu):", count);
+    for (size_t i = 0; rc == 0 && i < count; ++i) {
+        const json_t *skill = json_array_get(app->session.active_skills, i);
+        rc = snag_buf_printf(&text, "\n  %s (%s)",
+            snag_json_string(skill, "name"), snag_json_string(skill, "id"));
+    }
+    if (rc == 0) rc = snag_app_report(app, SNAG_UI_HOST, (char *)text.data);
+    snag_buf_free(&text);
+    return rc;
+}
+
 int
 snag_app_skills_command(struct app_state *app, const char *line, bool *handled)
 {
@@ -465,6 +485,11 @@ snag_app_skills_command(struct app_state *app, const char *line, bool *handled)
     while (isspace((unsigned char)*action)) ++action;
     if (!strncmp(action, "use ", 4u)) { *handled = false; return 0; }
     char error[512] = {0};
+    if (!*action) {
+        if (snag_app_skills_refresh(app, error, sizeof(error)) < 0)
+            return snag_app_report(app, SNAG_UI_ERROR, error);
+        return report_loaded_skills(app);
+    }
     char *copy = strdup(action);
     if (!copy) return -1;
     char *operand = strchr(copy, ' ');
@@ -473,8 +498,8 @@ snag_app_skills_command(struct app_state *app, const char *line, bool *handled)
         while (isspace((unsigned char)*operand)) ++operand;
     }
     json_t *result = NULL;
-    if (app->cli->all_skills && (!*copy || !strcmp(copy, "list") || !strcmp(copy, "show"))) {
-        int rc = manage_command(app, *copy ? copy : "list", operand, error, sizeof(error));
+    if (app->cli->all_skills && (!strcmp(copy, "list") || !strcmp(copy, "show"))) {
+        int rc = manage_command(app, copy, operand, error, sizeof(error));
         free(copy);
         return rc < 0 ? snag_app_report(app, SNAG_UI_ERROR, error) : rc;
     }
@@ -517,7 +542,7 @@ snag_app_skills_command(struct app_state *app, const char *line, bool *handled)
         }
         json_decref(active);
     } else if (snag_app_skills_refresh(app, error, sizeof(error)) == 0) {
-        if (!*copy || !strcmp(copy, "list") || !strcmp(copy, "refresh")) {
+        if (!strcmp(copy, "list") || !strcmp(copy, "refresh")) {
             result = snag_skills_list(app->session.skills_catalog, operand, 0u, 50u);
         } else if (operand && (!strcmp(copy, "show") || !strcmp(copy, "prompt"))) {
             const json_t *entry = snag_skills_resolve(app->session.skills_catalog,

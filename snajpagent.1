@@ -4526,6 +4526,10 @@ Arguments are literal text. Package scripts use ordinary declared file/process
 tools with the existing permissions, yielding and cancellation behavior.
 Each newly loaded skill displays a green lifecycle notice, "Skill loaded: NAME",
 in the rollout. Reusing an active binding keeps the existing notice.
+Use /skills to see the loaded skills by name and qualified ID. An empty session
+reports "No skills loaded". The command rechecks policy and removes revoked
+bindings before listing them. Use /skills list to browse the available catalog;
+\-\-all-skills expands that catalog inspection while /skills shows loaded bindings.
 Keep retained package contents unchanged and place outputs and caches elsewhere.
 Run Python helpers with python3 \-B or PYTHONDONTWRITEBYTECODE=1 to avoid bytecode
 cache writes. Changes inside a retained package invalidate its manifest at the next
