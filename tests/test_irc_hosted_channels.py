@@ -10,6 +10,54 @@ from tmux_terminal import read_events
 
 
 class HostedChannelTests(QueryFixture):
+    def test_resume_chat_history_is_on_demand(self):
+        with self.config.open('a') as out:
+            out.write('resume_history_turns = 0\n')
+        self.command('/chat 1/#lab', f'chat 127.0.0.1:{self.port} #lab')
+        self.command('saved-room-history-marker')
+        self.wire('PRIVMSG #lab :saved-room-history-marker')
+        sid = read_events(self.root / 'state')[0].parent.name
+        self.command('/exit')
+        self.term.wait_exit()
+        self.assertEqual(self.term.process.returncode, 0)
+        self.peer.close()
+        self.observer.close()
+        self.term = self.start('--resume', sid)
+        self.wait_idle()
+        self.term.write(b'/session\r')
+        self.term.until(b'current session:')
+        self.assertNotIn(b'saved-room-history-marker', self.term.output)
+        self.assertNotIn(b'history replayed', self.term.output)
+        self.command('/history', 'IRC history:')
+        self.assertIn(b'saved-room-history-marker', self.term.output)
+        self.peer = self.connect('query-peer')
+        self.peer.wait(b'PRIVMSG #lab :saved-room-history-marker', timeout=5)
+        self.command('live-after-resume-marker')
+        self.wire('PRIVMSG #lab :live-after-resume-marker')
+        self.assertIn(b'live-after-resume-marker', self.term.output)
+
+    def test_chat_history_preserves_private_scope_and_records_legacy(self):
+        self.test_chat_history_preserves_private_scope_and_records()
+
+    def test_chat_history_preserves_private_scope_and_records(self):
+        self.direct('queryop', 'operator-history-secret')
+        self.command('/chat 1/#lab', f'chat 127.0.0.1:{self.port} #lab')
+        self.command('public-history-marker')
+        self.wire('PRIVMSG #lab :public-history-marker')
+        before = [e for e in self.events() if e['type'] in ('irc_event', 'irc_event_v2')]
+        self.command('/history 100', 'IRC history:')
+        self.assertIn(b'public-history-marker', self.term.output)
+        self.assertNotIn(b'operator-history-secret', self.term.output)
+        self.command('/query 1/query-peer', '[query-peer]')
+        self.command('/history 100', 'IRC history:')
+        self.assertIn(b'operator-history-secret', self.term.output)
+        self.assertNotIn(b'public-history-marker', self.term.output)
+        self.command('/history 0', 'IRC history:')
+        self.assertNotIn(b'operator-history-secret', self.term.output)
+        self.command('/history invalid', 'usage: /history [N]')
+        after = [e for e in self.events() if e['type'] in ('irc_event', 'irc_event_v2')]
+        self.assertEqual(before, after)
+
     def audit_send(self, text='sent-corpus-audit-marker'):
         channel = self.channels()['agent']['routing']['conversation_id']
         issued = False

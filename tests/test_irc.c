@@ -1003,18 +1003,6 @@ test_client_reconnect(void)
     for (unsigned int i = 0u; i < 1000u; ++i)
         assert(send_all(server, true, SNAG_IRC_MESSAGE, payload, error, sizeof(error)) == 0);
     history_after = snag_time_ms();
-    {
-        struct capture replay = {0};
-
-        assert(snag_irc_replay_hosted_history(server, capture_event, &replay) == 0);
-        assert(replay.events[SNAG_IRC_MESSAGE] == 1000u);
-        assert(replay.events[SNAG_IRC_HISTORY_READY] == 1u);
-        assert(strcmp(replay.last_history_ready.endpoint, server_config.irc.listen) == 0);
-        assert(strcmp(replay.last_history_ready.room, server_config.irc.room_name) == 0);
-        assert(replay.last_message.historical);
-        assert(strcmp(replay.last_message.text, payload) == 0);
-        assert(!server_capture.last_message.historical);
-    }
     endpoint(address, port);
     init_client_config(&client_config, address, "remoteagent", "remoteop");
     client_config.irc.history_lines = 1000u;

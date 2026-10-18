@@ -34,6 +34,32 @@ class ChannelWorkspaceTests(ChannelFixture):
         self.child.repaint_until(b'[' + room.encode() + b']')
         self.normal()
 
+    def test_slash_history_uses_the_selected_pane_conversation(self):
+        self.server.send('queryop', ':peer!u@fake PRIVMSG #side :pane-public-marker\r\n'
+                         ':peer!u@fake PRIVMSG queryop :pane-private-marker\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'pane-private-marker'
+                             for e in self.events()))
+
+        def history_report(included, excluded):
+            before = len(self.state()['buffers'][0].get('reports', []))
+            self.child.write(b'i/history 100\r')
+            self.wait_snapshot(lambda rows:
+                len(self.state()['buffers'][0].get('reports', [])) > before)
+            self.normal()
+            self.child.command('report')
+            self.child.repaint_until(b'IRC history:')
+            self.assertIn(included, self.child.output)
+            self.assertNotIn(excluded, self.child.output)
+            self.child.command('history')
+
+        self.channel('#side')
+        history_report(b'pane-public-marker', b'pane-private-marker')
+        self.child.write(b'i/query 1/peer\r')
+        self.child.repaint_until(b'[peer]')
+        self.normal()
+        history_report(b'pane-private-marker', b'pane-public-marker')
+        self.child.finish('workspace detach')
+
     def test_command_chain_sends_to_the_newly_selected_conversation(self):
         self.child.write(b'i/query 1/private-peer; me chain-action; chat 1/#side; '
                          b'me side-action\r')

@@ -41,8 +41,9 @@ class QueryFixture(unittest.TestCase):
         self.terminals = []
         self.peers = []
         resume = ()
-        # These cases deliberately recreate raw released-format append boundaries.
+        # These cases read released history or recreate raw append boundaries.
         if self._testMethodName in (
+                'test_chat_history_preserves_private_scope_and_records_legacy',
                 'test_active_query_reply_survives_resume',
                 'test_pending_query_reply_survives_resume',
                 'test_private_notice_reply_stays_closed_after_resume',

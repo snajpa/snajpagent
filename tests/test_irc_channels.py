@@ -479,6 +479,38 @@ class ReminderTests(ChannelFixture):
 
 
 class ChannelTests(ChannelFixture):
+    def test_catchup_is_retained_for_selected_history_without_auto_display_legacy(self):
+        self.test_catchup_is_retained_for_selected_history_without_auto_display()
+
+    def test_catchup_is_retained_for_selected_history_without_auto_display(self):
+        self.command('/chat 1/#lab', f'chat {self.server.endpoint} #lab')
+        self.term.output.clear()
+        self.server.send('queryop', ':fake BATCH +saved chathistory #lab 0 1\r\n'
+            '@batch=saved :channel-peer!u@fake PRIVMSG #lab :catchup-only-marker\r\n'
+            ':fake BATCH -saved\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'catchup-only-marker'
+                             for e in self.events()))
+        self.wait(lambda: any(e['data'].get('text', '').startswith('history gap:')
+                             for e in self.events()))
+        self.term.write(b'/session\r')
+        self.term.until(b'current session:')
+        self.assertNotIn(b'catchup-only-marker', self.term.output)
+        self.assertNotIn(b'history replayed', self.term.output)
+        self.assertIn(b'IRC history gap; use /history', self.term.output)
+        self.server.send('queryop', ':channel-peer!u@fake PRIVMSG #lab :live-chat-marker\r\n')
+        self.term.until(b'live-chat-marker')
+        self.wait_idle()
+        self.command('/chat 1/#side', f'chat {self.server.endpoint} #side')
+        self.command('/history 100', 'IRC history:')
+        self.assertNotIn(b'catchup-only-marker', self.term.output)
+        self.assertNotIn(b'live-chat-marker', self.term.output)
+        self.command('/chat 1/#lab', f'chat {self.server.endpoint} #lab')
+        self.command('/history 100', 'IRC history:')
+        self.assertIn(b'catchup-only-marker', self.term.output)
+        self.assertIn(b'live-chat-marker', self.term.output)
+        self.command('/history 1', 'IRC history: 1 selected conversation records.')
+        self.assertNotIn(b'catchup-only-marker', self.term.output)
+
     def test_resume_restores_renamed_identities_and_agent_rooms(self):
         self.run_calls(('irc_nick', dict(destination='1', nick='resumed-agent')))
         self.wait(lambda: 'resumed-agent' in self.server.links)
