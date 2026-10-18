@@ -427,6 +427,60 @@ class RuntimeSkills(SkillsCase):
         self.assertEqual(len(requests), 1)
         self.assertIn(prompt, json.dumps(requests[0]["input"]))
 
+    def test_human_skills_empty_state_ignores_catalog_inspection(self):
+        from tmux_terminal import TmuxTerminal
+        provider = self.configured_provider()
+        self.skill(self.dotdir / "skills", "pending-package", body="UNLOADED-BODY")
+        for all_skills in (False, True):
+            with self.subTest(all_skills=all_skills):
+                args = ("--no-listen", "--no-client")
+                if all_skills:
+                    args += ("--all-skills",)
+                with TmuxTerminal(self.root / f"summary-{all_skills}", BINARY,
+                        self.workspace, self.dotdir, self.dotdir / "config.ini", 140, 42,
+                        args=args, environment=self.environment) as terminal:
+                    terminal.wait("host-model")
+                    screen = terminal.submit_wait("/skills   ", "No skills loaded.")
+                    self.assertIn("/skills list", screen)
+                    self.assertNotIn("pending-package", screen)
+                    self.assertNotIn('"entries"', screen)
+        self.assertEqual(provider.requests, [])
+
+    def test_human_skills_lists_loaded_bindings_and_rechecks_revocation(self):
+        import shutil
+        from tmux_terminal import TmuxTerminal
+        provider = self.configured_provider()
+        package = self.skill(self.dotdir / "skills", body="PRIVATE-PINNED-GUIDANCE")
+        review = self.run_cli("review", "sample")
+        self.operator_approve(review)
+        self.skill(self.dotdir / "skills", "unloaded-package", body="UNLOADED-BODY")
+
+        def respond(handler, request, sequence):
+            provider.reply(handler, provider.response_body(sequence, "GUIDANCE_DONE").encode(),
+                close_header=True)
+
+        provider.runtime_handler = respond
+        with TmuxTerminal(self.root / "loaded-summary", BINARY, self.workspace, self.dotdir,
+                self.dotdir / "config.ini", 140, 42,
+                args=("--no-listen", "--no-client", "--all-skills"),
+                environment=self.environment) as terminal:
+            terminal.wait("host-model")
+            terminal.submit_wait("Use $sample to answer.", "GUIDANCE_DONE")
+            shutil.rmtree(package)
+            self.assertEqual(self.run_cli("list")["total"], 0)
+            screen = terminal.submit_wait("/skills", "Loaded skills (1):", join_wrapped=True)
+            summary = screen.rsplit("Loaded skills (1):", 1)[1]
+            self.assertIn("sample", summary)
+            self.assertIn(review["id"], summary)
+            self.assertNotIn("unloaded-package", summary)
+            self.assertNotIn("PRIVATE-PINNED-GUIDANCE", summary)
+            self.assertNotIn('"entries"', summary)
+            self.run_cli("ban", "sample")
+            terminal.submit("/skills")
+            terminal.wait_until(lambda text: text.count("No skills loaded.") == 1,
+                "empty loaded-skills summary after revocation")
+            self.assertEqual(len(provider.requests), 1)
+
     def test_price_alongside_approved_skill_preserves_activation(self):
         provider = self.configured_provider()
         self.skill(self.dotdir / "skills", body="APPROVED-PRICE-GUIDANCE")
