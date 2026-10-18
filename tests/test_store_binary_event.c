@@ -22,7 +22,10 @@ assert_rejected(struct snag_binary_record record)
 {
     struct snag_binary_event sentinel = {.kind = SNAG_BINARY_GOAL_CANCELLED};
     struct snag_binary_event out = sentinel;
-    assert(snag_binary_event_decode(&record, &out) < 0);
+    int rc = snag_binary_event_decode(&record, &out);
+    if (rc >= 0) fprintf(stderr, "unexpected accepted record: kind=%u version=%u size=%zu\n",
+        record.kind, record.version, record.size);
+    assert(rc < 0);
     assert(!memcmp(&out, &sentinel, sizeof(out)));
 }
 
@@ -1834,7 +1837,7 @@ test_response_starts(void)
         "\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33"
         "\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33"
         "\x01\0\0\0m\x03\0\0\0cap\x01\0\0\0p\0\0\0\0";
-    assert(SNAG_BINARY_RESPONSE_STARTED == 160 && snag_binary_event_version(event.kind) == 1u);
+    assert(SNAG_BINARY_RESPONSE_STARTED == 160 && snag_binary_event_version(event.kind) == 2u);
     assert(payload.len == sizeof(legacy_bytes) - 1u &&
         !memcmp(payload.data, legacy_bytes, payload.len));
     roundtrip(&event);

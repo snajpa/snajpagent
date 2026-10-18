@@ -140,6 +140,10 @@ test_producer_candidate_ownership(void)
     source.outputs = calloc(1u, sizeof(*source.outputs));
     source.public = json_pack("[{s:s,s:s}]", "provider_item_id", "part", "text", "hello");
     assert(source.input.paths && source.queue && source.outputs && source.public);
+    source.host = snag_binary_host_source_new(source.public, 2u);
+    assert(source.host);
+    source.host->parts[0] = (struct snag_binary_ref){7u, 20u, 5u};
+    source.host->parts[1] = (struct snag_binary_ref){7u, 30u, 3u};
     source.queue[0] = (struct snag_binary_input_source){.creation = 8u,
         .text = {.field = SNAG_BINARY_INPUT_TEXT, .target = {10u, 40u, 5u}},
         .content = {.field = SNAG_BINARY_INPUT_CONTENT, .target = {8u, 60u, 4u}},
@@ -157,6 +161,7 @@ test_producer_candidate_ownership(void)
     assert(!snag_binary_producer_clone(&staged, &source));
     assert(!staged.field.data && !staged.field.len && staged.field.max == SNAG_MAX_EVENT_LINE);
     assert(staged.queue != source.queue && staged.outputs != source.outputs);
+    assert(staged.host == source.host && source.host->owners == 2u);
     assert(staged.input.paths == source.input.paths && staged.public == source.public);
     staged.queue[0].text.target.sequence = 99u;
     staged.outputs[0].value.source.bytes = 99u;
@@ -2181,6 +2186,321 @@ response_data(void)
         "provider", "default", "provider_source_sha256", ZERO_HASH,
         "request_sha256", ZERO_HASH, "requested_output_tokens", "response_id", OTHER_ID,
         "source_bound", 0, "steering_ids", "turn_id", GOAL_ID));
+}
+
+static void
+test_host_literal_candidates(void)
+{
+    json_t *data = response_data();
+    json_t *host = json_pack("[{s:s,s:s},{s:s,s:s},{s:s,s:s}]",
+        "role", "user", "content", SNAG_HOST_CONTEXT_BEGIN,
+        "role", "user", "content", "stable host fact with an original source",
+        "role", "user", "content", SNAG_HOST_CONTEXT_END);
+    assert(host && !json_object_set_new(data, "host_context", host));
+    struct snag_binary_producer writer = {.field = {.max = SNAG_MAX_EVENT_LINE}};
+    struct snag_session state = {0};
+    enum snag_binary_kind kind;
+    assert(!snag_buf_reserve(&writer.field, 1024u));
+    assert(!snag_binary_legacy_encode(&writer.field, "response_started", data, &kind));
+    struct snag_binary_record record = {.kind = kind,
+        .version = snag_binary_event_version(kind),
+        .payload = writer.field.data, .size = writer.field.len};
+    assert(!snag_binary_producer_reference(&writer, &state, 1u, &record, data));
+    struct snag_binary_host_source *committed = writer.host;
+    assert(committed && committed->owners == 1u);
+    for (unsigned int variant = 0u; variant < 9u; ++variant) {
+        struct snag_binary_producer staged = {0};
+        assert(!snag_binary_producer_clone(&staged, &writer));
+        assert(!snag_binary_legacy_encode(&staged.field, "response_started", data, &kind));
+        record.payload = staged.field.data;
+        record.size = staged.field.len;
+        struct snag_binary_event event;
+        assert(!snag_binary_event_decode(&record, &event));
+        size_t base = (size_t)(event.data.response_started.host_context.data - record.payload);
+        json_t *candidate = json_deep_copy(data);
+        assert(candidate);
+        switch (variant) {
+        case 0u:
+            assert(!json_object_del(candidate, "host_context"));
+            break;
+        case 1u:
+            staged.field.data[0] &= (unsigned char)~4u;
+            break;
+        case 2u:
+            staged.field.data[1] |= 1u;
+            break;
+        case 3u:
+            ++staged.field.data[base];
+            break;
+        case 4u:
+            staged.field.data[base + 4u] = 0xffu;
+            break;
+        case 5u:
+            staged.field.data[base + 5u] ^= 1u;
+            break;
+        case 6u:
+            staged.field.data[base + 9u] ^= 1u;
+            break;
+        case 7u:
+            staged.field.data[staged.field.len - 1u] ^= 1u;
+            break;
+        default:
+            assert(!json_object_set_new(candidate, "host_context", json_string("wrong shape")));
+            break;
+        }
+        assert(snag_binary_producer_reference(&staged, &state, 2u, &record, candidate) < 0);
+        assert(writer.host == committed && committed->owners == 2u);
+        snag_binary_producer_free(&staged);
+        assert(committed->owners == 1u && json_equal(committed->snapshot, host));
+        json_decref(candidate);
+    }
+    for (unsigned int tight = 0u; tight < 2u; ++tight) {
+        struct snag_binary_producer staged = {0};
+        assert(!snag_binary_producer_clone(&staged, &writer));
+        assert(!snag_buf_reserve(&staged.field, 1024u));
+        assert(!snag_binary_legacy_encode(&staged.field, "response_started", data, &kind));
+        unsigned char *allocation = staged.field.data;
+        if (tight) staged.field.cap = staged.field.len;
+        record.payload = allocation;
+        record.size = staged.field.len;
+        assert(!snag_binary_producer_reference(&staged, &state, 2u, &record, data));
+        assert(record.payload == allocation);
+        struct snag_binary_event event;
+        assert(!snag_binary_event_decode(&record, &event));
+        assert(event.data.response_started.host_references);
+        if (tight) {
+            assert(!staged.host && staged.field.data == allocation);
+        } else {
+            assert(staged.host && staged.host->storage == allocation);
+            assert(!staged.field.data && !staged.field.len && !staged.field.cap);
+        }
+        assert(writer.host == committed && committed->owners == 1u);
+        snag_binary_producer_free(&staged);
+    }
+    snag_binary_producer_free(&writer);
+    json_decref(data);
+}
+
+static void
+test_host_reference_rejection(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_record *record, uint64_t sequence, uint64_t chain)
+{
+    struct snag_binary_event event;
+    assert(!snag_binary_event_decode(record, &event));
+    const struct snag_binary_response_start *start = &event.data.response_started;
+    assert(start->host_references && start->host_context.data[4] == 4u);
+    size_t base = (size_t)(start->host_context.data - record->payload);
+    uint64_t invalid[] = {0u, sequence, through->next_seq, UINT64_MAX, sequence - 1u, chain};
+    struct snag_buf copy = {.max = SNAG_MAX_EVENT_LINE};
+    assert(!snag_buf_append(&copy, record->payload, record->size));
+    struct snag_binary_record altered = *record;
+    altered.payload = copy.data;
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(*invalid); ++i) {
+        for (size_t j = 0u; j < 8u; ++j)
+            copy.data[base + 5u + j] = (unsigned char)(invalid[i] >> (8u * j));
+        const char *sentinel = "unchanged";
+        const char *type = sentinel;
+        json_t *data = json_true();
+        assert(snag_binary_checkpoint_record_project(fd, through, NULL,
+            &altered, sequence, NULL, &type, &data) < 0);
+        assert(type == sentinel && data == json_true());
+    }
+    snag_buf_free(&copy);
+}
+
+struct host_snapshots {
+    json_t *expected;
+    size_t count;
+};
+
+static int
+visit_host_snapshot(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    (void)state; (void)sequence; (void)error; (void)error_size;
+    struct host_snapshots *snapshots = opaque;
+    if (!strcmp(type, "response_started")) {
+        assert(json_equal(data, json_array_get(snapshots->expected, snapshots->count)));
+        ++snapshots->count;
+    }
+    return 0;
+}
+
+static void
+test_host_checkpoint_projection(struct snag_session *session,
+    const struct snag_binary_anchor *through, const json_t *expected, const uint64_t *sequences)
+{
+    json_t *recent = json_array(), *history = json_array();
+    assert(recent && history);
+    for (size_t i = 0u; i < 9u; ++i) {
+        assert(!json_array_append_new(recent, json_pack(
+            "{s:I,s:i,s:s,s:b,s:b,s:b}", "seq", (json_int_t)sequences[i], "time", 1,
+            "turn", GOAL_ID, "active", true, "unfinished", false, "processes", false)));
+    }
+    struct snag_buf recipe = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_provider_encode(&recipe, session, recent, history));
+    json_t *events = NULL, *sources = NULL;
+    assert(!snag_binary_checkpoint_provider_read(session->log_fd, through, NULL,
+        recipe.data, recipe.len, NULL, NULL, &events, &sources));
+    assert(json_array_size(events) == 9u && !json_array_size(sources));
+    json_t *previous = NULL;
+    for (size_t i = 0u; i < 9u; ++i) {
+        json_t *data = json_object_get(json_array_get(events, i), "data");
+        assert(json_equal(data, json_array_get(expected, i)));
+        json_t *host = json_object_get(data, "host_context");
+        /* Reusing the authenticated fact prevents another source-batch read
+         * and JSON copy for every retained response in a large checkpoint. */
+        if (i == 1u || i == 4u || i == 6u || i == 8u)
+            assert(json_array_get(host, 3u) == json_array_get(previous, 3u));
+        previous = host;
+    }
+    json_decref(events);
+    json_decref(sources);
+    snag_buf_free(&recipe);
+    json_decref(recent);
+    json_decref(history);
+}
+
+static void
+test_host_snapshot_references(struct snag_store *store, const char *cwd)
+{
+    char *large = malloc(65537u);
+    assert(large);
+    memset(large, 'x', 65536u);
+    memcpy(large, "\xe2\x82\xac", 3u);
+    large[65536u] = '\0';
+    struct snag_session session, restored;
+    snag_session_init(&session);
+    snag_session_init(&restored);
+    char error[512] = {0};
+    assert(!snag_session_create(store, &session, cwd, "default", "fixture", "default",
+        error, sizeof(error)));
+    json_t *paths = json_array();
+    assert(paths);
+    commit_data(&session, "input_received", input_data("host snapshots", false, paths));
+    commit_data(&session, "turn_started",
+        direct_turn_data(cwd, "host snapshots", GOAL_ID, 1, false, paths));
+    json_decref(paths);
+    json_t *expected = json_array();
+    assert(expected);
+    char id[SNAG_ID_HEX_LEN + 1u];
+    memcpy(id, session.id, sizeof(id));
+    uint64_t sequences[9];
+    for (unsigned int i = 0u; i < 9u; ++i) {
+        if (i == 5u) assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+        if (i == 7u) {
+            snag_session_close(&session);
+            assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+            assert(session.active_turn && session.active_cycle == 7u);
+        }
+        json_t *host = json_pack("[{s:s,s:s},{s:s,s:s},{s:s,s:s}]",
+            "role", "user", "content", SNAG_HOST_CONTEXT_BEGIN,
+            "role", "user", "content", "123456789012",
+            "role", "user", "content", "1234567890123");
+        assert(host);
+        if (i != 2u) assert(!json_array_append_new(host,
+            json_pack("{s:s,s:s}", "role", "user", "content", large)));
+        char current[40];
+        snprintf(current, sizeof(current), "current host snapshot %u", i);
+        assert(!json_array_append_new(host,
+            json_pack("{s:s,s:s}", "role", "user", "content", current)));
+        assert(!json_array_append_new(host,
+            json_pack("{s:s,s:s}", "role", "user", "content", SNAG_HOST_CONTEXT_END)));
+        json_t *data = response_data();
+        assert(!json_object_set_new(data, "cycle", json_integer(i + 1u)));
+        assert(!json_object_set_new(data, "host_context", host));
+        assert(!json_array_append(expected, data));
+        sequences[i] = commit_data(&session, "response_started", data);
+        commit_data(&session, "response_failed", json_pack(
+            "{s:s,s:s,s:i,s:s,s:i,s:s,s:[]}", "turn_id", GOAL_ID, "response_id", OTHER_ID,
+            "cycle", i + 1u, "class", "internal", "retry_count", 0,
+            "message", "host snapshot fixture", "partial_public"));
+        commit_data(&session, "turn_recovery", json_pack("{s:s,s:s,s:s}",
+            "turn_id", GOAL_ID, "class", "internal", "message", "host snapshot fixture"));
+    }
+    struct snag_binary_anchor through;
+    assert(!snag_session_binary_checkpoint_capture(&session, &through, NULL, NULL,
+        error, sizeof(error)));
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf original = {.max = SNAG_BINARY_BATCH_MAX};
+    for (size_t i = 0u; i < 9u; ++i) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor before;
+        assert(!snag_binary_batch_find(session.log_fd, &through, sequences[i],
+            &scratch, &batch, &before));
+        struct snag_binary_record record;
+        uint64_t sequence;
+        size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
+        do {
+            assert(!snag_binary_record_next(&batch, &cursor, &record, &sequence));
+        } while (sequence != sequences[i]);
+        struct snag_binary_event event;
+        assert(!snag_binary_event_decode(&record, &event));
+        assert(record.kind == SNAG_BINARY_RESPONSE_STARTED && record.version == 2u);
+        struct snag_binary_response_start *start = &event.data.response_started;
+        bool cold = i == 0u || i == 5u || i == 7u;
+        assert(start->host_references == !cold);
+        if (i == 4u) test_host_reference_rejection(session.log_fd, &through,
+            &record, sequences[i], sequences[1]);
+        struct snag_buf literal = {.max = SNAG_MAX_EVENT_LINE};
+        enum snag_binary_kind kind;
+        assert(!snag_binary_legacy_encode(&literal, "response_started",
+            json_array_get(expected, i), &kind));
+        size_t offset = 0u, index = 0u, savings = 0u;
+        struct snag_binary_text text;
+        struct snag_binary_ref reference;
+        json_t *host = json_object_get(json_array_get(expected, i), "host_context");
+        int rc;
+        while ((rc = snag_binary_host_next(start, &offset, &text, &reference)) == 0) {
+            json_t *content = json_object_get(json_array_get(host, index++), "content");
+            if (reference.sequence) {
+                struct snag_binary_batch source;
+                assert(reference.sequence < sequences[i]);
+                assert(!snag_binary_batch_find(session.log_fd, &through, reference.sequence,
+                    &original, &source, &before));
+                assert(!snag_binary_host_ref_resolve(&reference, &source, &text));
+                savings += text.size - 12u;
+                if (text.size == 65536u) {
+                    size_t original_index = i == 1u ? 0u : i == 4u ? 3u : i - 1u;
+                    assert(reference.sequence == sequences[original_index]);
+                }
+                struct snag_binary_ref bad = reference;
+                struct snag_binary_text unchanged = text;
+                ++bad.offset;
+                assert(snag_binary_host_ref_resolve(&bad, &source, &text) < 0);
+                assert(text.data == unchanged.data && text.size == unchanged.size);
+            }
+            assert(text.size == json_string_length(content));
+            assert(!memcmp(text.data, json_string_value(content), text.size));
+        }
+        assert(rc == 1 && index == json_array_size(host));
+        assert(record.size + savings == literal.len);
+        if (i == 1u || i == 4u || i == 6u || i == 8u) assert(savings > 65000u);
+        if (i == 3u) assert(savings < 65536u); /* A deleted fact returns as a new literal. */
+        struct snag_binary_record old = record;
+        old.version = 1u;
+        assert((snag_binary_event_decode(&old, &event) == 0) == cold);
+        snag_buf_free(&literal);
+    }
+    struct host_snapshots snapshots = {.expected = expected};
+    struct snag_binary_recovery recovery;
+    struct snag_binary_checkpoint_sources sources = {0};
+    assert(!snag_store_reconcile_binary(&session, &restored, visit_host_snapshot, &snapshots,
+        &recovery, &sources, error, sizeof(error)));
+    assert(snapshots.count == 9u && restored.next_seq == session.next_seq);
+    test_host_checkpoint_projection(&session, &through, expected, sequences);
+    test_store_binary_core_state(session.log_fd, &through, &sources, &restored);
+    snag_binary_checkpoint_sources_free(&sources);
+    snag_session_close(&restored);
+    assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+    snag_session_close(&session);
+    assert(!snag_session_open(store, &restored, id, error, sizeof(error)));
+    assert(restored.active_turn && restored.active_cycle == 9u);
+    snag_session_close(&restored);
+    snag_buf_free(&original);
+    snag_buf_free(&scratch);
+    json_decref(expected);
+    free(large);
 }
 
 static void
@@ -5216,6 +5536,8 @@ test_skill_checkpoint(struct snag_store *store, const char *cwd)
 void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
+    test_host_snapshot_references(store, cwd);
+    test_host_literal_candidates();
     test_skill_checkpoint(store, cwd);
     test_live_native_snapshot(store, cwd);
     test_compacted_irc_turn_resume(store, cwd, false);

@@ -2029,7 +2029,7 @@ test_native_voice_grouped(void)
     json_t *canary = json_object(), *output = canary;
     assert(canary);
     assert(snag_binary_checkpoint_record_project(session.log_fd, &after, NULL,
-        &records[5], 6u, &name, &output) == 1 && output == canary && !strcmp(name, "canary"));
+        &records[5], 6u, NULL, &name, &output) == 1 && output == canary && !strcmp(name, "canary"));
     json_decref(canary);
     struct snag_journal_cursor forward = {0};
     uint64_t visited = 1u;
