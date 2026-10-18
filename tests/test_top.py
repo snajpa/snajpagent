@@ -184,6 +184,14 @@ class TopTests(unittest.TestCase):
             self.assertGreaterEqual(watch, 0)
             self.addCleanup(os.close, watch)
             self.assertGreaterEqual(libc.inotify_add_watch(watch, os.fsencode(journal), 1), 0)
+        redirected = subprocess.run([str(PRODUCT), 'top', '--dotdir', str(self.state),
+                                     '--color', 'never'], capture_output=True, timeout=5)
+        self.assertEqual(redirected.returncode, 0, redirected.stderr)
+        self.assertIn(b'process=100 session=100', redirected.stdout)
+        self.assertFalse(journal.with_name('catalog.json').exists())
+        if watch >= 0:
+            self.assertFalse(select.select([watch], [], [], 0)[0],
+                             'redirected monitor read a metrics-backed journal')
         top = self.top(delay=None)
         top.until(b'process=100 session=100')
         # A different historical session still needs the real backfill child.
@@ -214,7 +222,11 @@ class TopTests(unittest.TestCase):
         # A large canonical record is valid but takes real verification work;
         # the first frame and quit must not depend on finishing that work.
         from test_session_listing import append_event
-        append_event(journal, 'session_named', {'name': 'cold', 'padding': 'x' * 2**22})
+        append_event(journal, 'irc_snapshot',
+                     {'reason': 'compaction', 'timestamp_ms': 1, 'text': 'x' * 2**22})
+        last = store_history.read_events(journal)[-1]
+        self.assertEqual(last['type'], 'irc_snapshot')
+        self.assertEqual(len(last['data']['text']), 2**22)
         before = hashlib.sha256(journal.read_bytes()).digest()
         began = time.monotonic()
         top = self.top(delay=None, wait=False)
