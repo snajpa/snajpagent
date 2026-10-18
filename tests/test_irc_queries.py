@@ -72,6 +72,10 @@ class QueryFixture(unittest.TestCase):
         self.wait_idle()
 
     def start(self, *args, ready=b'queryop@'):
+        # Protocol fixtures use chat; a resumed session may correctly save rollout.
+        # Request the fixture's view instead of depending on the old resume default.
+        if ready.endswith(b'@'):
+            args = ('--view', 'chat', *args)
         term = Terminal(self.root, ('--config', str(self.config), *args), subcommand=None,
                         extra_env={'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret', 'PAGER': ''})
         children = FixtureChildren(term.process.pid)

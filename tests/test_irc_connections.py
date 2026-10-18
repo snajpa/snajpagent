@@ -10,6 +10,13 @@ from tmux_terminal import read_events
 
 
 class ConnectionTests(ChannelFixture):
+    def connect_endpoint(self, server):
+        self.command('/connect ' + server.endpoint)
+        # NICK reaches the fixture before welcome/JOIN creates a usable scope.
+        self.wait(lambda: any(e['data'].get('endpoint') == server.endpoint and
+                  e['data'].get('routing', {}).get('identity') == 'operator' and
+                  e['data'].get('routing', {}).get('joined') for e in self.events()))
+
     def test_refused_nick_stays_visible_and_keeps_accepted_sender_usable(self):
         self.server.rejected_nick = 'taken'
         self.command('/connections 1', 'connection ' + self.server.endpoint)
@@ -46,8 +53,7 @@ class ConnectionTests(ChannelFixture):
     def test_nick_and_whois_use_the_selected_endpoint(self):
         second = ChannelServer()
         self.addCleanup(second.close)
-        self.command('/connect ' + second.endpoint)
-        self.wait(lambda: len(second.links) == 2)
+        self.connect_endpoint(second)
         self.command('/connections channel-session/' + second.endpoint + '/',
                      'connection ' + second.endpoint)
         self.command('/nick endpoint-op')
@@ -65,8 +71,7 @@ class ConnectionTests(ChannelFixture):
     def test_connection_selection_rejects_plain_text_and_scopes_query(self):
         second = ChannelServer()
         self.addCleanup(second.close)
-        self.command('/connect ' + second.endpoint)
-        self.wait(lambda: len(second.links) == 2)
+        self.connect_endpoint(second)
         self.command('/connections', self.server.endpoint + '/')
         self.command('/connections channel-session/' + second.endpoint + '/',
                      'connection ' + second.endpoint)

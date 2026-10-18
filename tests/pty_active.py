@@ -1425,10 +1425,12 @@ def test_public_index_gap():
 
 def test_public_index_diagnostic():
     child = Child([], DEFAULT_IDLE_PROMPT)
-    child.send_wait(b"public_index_decrease\r", b"index one")
-    failure_end = child.wait(b"public output indexes did not increase")
-    exhausted = child.wait(b"turn failed; try /retry", start=failure_end, timeout=20.0)
-    child.exit_cleanly(exhausted)
+    answer_end = child.send_wait(b"public_index_decrease\r", b"index one")
+    # The terminal diagnostic and failed-turn notice share the same boundary;
+    # their presentation order is independent of recoverable retry statuses.
+    failure_end = child.wait(b"public output indexes did not increase", start=answer_end)
+    exhausted = child.wait(b"turn failed; try /retry", start=answer_end, timeout=20.0)
+    child.exit_cleanly(max(failure_end, exhausted))
 
     log = events(child.session_id())
     failures = [item for item in log if item["type"] == "response_failed"]
@@ -2617,7 +2619,7 @@ def test_irc_update_prompt_names_update_and_replay_resolves_it():
             line = line.replace(old, json.dumps(legacy_text)[1:-1].encode())
         legacy.append(line)
     path.write_bytes(b"".join(legacy))
-    with Child(["--resume", sid], ready=None) as child:
+    with Child(["--resume", sid, "--view", "chat"], ready=None) as child:
         # The peer JOIN/MODE events can start a later background turn before
         # exit. Resume shows that unfinished turn by default; request enough
         # retained turns to inspect the message we deliberately rewrote.
@@ -3150,7 +3152,7 @@ def test_goal_interrupt_blocks_background_irc_restart():
     assert command is not None
     # Resume helpers must isolate ordinary reports from the caller's pager.
     with patch.dict(os.environ, {"PAGER": "true"}):
-        resumed = Child.from_command(command)
+        resumed = Child.from_command(command + " --view chat")
     with resumed:
         ready = resumed.wait(chat_prompt("goalop"))
         switched = resumed.send_wait_idle(b"/rollout\r", "── rollout ──".encode(),
@@ -3380,10 +3382,10 @@ def test_goal_refusal_failure_block_and_restart_state():
     assert not [item for item in log if item["type"] == "turn_recovery"]
 
     child = Child([], PROMPT.rstrip())
-    child.send_wait(b"/goal failing goal\r", b"fixture goal provider failed")
-    child.wait(b"Goal active; retrying")
+    child.send_wait(b"/goal failing goal\r", b"Goal active; retrying")
     done = child.wait(b"goal done", timeout=20.0)
     child.exit_cleanly(done)
+    assert b"fixture goal provider failed" not in child.buf
     log = events(child.session_id())
     assert not [e for e in log if e["type"] == "goal_paused"]
     assert len([e for e in log if e["type"] == "turn_recovery"]) == 4
@@ -5527,7 +5529,8 @@ def test_network_resume_roles():
     resumed_client = Child.from_command(client_command)
     header = resumed_client.wait(b"session id")
     resumed_client.wait(client_id[:8].encode(), start=header)
-    resumed_client.wait(chat_prompt("clientop"))
+    # The client left rollout selected; endpoint restoration preserves its view.
+    resumed_client.wait_idle_prompt()
     resumed_links = accept_connections(upstream, 2)
     resumed_client.exit_now()
     for connection in resumed_links:
@@ -6635,7 +6638,10 @@ def test_goal_orderly_quit_resume(modes=("eof", "five-ctrl-c", "sigterm", "sighu
                         break
                     assert time.monotonic() < deadline, bytes(resumed.buf)
                     resumed.read_once(0.05)
-                switched = resumed.send_wait_idle(b"/rollout\r", "── rollout ──".encode(), start=restored)
+                # The rollout host restores its saved view; chat hosts still
+                # need a view change before the idle-only exit.
+                if chat_only:
+                    resumed.send_wait_idle(b"/rollout\r", "── rollout ──".encode(), start=restored)
                 resumed.exit_now()
             else:
                 done = resumed.wait(b"goal done", start=restored)

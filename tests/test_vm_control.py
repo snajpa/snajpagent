@@ -752,7 +752,10 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(rollout(next(iter(self.snapshots().values()))[
             'state']['buffers'][0])['draft'], '')
         self.owner.release.set()
-        child.until(b'second answer')
+        deadline = time.monotonic() + 5
+        while not any('second answer' in row for row in current_rows(child).values()):
+            self.assertLess(time.monotonic(), deadline, bytes(child.output))
+            child.read(.02)
         self.escape(child)
         child.finish('workspace detach')
 

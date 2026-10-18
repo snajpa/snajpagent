@@ -2141,6 +2141,8 @@ class ContextMeterTests(unittest.TestCase):
         os.write(self.owner.initial.master, b'next small exact request after post-turn interruption\r')
         self.owner.initial.until(b'post-turn-answer-2')
         self.owner.initial.until('›'.encode())
+        # Streamed answer bytes and an earlier prompt can precede durable completion.
+        self.owner.wait_event('turn_completed', after_seq=completed['seq'])
         events = [e for e in read_events(self.owner.journal) if e['seq'] > before]
         names = [e['type'] for e in events]
         self.assertEqual(names.count('turn_completed'), 2)
