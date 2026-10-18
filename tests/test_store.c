@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#define _DEFAULT_SOURCE 1
 #include "checked_json.h"
 #include "store.h"
 #include "store_binary_legacy.h"
@@ -25,6 +26,41 @@
 #include <unistd.h>
 #ifndef _WIN32
 #include <sys/wait.h>
+#endif
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/syscall.h>
+static size_t private_fstat_count;
+
+/* Count actual metadata transfers, including the privacy helper's libc call. */
+int
+fstat(int fd, struct stat *info)
+{
+    ++private_fstat_count;
+    return (int)syscall(SYS_fstat, fd, info);
+}
+#endif
+
+#ifndef _WIN32
+static void
+test_private_fd_observation(struct snag_store *store)
+{
+    char error[256];
+    int fd = snag_create_private_at(store->root_fd, "private-check", true);
+    assert(fd >= 0);
+    for (unsigned int refused = 0u; refused < 2u; ++refused) {
+        assert(fchmod(fd, refused ? 0644 : 0600) == 0);
+#if defined(__linux__) && defined(__x86_64__)
+        private_fstat_count = 0u;
+#endif
+        int rc = snag_store_verify_private_fd(fd, false, "test file", error, sizeof(error));
+        assert(refused ? rc < 0 && errno == EACCES : rc == 0);
+#if defined(__linux__) && defined(__x86_64__)
+        assert(private_fstat_count == 1u);
+#endif
+    }
+    assert(close(fd) == 0);
+    assert(snag_unlink_at(store->root_fd, "private-check", false) == 0);
+}
 #endif
 
 void test_resume_preferences(struct snag_store *store, const char *cwd);
@@ -3179,6 +3215,9 @@ main(int argc, char **argv)
     snag_store_init(&store);
     snag_session_init(&session);
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
+#ifndef _WIN32
+    test_private_fd_observation(&store);
+#endif
     test_pending_session(&store, cwd);
     test_long_session_list(&store, cwd);
     test_reverse_history(&store, cwd);
