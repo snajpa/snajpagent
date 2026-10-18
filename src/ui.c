@@ -1230,6 +1230,7 @@ session_service(struct snag_ui_display *display, int timeout_ms)
         atomic_store(&display->runtime->session_attachment, 0u);
         atomic_store(&display->runtime->session_pending, 0u);
         atomic_store(&display->runtime->session_releasing, 0u);
+        snag_wakeup_send(display->runtime->actions.wake[1]);
     } else if (event == SNAG_SESSION_ERROR) {
         (void)atomic_fetch_add(&display->runtime->session_failures, 1u);
         snag_wakeup_send(display->runtime->actions.wake[1]);

@@ -5,7 +5,8 @@
 ## Unreleased
 
 - Publish idle attachment-state changes before the owner metrics sampling deadline,
-  keeping session listings current after semantic controllers attach or detach.
+  keeping session listings current after controllers attach or detach, including
+  signalled classic-view exits and broken terminal connections.
 
 - Cache verified session display metadata for fast listing, name and last-session
   discovery. Rebuild stale metadata for old writers while preserving authoritative
