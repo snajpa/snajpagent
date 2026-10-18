@@ -1095,12 +1095,18 @@ test_repeated_compaction_active_seam(struct snag_store *store, const char *cwd)
     const char *handle = "a6000000000000000000000000000000";
     const char *steer = "a7000000000000000000000000000000";
 
-    for (unsigned int reopen = 0u; reopen < 3u; ++reopen) {
+    for (unsigned int variant = 0u; variant < 9u; ++variant) {
+        unsigned int reopen = variant / 3u, kind = variant % 3u;
+        const char *pending_text = kind == 1u ? SNAG_IRC_REPLY_REMINDER_TEXT
+                                   : kind == 2u ? SNAG_EMPTY_OUTPUT_CORRECTION
+                                                : "pending steer stays outside summary";
         struct snag_session session;
         struct snag_context_projection projection = {0};
         struct snag_instruction_set instructions = {0};
         json_t *empty = json_array(), *output = compact_output_fixture();
         char error[512] = {0}, session_id[SNAG_ID_HEX_LEN + 1u];
+        char pending_source[SNAG_SHA256_HEX_LEN + 1u] = {0};
+        size_t pending_bytes = 0u;
 
         if (reopen == 1u)
             create_legacy_session(store, &session, cwd, "medium");
@@ -1138,15 +1144,53 @@ test_repeated_compaction_active_seam(struct snag_store *store, const char *cwd)
             assert(json_object_set_new(result, "handle", json_null()) == 0);
             commit_event(&session, "tool_finished", tool_finished_data(turn, call, result));
             uint64_t boundary = session.next_seq - 1u;
-            if (cycle == 3u)
-                commit_event(&session, "steering_added",
-                    steering_added(turn, steer, "pending steer stays outside summary"));
-            assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium", true,
-                       0u, false, NULL, &projection, error, sizeof(error), NULL) == 0);
+            if (cycle == 3u) {
+                if (kind) {
+                    snprintf(response, sizeof(response), "%032x", 0xe004u);
+                    data = response_started(turn, response, session.compact_id);
+                    assert(json_object_set_new(data, "cycle", json_integer(4u)) == 0);
+                    commit_event(&session, "response_started", data);
+                    if (kind == 1u) {
+                        data =
+                            response_completed(turn, response, "public progress before reminder");
+                        assert(json_object_set_new(data, "cycle", json_integer(4u)) == 0);
+                        commit_event(&session, "response_completed", data);
+                        boundary = session.next_seq - 1u;
+                    }
+                }
+                if (kind == 2u) {
+                    commit_event(&session, "response_output_correction",
+                        checked_json(json_pack("{s:s,s:i,s:[o],s:s,s:s,s:s}", "correction_id",
+                            steer, "cycle", 4, "partial_public",
+                            assistant_item("partial output before correction"), "response_id",
+                            response, "text", pending_text, "turn_id", turn)));
+                } else {
+                    commit_event(&session, kind ? "irc_reply_reminder" : "steering_added",
+                        steering_added(turn, steer, pending_text));
+                }
+                assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+                           true, 0u, false, NULL, &projection, error, sizeof(error), NULL) == 0);
+                memcpy(pending_source, projection.model_input.sha256, sizeof(pending_source));
+                pending_bytes = projection.model_input.bytes;
+                snag_context_projection_free(&projection);
+                commit_event(&session, "input_admitted",
+                    checked_json(json_pack("{s:[s],s:I,s:s}", "steering_ids", steer, "time_ms",
+                        (json_int_t)(session.last_time_ms + 1u), "turn_id", turn)));
+                assert(session.pending_steering[0].first_context_ms);
+            }
+            int compact_rc = snag_context_compact_request_build(&session, SNAJPAGENT_MODEL,
+                "medium", true, 0u, false, NULL, &projection, error, sizeof(error), NULL);
+            if (compact_rc)
+                fprintf(stderr, "active compaction after admitted steering: %s\n", error);
+            assert(compact_rc == 0);
             assert(projection.source_seq == boundary);
+            if (cycle == 3u) {
+                assert(projection.model_input.bytes == pending_bytes);
+                assert(!strcmp(projection.model_input.sha256, pending_source));
+            }
             char *source = json_dumps(projection.model_input.value, JSON_COMPACT);
             assert(source && strstr(source, text));
-            assert(!strstr(source, "pending steer stays outside summary"));
+            assert(!strstr(source, pending_text));
             free(source);
             commit_counted_compaction(
                 &session, compact, "hard_budget", SNAJPAGENT_MODEL, &projection, output);
@@ -1199,6 +1243,34 @@ test_repeated_compaction_active_seam(struct snag_store *store, const char *cwd)
         }
         assert(session.pending_steering_count == 1u);
         assert(!strcmp(session.pending_steering[0].steering_id, steer));
+        json_t *snapshot =
+            checked_json(json_pack("[{s:s,s:s}]", "id", steer, "text", pending_text));
+        for (unsigned int resumed = 0u; resumed < 2u; ++resumed) {
+            if (resumed) {
+                assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+                snag_session_close(&session);
+                assert(snag_session_open(store, &session, session_id, error, sizeof(error)) == 0);
+            }
+            build_context(&session, kind ? 5u : 4u, snapshot, &instructions, &projection);
+            char *request = json_dumps(projection.create_request.value, JSON_COMPACT);
+            const char *text = request ? strstr(request, pending_text) : NULL;
+            assert(text && !strstr(text + 1u, pending_text));
+            if (kind == 2u) {
+                const char *partial = strstr(request, "partial output before correction");
+                assert(partial && !strstr(partial + 1u, "partial output before correction"));
+            }
+            free(request);
+            snag_context_projection_free(&projection);
+            json_t *item = json_array_get(snapshot, 0u);
+            assert(json_object_set_new(item, "text", json_string("mismatched steer")) == 0);
+            assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", kind ? 5u : 4u,
+                       snapshot, 0u, false, NULL, NULL, &instructions, NULL, &projection, error,
+                       sizeof(error), NULL) < 0);
+            assert(strstr(error, "steering context differs from snapshot"));
+            assert(json_object_set_new(item, "text", json_string(pending_text)) == 0);
+        }
+        json_decref(snapshot);
+        snag_context_projection_free(&projection);
         snag_session_close(&session);
         json_decref(empty);
         json_decref(output);
