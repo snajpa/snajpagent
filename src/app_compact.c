@@ -287,6 +287,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         snag_ui_text(&app->ui, SNAG_UI_HOST, "Compacting context; Ctrl-C interrupts") < 0)
         goto out;
     source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
+    if (error_size) error[0] = '\0';
     const struct snag_context_control control = {
         .cancelled = snag_app_context_cancelled, .opaque = app};
     for (;;) {
@@ -308,6 +309,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             if (reduced) {
                 (void)snag_fail(error, error_size, EOVERFLOW,
                     "no complete history prefix fits the hard context budget");
+                app->compaction_bounded = true;
                 goto out;
             }
             /* Capacity rejection now uses the owning turn's minimal-history
@@ -322,7 +324,10 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             rc = 0;
             goto out;
         }
-        if (build_rc < 0) goto out;
+        if (build_rc < 0) {
+            if (errno == EOVERFLOW) goto reduce_source;
+            goto out;
+        }
         if (projection.model_input.bytes == 0u ||
             projection.model_input.bytes > (size_t)INT64_MAX) {
             (void)snag_fail(error, error_size, EINVAL, "compact source has invalid bounds");
@@ -370,7 +375,13 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         if (native) {
             rc = prepare_native_compaction(app, &projection.create_request, credential,
                 effort, error, error_size);
-            if (rc != 0) goto out;
+            if (rc != 0) {
+                if (rc < 0 && errno == EOVERFLOW) {
+                    rc = -1;
+                    goto reduce_source;
+                }
+                goto out;
+            }
             rc = -1;
             json_decref(projection.count_request.value);
             projection.count_request.value =
@@ -382,6 +393,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             snag_json_document_measure(&projection.count_request, SNAG_CONTEXT_MAX_COMPACT) < 0 ||
             projection.count_request.bytes == 0u) {
             snprintf(error, error_size, "compaction provider request exceeds 12 MiB");
+            if (errno == EOVERFLOW) goto reduce_source;
             goto out;
         }
         /* A repeated request is only irreducible when it still exceeds the
@@ -391,6 +403,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             projection.model_input.bytes > source_budget) {
             snprintf(
                 error, error_size, "irreducible complete history group exceeds provider context");
+            app->compaction_bounded = true;
             goto out;
         }
         input_tokens_bound = 0u;
@@ -461,27 +474,33 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                 goto out;
             }
         }
-        /* Shrink bytes only after a measured rejection/count: no token conversion.
-         * The walker preserves complete groups; identical irreducible input stops. */
+        /* Both local wire limits and measured provider rejection require a
+         * smaller source. Envelope/tools can exceed the reserved source slack;
+         * retry those bounds here too, before committing a provider attempt. */
         memcpy(prior_request, projection.create_request.sha256, sizeof(prior_request));
+reduce_source:
         reduced = true;
-        uint64_t next_budget = projection.model_input.bytes / 2u;
+        uint64_t source_bytes = projection.model_input.bytes;
+        if (!source_bytes || source_bytes > source_budget) source_bytes = source_budget;
+        uint64_t next_budget = source_bytes / 2u;
         /* Floor the halving: below this the builder cannot fit any group and
          * reports the source as irreducible instead of cutting it. The floor
          * must never raise the budget above the source that was just rejected:
          * a source already below the floor still has to shrink. */
         if (next_budget < SNAG_CONTEXT_COMPACT_FLOOR &&
-            projection.model_input.bytes > SNAG_CONTEXT_COMPACT_FLOOR)
+            source_bytes > SNAG_CONTEXT_COMPACT_FLOOR)
             next_budget = SNAG_CONTEXT_COMPACT_FLOOR;
         /* A strictly smaller positive source budget bounds retries without
          * abandoning a fitting prefix just beyond an arbitrary attempt count. */
         if (!next_budget || next_budget >= source_budget) {
             (void)snag_fail(error, error_size, EOVERFLOW,
                 "compaction source cannot shrink further within the provider context");
+            app->compaction_bounded = true;
             goto out;
         }
         source_budget = next_budget;
         snag_context_projection_free(&projection);
+        if (error_size) error[0] = '\0';
     }
     output_tokens_bound = 0u;
     if (snag_context_compact_output_count_request_build(output.value,

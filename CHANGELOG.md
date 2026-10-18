@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Shrink compaction history when native request tools or other envelope fields
+  exceed the local byte limit. Stop irreducible local retries without disabling
+  recovery from transient provider failures.
+
 - Show loaded skills by name and qualified ID with `/skills`, including a clear
   empty state. Refresh policy before the summary to retire revoked bindings.
 
