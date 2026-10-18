@@ -1656,7 +1656,7 @@ def test_hard_compaction_progress_is_remeasured():
         end = child.send_wait_idle(prompt + b"\r", b"fixture answer", start=start)
         child.drain(0.1)
         visible = re.sub(LIVE_GAP, b"", child.buf[start:end])
-        assert b"Compacting context; Ctrl-C interrupts" in visible, visible
+        assert b"Compacting context; Ctrl-C interrupts" not in visible, visible
         assert COMPACTED in visible, visible
         assert b"context still over the model window" not in visible, visible
         child.exit_cleanly(end)
@@ -1882,7 +1882,12 @@ def test_steering_during_pre_response_compaction():
 
     child = Child(["--config", str(config), "--resume", session_id], DEFAULT_ACCOUNTED_IDLE_PROMPT)
     start = len(child.buf)
-    begin = child.send_wait(b"compaction_steer\r", b"Compacting context")
+    child.send(b"compaction_steer\r")
+    deadline = time.monotonic() + 5
+    while not any(item["type"] == "compaction_started" for item in events(session_id)):
+        assert time.monotonic() < deadline, bytes(child.buf[start:])
+        child.drain(0.02)
+    begin = len(child.buf)
     assert DEFAULT_ACTIVE_PROMPT in bytes(child.buf[start:begin])
     child.send(b"change plan\r")
     completed = child.wait(COMPACTED, start=begin)
@@ -1915,9 +1920,12 @@ def test_foreground_command_buffers_typeahead():
 
     begin = len(child.buf)
     child.send(b"/compact\r/status\r")
-    started = child.wait(b"Compacting context", start=begin)
+    started = child.wait(b"/compact accepted", start=begin)
     finished = child.wait(COMPACTED, start=started)
-    assert b"/status" not in bytes(child.buf[begin:finished])
+    # The PTY may echo typeahead before the foreground command owns input.
+    # Its retained command and actual status result must wait for completion.
+    assert b"/status" not in bytes(child.buf[started:finished])
+    assert b"context: source=" not in bytes(child.buf[begin:finished])
     status = child.wait(b"context: source=", start=finished)
     child.wait_idle_prompt(start=status)
     assert bytes(child.buf[finished:status]).count(b"session:") == 1

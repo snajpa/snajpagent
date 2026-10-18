@@ -120,16 +120,14 @@ class RetryAutoTests(RetryFixture):
         self.assertEqual(sum(e['type'] == 'turn_recovery' for e in events), 1)
         self.assertEqual((self.root / 'retry-once').read_text(), 'x')
 
-    def test_stream_failures_are_consecutive_yellow_status_lines(self):
+    def test_stream_failures_keep_cause_without_permanent_retry_progress(self):
         self.begin_stream(['failure'] * 3 + ['success'])
         events = self.finished('turn_completed')
         output = bytes(self.term.output)
+        self.assertNotIn(b'Retrying turn after error', output)
         self.assertNotIn(b'recovering automatically', output)
-        self.assertNotIn(b'snajpagent: response.failed', output)
-        lines = re.findall(rb'\x1b\[1;33m([^\x1b]*Retrying turn after error[^\x1b]*)', output)
-        self.assertEqual(len(lines), 3, output)
-        for number, line in enumerate(lines, 1):
-            self.assertIn(f'({number}/5)'.encode(), line)
+        self.assertIn(b'overloaded', output)
+        self.assertRegex(output, rb'\x1b\[1;33m[^\x1b]*overloaded')
         failures = [e for e in events if e['type'] == 'response_failed']
         self.assertEqual(len(failures), 3)
         self.assertTrue(all('overloaded' in e['data']['message'] for e in failures))
@@ -137,15 +135,15 @@ class RetryAutoTests(RetryFixture):
 
     def test_healthy_tool_graph_resets_consecutive_retry_counter(self):
         self.begin_stream(['failure', 'tool', 'failure', 'success'])
-        self.finished('turn_completed')
-        output = bytes(self.term.output)
-        self.assertEqual(output.count(b'Retrying turn after error (1/5)'), 2, output)
-        self.assertNotIn(b'Retrying turn after error (2/5)', output)
+        events = self.finished('turn_completed')
+        self.assertEqual(sum(e['type'] == 'response_failed' for e in events), 2)
+        self.assertEqual(len(self.attempts), 4)
+        self.assertNotIn(b'Retrying turn after error', bytes(self.term.output))
         self.assertEqual((self.root / 'retry-once').read_text(), 'x')
 
     def test_off_during_stream_backoff_shows_terminal_failure(self):
         self.begin_stream(['failure', 'success'])
-        self.term.until(b'Retrying turn after error (1/5)')
+        self.term.until(b'overloaded')
         self.command('/retry auto off', 'Automatic retry: OFF')
         self.finished('turn_failed')
         self.term.until(b'snajpagent: response.failed')
@@ -193,14 +191,15 @@ class RetryAutoTests(RetryFixture):
 
     def test_off_during_transport_backoff(self):
         self.begin(failures=20, delay=2)
-        self.term.until(b'provider retry 1/2')
+        self.term.until(b'provider attempt 1/2 failed:')
         self.command('/retry auto off', 'Automatic retry: OFF')
         self.finished('turn_failed')
         self.assertEqual(len(self.attempts), 1)
 
     def test_off_during_turn_backoff(self):
         self.begin(failures=20, delay=1)
-        self.term.until(b'Retrying turn after error (1/5)')
+        self.wait(lambda: any(e['seq'] > self.before and e['type'] == 'turn_recovery'
+                             for e in self.events()))
         self.command('/retry auto off', 'Automatic retry: OFF')
         events = self.finished('turn_failed')
         self.assertEqual(len(self.attempts), 3)

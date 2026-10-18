@@ -279,7 +279,7 @@ def check(binary):
                         assert result.stdout.strip() == "HTTPS answer once", result.stdout
                         assert len(requests) == 3, requests
                         assert connections == 2, (name, connections)
-                        assert result.stderr.count("provider retry 1/2") == 1, result.stderr
+                        assert result.stderr.count("provider attempt 1/2 failed:") == 1, result.stderr
                         assert sum(e["type"] == "response_completed" for e in events) == 2
                     else:
                         exhausted = name.endswith("exhausted")

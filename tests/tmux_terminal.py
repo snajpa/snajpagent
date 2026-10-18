@@ -1383,13 +1383,12 @@ def run_command_transcript_case(binary, root, active=False, chat=False, width=12
             terminal.submit("queue_slow")
             terminal.wait("working slowly")
         if chat:
-            screen = terminal.submit_wait("/chat", "switching to chat", join_wrapped=True)
-            assert "switching to chat" in screen, screen
-            terminal.wait("C›")
+            terminal.submit_wait("/chat", "C›", join_wrapped=True)
+            assert "switching to chat" not in terminal.capture()
             # A switch to the view already shown must not announce a switch again.
             terminal.submit("/chat")
             time.sleep(0.4)
-            assert terminal.capture().count("switching to chat") == 1, terminal.capture()
+            assert "switching to chat" not in terminal.capture(), terminal.capture()
         label = "C›" if chat else "A»" if active else "I›"
         for command, output in (("/commands", "unknown slash command"),
                                 ("/status", "session:"),
@@ -6113,7 +6112,7 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
             assert arrived.wait(5.0)
             if mode not in ("before", "zero", "healthy"):
                 release.set()
-                terminal.wait("in 30000ms" if hold_backoff else "provider retry 1/2", timeout=5.0)
+                terminal.wait("provider attempt 1/2 failed:", timeout=5.0)
             if mode == "steer":
                 terminal.submit(marker)
             elif mode == "queue":
@@ -7507,7 +7506,7 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
         environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
         try:
             terminal = TmuxTerminal(case / "term", binary, case, state, config, 140, 28,
-                                    environment=environment)
+                                    args=("--color=always",), environment=environment)
             terminal.wait("host-model/medium")
             if mode not in ("no-prefix", "no-prefix-resume"):
                 terminal.submit("seed context")
@@ -7531,17 +7530,21 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
                     terminal.close()
                     finish_turn.set()
                     terminal = TmuxTerminal(case / "resumed", binary, case, state, config, 140, 28,
-                                            args=("--resume", sid), environment=environment)
+                                            args=("--resume", sid, "--color=always"), environment=environment)
                 else:
                     finish_turn.set()
             if mode in ("progress", "input", "input-failure", "steer", "cancel-active"):
                 assert started.wait(5), terminal.capture()
                 if mode == "progress":
-                    terminal.wait("Compacting context", timeout=1)
+                    assert "Compacting context" not in terminal.capture()
+                    terminal.resize(73, 20)
+                    terminal.resize(140, 28)
                 if mode == "progress":
                     terminal.send_key("C-c")
                     wait_event_count(state, "compaction_interrupted", 1)
                     terminal.wait("compaction interrupted", timeout=2)
+                    terminal.wait_until(lambda screen: "Compacting context" not in screen,
+                                        "interrupted progress erased from scrollback", timeout=2)
                     assert not event_list(read_events(state)[1], "compaction_completed")
                     release.set()
                     terminal.submit("/compact")
@@ -7591,7 +7594,11 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
                 assert not terminal.dead(), terminal.capture()
                 terminal.submit("/compact")
             log = wait_event_count(state, "compaction_completed", 1, timeout=6)
-            terminal.wait("Compacted")
+            terminal.wait_until(lambda screen: "Compacted" in screen and
+                                "Compacting context" not in screen,
+                                "final bullet without retained progress", timeout=2)
+            styled = terminal.capture_styled()
+            assert re.search(r"\x1b\[[0-9;]*32[0-9;]*m[•●]", styled), styled
             if mode in ("active", "no-prefix", "no-prefix-resume"):
                 finish_turn.set()
                 wait_event_count(state, "turn_completed", 1 if mode in ("no-prefix", "no-prefix-resume") else 2)
@@ -8004,7 +8011,10 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
                     terminal.submit_wait("/goal retained paused goal", "paused seed")
                 terminal.submit(("/ro " if mode == "success" else "") + original)
                 if mode in ("cancel", "steer"):
-                    terminal.wait("Retrying turn after error")
+                    end = time.monotonic() + 5
+                    while not any(e["type"] == "turn_recovery" for e in read_events(case / "s")[1]):
+                        assert time.monotonic() < end, terminal.capture()
+                        time.sleep(0.03)
                     if mode == "cancel":
                         terminal.send_key("C-c")
                         terminal.wait("turn interrupted")
