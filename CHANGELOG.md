@@ -9,6 +9,9 @@
   disk flush. The newest tail is best effort; session resume restores the last
   verified prefix when a final journal suffix is incomplete or corrupt.
 
+- Keep progress in the existing activity indicators. Compaction leaves only its
+  final green `Compacted` bullet; real failure reasons and outcomes remain visible.
+
 - Shrink compaction history when native request tools or other envelope fields
   exceed the local byte limit. Stop irreducible local retries without disabling
   recovery from transient provider failures.

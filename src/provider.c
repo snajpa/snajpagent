@@ -648,8 +648,8 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done, const char *reas
     if (!retry_allowed(ctx)) return RETRY_DISABLED;
     if (ctx->render) {
         char line[160];
-        (void)snprintf(line, sizeof(line), "provider retry %u/%u after %s in %llums",
-            retries_done + 1u, SNAG_PROVIDER_MAX_RETRIES, reason, (unsigned long long)delay_ms);
+        (void)snprintf(line, sizeof(line), "provider attempt %u/%u failed: %s",
+            retries_done + 1u, SNAG_PROVIDER_MAX_RETRIES, reason);
         if (snag_ui_text(ctx->render, SNAG_UI_WARNING, line) < 0) {
             return snag_fail(
                 error, error_size, EIO, "provider retry diagnostics could not be rendered");

@@ -920,17 +920,12 @@ display_set_chat_room(
 
 static int
 display_set_view(
-    struct snag_ui_display *display, enum snag_render_view view, bool announce, bool prompt_ready)
+    struct snag_ui_display *display, enum snag_render_view view, bool prompt_ready)
 {
     struct snag_term *term = &display->term;
-    bool changed = display->render.view != view;
 
     if (view != SNAG_RENDER_CHAT && view != SNAG_RENDER_ROLLOUT) return snag_errno(EINVAL);
     term->defer_redraw = true;
-    if (announce && changed &&
-        snag_render_host(&display->render,
-            view == SNAG_RENDER_CHAT ? "switching to chat" : "switching to rollout") < 0)
-        return -1;
     if (view == SNAG_RENDER_ROLLOUT && display->conversation) {
         if (display_set_chat_room(display, selected_destination(term), false) < 0) return -1;
     }
@@ -1019,7 +1014,7 @@ display_cycle_view(struct snag_ui_display *display)
     struct ui_conversation_tab *tab = display->conversations;
     while (tab && (!id || strcmp(id, tab->target.conversation))) tab = tab->next;
     json_decref(tabs);
-    if (!next) return display_set_view(display, SNAG_RENDER_ROLLOUT, true, true);
+    if (!next) return display_set_view(display, SNAG_RENDER_ROLLOUT, true);
     if (next <= channels) {
         const struct snag_irc_destination *destination =
             term->destinations && term->destinations->count ? &term->destinations->items[next - 1u]
@@ -1034,7 +1029,7 @@ display_cycle_view(struct snag_ui_display *display)
                 &display->render, tab->endpoint, &term->conversation, true) < 0)
             return -1;
     }
-    return display_set_view(display, SNAG_RENDER_CHAT, true, true);
+    return display_set_view(display, SNAG_RENDER_CHAT, true);
 }
 
 #if SNAJPAGENT_VM
@@ -1653,7 +1648,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command, 
             if (snag_render_set_chat_conversation(
                     render, tab->endpoint, &term->conversation, true) < 0)
                 return -1;
-            return display_set_view(display, SNAG_RENDER_CHAT, true, true);
+            return display_set_view(display, SNAG_RENDER_CHAT, true);
         }
         return snag_errno(ENOENT);
     case SNAG_UI_COMMANDS:
@@ -1767,7 +1762,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command, 
             atomic_store(&display->runtime->view, command->data.value);
             return 0;
         }
-        return display_set_view(display, (enum snag_render_view)command->data.value, false, true);
+        return display_set_view(display, (enum snag_render_view)command->data.value, true);
     case SNAG_UI_HISTORY_SNAPSHOT:
         return snag_term_history_set(
             term, &command->data.history.entries, command->data.history.refresh);
@@ -1882,7 +1877,7 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
              * submitted command for the engine. It owns command semantics
              * such as the offline status and will acknowledge readiness with
              * SNAG_UI_VIEW plus a fresh prompt. */
-            if (display_set_view(display, view, true, false) < 0) goto fail;
+            if (display_set_view(display, view, false) < 0) goto fail;
             item->view_applied = true;
             take_snapshot(display, &item->snapshot, item->text);
         } else if (snag_verbosity_command(item->text, strlen(item->text)) &&

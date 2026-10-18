@@ -209,7 +209,6 @@ snag_app_irc_summary_start(struct app_state *app, const struct snag_context_proj
     if (pthread_create(&job->thread, NULL, summary_owner, job)) goto fail;
     job->started = true;
     snag_buf_free(&prompt);
-    (void)snag_ui_text(&app->ui, SNAG_UI_RUNTIME, "IRC context compaction started in background");
     return;
 fail:
     snag_buf_free(&prompt);

@@ -2834,6 +2834,10 @@ Session resume uses the last verified journal prefix and discards an
 incomplete or checksum-invalid newest suffix under its exclusive session lock.
 A session whose creation header was lost has no earlier prefix to resume.
 .PP
+Progress uses the live activity indicators. Completed compaction leaves the green
+.B Compacted
+bullet; errors and final outcomes remain in scrollback.
+.PP
 Commands can be submitted when the application displays a prompt. A foreground
 slash command completes before the next app command is accepted; typeahead is
 held without a second ready prompt. Model selection changes the next response

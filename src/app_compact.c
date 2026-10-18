@@ -283,9 +283,6 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     if (snag_context_continuation_scope(app->turn_provider, model,
             credential ? credential : &owned_credential, continuation_scope) < 0)
         goto out;
-    if (strcmp(reason, "manual") &&
-        snag_ui_text(&app->ui, SNAG_UI_HOST, "Compacting context; Ctrl-C interrupts") < 0)
-        goto out;
     source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
     if (error_size) error[0] = '\0';
     const struct snag_context_control control = {
@@ -609,8 +606,6 @@ snag_app_compact_requested(struct app_state *app, char *error, size_t error_size
         app->interrupt_requested = false;
         app->steering_requested = false;
     }
-    if (snag_ui_text(&app->ui, SNAG_UI_HOST, "Compacting context; Ctrl-C interrupts") < 0)
-        return -1;
     /* An explicit /compact is a fresh operator decision: clear the consecutive
      * failure bound so the attempt runs. */
     app->compaction_failures = 0u;

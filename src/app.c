@@ -196,11 +196,6 @@ turn_retry_available(const struct app_state *app, const struct turn_retry *retry
 static int
 failure_notice(struct app_state *app, const char *message, bool recovering)
 {
-    if (recovering) {
-        (void)snag_strcpy(app->recovery_error, sizeof(app->recovery_error), message);
-        app->recovery_notice_ms = 0u;
-        return 0;
-    }
     uint64_t now = snag_monotonic_ms();
     if ((app->session.goal_status == SNAG_GOAL_ACTIVE || app->session.active_turn) &&
         app->recovery_delay_ms && !strcmp(app->recovery_error, message) &&
@@ -208,7 +203,7 @@ failure_notice(struct app_state *app, const char *message, bool recovering)
         return 0;
     (void)snag_strcpy(app->recovery_error, sizeof(app->recovery_error), message);
     app->recovery_notice_ms = now;
-    return snag_ui_text(&app->ui, SNAG_UI_ERROR, message);
+    return snag_ui_text(&app->ui, recovering ? SNAG_UI_WARNING : SNAG_UI_ERROR, message);
 }
 
 static int
@@ -3284,9 +3279,7 @@ select_view(struct app_state *app, enum snag_render_view view, bool active)
     if (snag_app_save_resume_options(app, error, sizeof(error)) < 0) return app_error(app, error);
     return set_input_prompt(app, active);
 }
-/* A user-requested view switch. Announce it before the repaint, which can take a moment, so the
- * keystroke is visibly accepted, and refuse to start another switch while one is in flight so
- * repeated requests cannot queue a second one. */
+/* Repeated requests cannot queue another switch while a repaint is in flight. */
 static int
 user_switch_view(struct app_state *app, enum snag_render_view view, bool active)
 {
@@ -3295,9 +3288,6 @@ user_switch_view(struct app_state *app, enum snag_render_view view, bool active)
         snag_ui_view(&app->ui) != app->switch_target &&
         snag_monotonic_ms() < app->switch_deadline_ms)
         return 0;
-    if (app_textf(app, SNAG_UI_HOST, "switching to %s",
-            view == SNAG_RENDER_CHAT ? "chat" : "rollout") < 0)
-        return -1;
     if (select_view(app, view, active) < 0) return -1;
     app->switch_target = view;
     app->switch_deadline_ms = snag_monotonic_ms() + 500u;
@@ -5638,16 +5628,6 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
         (void)app_warning(app,
             "Provider policy rejection; press Ctrl-C, then clarify the task to continue. "
             "Running commands retained.");
-    } else if (delay <= 1000u || snag_monotonic_ms() - app->recovery_status_ms >= 30000u) {
-        if (goal)
-            (void)app_textf(app, SNAG_UI_WARNING,
-                "Goal active; retrying after error in %.2f seconds (Ctrl-C interrupts)",
-                delay / 1000.0);
-        else
-            (void)app_textf(app, SNAG_UI_WARNING,
-                "Retrying turn after error (%llu/%u) in %.2f seconds (Ctrl-C interrupts)",
-                (unsigned long long)retry->attempts, retry->limit, delay / 1000.0);
-        app->recovery_status_ms = snag_monotonic_ms();
     }
     while (!app->input_closed && (policy || settings || snag_app_retry_allowed(app)) &&
            (goal ? (app->session.goal_status == SNAG_GOAL_ACTIVE ||
@@ -5708,10 +5688,7 @@ wait_for_command_or_input(struct app_state *app)
      * need the answer to the question that the model has just displayed. */
     for (size_t i = 0u; i < app->session.process_count; ++i)
         if (snag_tools_ready(app->session.processes[i].handle)) return 3;
-    if (app_textf(app, SNAG_UI_HOST,
-            "Waiting for command completion or your input; /yield returns to the model, "
-            "Ctrl-C interrupts.") < 0 ||
-        ensure_turn_prompt(app) < 0)
+    if (ensure_turn_prompt(app) < 0)
         return -1;
     app->tool_waiting = true;
     int rc = 0;

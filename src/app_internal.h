@@ -179,7 +179,7 @@ struct app_state {
      * completed compaction, new operator input or a manual /compact. */
     unsigned int compaction_failures;
     bool compaction_bounded;
-    uint64_t recovery_notice_ms, recovery_status_ms;
+    uint64_t recovery_notice_ms;
     char recovery_error[256];
     bool queue_edit_was_armed;
     bool input_closed;
