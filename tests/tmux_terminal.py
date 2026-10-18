@@ -75,7 +75,7 @@ NATIVE_FUNCTION_NAMES = {
     "set_command_shell", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
     "irc_host", "irc_disconnect", "irc_sleep", "irc_compact",
     "create_goal", "update_goal", "timer", "defer_steering",
-    "get_cwd", "cd", "skills",
+    "get_cwd", "cd", "work_context", "skills",
 }
 
 
@@ -4466,7 +4466,8 @@ def run_resume_network_pairing_case(binary, root, provider, environment):
             with TmuxTerminal(case / mode, binary,
                     workspace, state, config, 120, 24,
                     args=(*roles, "-n", "resumebot", "-o", "resumeop",
-                          "-r", "resumed", "--resume", sid), environment=environment) as terminal:
+                          "-r", "resumed", "--resume", sid, "--view",
+                          "chat" if networked else "rollout"), environment=environment) as terminal:
                 if hosted:
                     terminal.wait(f"resumeop@{MACHINE_HOSTNAME} :")
                     with socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])), timeout=2):
@@ -7167,11 +7168,11 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             terminal.wait("host-model/medium   0% ›")
             terminal.submit(original)
             assert ready.wait(10), ("provider did not reach failure", terminal.capture())
-            terminal.wait("Goal active; retrying")
+            wait_event_count(case / "s", "turn_recovery", 1)
             if mode == "steer":
                 terminal.submit("fresh recovery steer")
             if mode == "cancel":
-                screen = terminal.capture().rsplit("Goal active; retrying", 1)[-1]
+                screen = terminal.capture()
                 # A prior response already offered steering; automatic recovery
                 # retains that composer even before the next response.created.
                 assert "»" in screen, "recovery dropped the offered steer composer"
@@ -7822,7 +7823,7 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                                         args=("--resume", sid), environment=environment)
                 terminal.wait("host-model/medium")
             terminal.submit_wait("/goal regression compacted objective", "Goal set")
-            terminal.wait("Goal active; retrying", timeout=12)
+            wait_event_count(state, "turn_recovery", 1, timeout=12)
             events = wait_event_count(state, "goal_completed", 1, timeout=20)
             terminal.wait("compacted goal done", timeout=5)
             assert not rejected, "gateway received instruction-only input"
@@ -9096,7 +9097,11 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
             if mode in ("summary-irreducible", "summary-auth"):
                 assert result.returncode != 0, (mode, result.stderr)
                 assert summaries and not event_list(events, "compaction_completed")
-                assert event_list(events, "turn_recovery")
+                assert event_list(events, "turn_failed")
+                if mode == "summary-irreducible":
+                    assert not event_list(events, "turn_recovery")
+                else:
+                    assert event_list(events, "turn_recovery")
                 assert len([r for r in creates if provider.latest_user(r) == "recover"]) <= 1
                 for i in range(4):
                     assert f"seed-{i} " in json.dumps(summaries[0]["input"])

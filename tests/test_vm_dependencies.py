@@ -235,7 +235,7 @@ class DependencyTests(unittest.TestCase):
             converted = subprocess.run([str(frontend.BINARY), 'convert', '--dotdir',
                                         str(self.root / 'state'), '--jobs', '1'],
                                        capture_output=True, timeout=30)
-            self.assertEqual(converted.returncode, 0, converted.stderr)
+            self.assertEqual(converted.returncode, 0, converted.stdout + converted.stderr)
             self.assertEqual((journal.parent / '.legacy-source' / 'events.jsonl').read_bytes(),
                              legacy_bytes)
             journal = journal.parent / 'journal.bin'

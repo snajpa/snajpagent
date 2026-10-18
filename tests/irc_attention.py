@@ -419,7 +419,7 @@ def run_irc_attention_case(binary, root):
             term.exit()
 
         with fixture_terminal(TmuxTerminal(root / "resumed", binary, workspace, state, config,
-                150, 24, args=("--resume", session), environment=environment),
+                150, 24, args=("--resume", session, "--view", "chat"), environment=environment),
                 root / "resumed-screen.txt") as term:
             # History can repaint the old prompt before resumed connections are ready.
             term.wait("@hostop connected · resumed")

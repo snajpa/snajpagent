@@ -60,7 +60,7 @@ class CommandTests(unittest.TestCase):
         values = [e['data']['value'] for e in self.owner.events()
                   if e['type'] == 'retry_auto_changed']
         self.assertEqual(values, ['off'])
-        self.assertIn(b'Automatic retry: ON', self.report(self.command('/retry auto')))
+        self.assertIn(b'Automatic retry: ON', self.report(self.command('/retry auto on')))
 
     def test_command_chain_orders_effects_and_reconciles_one_receipt(self):
         text = '/fast on \t;\t retry auto off ; /status ; fast off ; '
@@ -153,14 +153,14 @@ class CommandTests(unittest.TestCase):
         self.assertFalse(any(e['type'] == 'service_tier_changed' for e in self.owner.events()))
 
     def test_fast_duplicate_reconnect_and_changed_id_text(self):
-        request = self.peer.command('/fast')
+        request = self.peer.command('/fast on')
         result = self.peer.result(request)
         self.assertIn(b'ON', self.report(result))
         self.peer.until('state', lambda message: message['state']['service_tier'] == 'priority')
         events = [e for e in self.owner.events() if e['type'] == 'service_tier_changed']
         self.assertEqual(len(events), 1)
         self.assertEqual(result['seq'], events[0]['seq'])
-        self.peer.command('/fast', request)
+        self.peer.command('/fast on', request)
         self.assertEqual(self.peer.result(request), result)
         self.peer.command('/fast off', request)
         self.assertEqual(self.peer.until('error')['id'], request)
@@ -170,13 +170,13 @@ class CommandTests(unittest.TestCase):
         self.peer.send(type='receipt', id=request)
         self.assertEqual(self.peer.result(request), result)
         self.assertEqual(self.report(result).count(b'/fast'), 1)
-        self.assertIn(b'OFF', self.report(self.command('/fast')))
+        self.assertIn(b'OFF', self.report(self.command('/fast off')))
         self.assertEqual(len([e for e in self.owner.events()
                               if e['type'] == 'service_tier_changed']), 2)
         self.assertFalse(any(e['type'] == 'input_received' for e in self.owner.events()))
 
     def test_lost_command_acknowledgement_is_queried_without_reexecution(self):
-        request = self.peer.command('/fast')
+        request = self.peer.command('/fast on')
         self.peer.until('result', lambda result: result['id'] == request)
         self.peer.close()
         self.owner.status('detached')

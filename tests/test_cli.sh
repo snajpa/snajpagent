@@ -73,7 +73,7 @@ expect_exit() {
     [ "$actual_exit" -eq "$expected_exit" ]
 }
 
-LC_ALL=C expect_exit 2 $bin -l >"$root/locale.out" 2>"$root/locale.err"
+LC_ALL=C expect_exit 3 $bin -l >"$root/locale.out" 2>"$root/locale.err"
 grep -q 'UTF-8 locale is required' "$root/locale.err"
 export LC_ALL=C.UTF-8
 

@@ -37,13 +37,13 @@ class CatalogTests(unittest.TestCase):
     def test_catalogue_failure_does_not_repeat_command_effect(self):
         path = self.owner.directory / '.view-reports.jsonl'
         os.symlink('events.jsonl', path)
-        request = self.peer.command('/fast')
+        request = self.peer.command('/fast on')
         result = self.peer.result(request)
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(result['outcome'], 'ok')
         self.assertIsNone(result['report'])
         self.assertIn('cannot retain', result['report_error'])
-        self.peer.command('/fast', request)
+        self.peer.command('/fast on', request)
         self.assertEqual(self.peer.result(request), result)
         self.assertEqual(len([e for e in self.owner.events()
                               if e['type'] == 'service_tier_changed']), 1)

@@ -2567,9 +2567,8 @@ def test_network_input_recovery_boundaries():
         assert admitted["data"]["input"]["text"] and received["data"]["urgent"]
         cut = received if cut_type == "irc_event" else admitted
         path.write_bytes(b"".join(lines[:cut["seq"]]))
-        with Child([*args, "--resume", sid], ready=None) as resumed:
-            resumed.wait(chat_prompt("recoveryop"))
-            resumed.send(b"/rollout\r")
+        # Truncating at either admission boundary may also remove the saved view.
+        with Child([*args, "--resume", sid, "--view", "rollout"], ready=None) as resumed:
             end = resumed.wait(b"network zero local only")
             resumed.exit_cleanly(end)
         log = events(sid)
@@ -3390,10 +3389,10 @@ def test_goal_refusal_failure_block_and_restart_state():
     assert not [item for item in log if item["type"] == "turn_recovery"]
 
     child = Child([], PROMPT.rstrip())
-    child.send_wait(b"/goal failing goal\r", b"Goal active; retrying")
+    child.send_wait(b"/goal failing goal\r", GOAL_SET)
     done = child.wait(b"goal done", timeout=20.0)
     child.exit_cleanly(done)
-    assert b"fixture goal provider failed" not in child.buf
+    assert child.buf.count(b"fixture goal provider failed") == 1
     log = events(child.session_id())
     assert not [e for e in log if e["type"] == "goal_paused"]
     assert len([e for e in log if e["type"] == "turn_recovery"]) == 4

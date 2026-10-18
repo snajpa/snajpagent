@@ -68,6 +68,7 @@ test_store_binary_payloads_state(int fd, const struct snag_binary_anchor *anchor
         assert(snag_seek(fd, 0, SEEK_CUR) == position);
         assert(equal_json(restored.instructions, state->active_instructions));
         assert(equal_json(restored.skills, state->active_skills));
+        assert(equal_json(restored.work_context, state->work_context));
         assert(equal_json(restored.compact_output, state->compact_output));
         assert(equal_json(restored.response_public, state->response_public));
         assert(equal_json(restored.downloads, state->download_queue));

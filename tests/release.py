@@ -330,7 +330,8 @@ with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as t
     git("tag", "-a", "0.99.3", "-m", "approved fixture release")
     command = ["make", "--no-print-directory", "-s", "-f", "version-test.mk", "version-test"]
     version_env = {key: value for key, value in os.environ.items()
-                   if key not in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "BUILD_VERSION")}
+                   if key not in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "BUILD_VERSION",
+                                  "UPDATE_BASE_URL", "UPDATE_TARGET")}
     assert subprocess.check_output(command, cwd=tmp, env=version_env, text=True).strip() == "0.99.3"
     # Recursive make exports -w even when the probe asks for silent recipes.
     # Directory banners are build chatter, not part of the version value.
@@ -378,11 +379,11 @@ with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as t
 # Inspect the native build plan: publisher opt-in forces dev debug even with DEBUG=0.
 plan = subprocess.run(["make", "-n", "DEBUG=0", "BUILD_VERSION=0.99.2-abcdef0",
                        "UPDATE_BASE_URL=https://publisher.test", "UPDATE_TARGET=linux-x86_64"],
-                      cwd=root, capture_output=True, text=True, check=True).stdout
+                      cwd=root, env=version_env, capture_output=True, text=True, check=True).stdout
 assert "DEBUG=1" in plan and "-fno-omit-frame-pointer" in plan
 assert "latest-dev/snajpagent-linux-x86_64" in plan
 mixed = subprocess.run(["make", "-n", "all", "prod-linux-x86_64",
-                        "UPDATE_BASE_URL=https://publisher.test"], cwd=root, capture_output=True, text=True)
+                        "UPDATE_BASE_URL=https://publisher.test"], cwd=root, env=version_env, capture_output=True, text=True)
 assert mixed.returncode and "UPDATE_TARGET is required" in mixed.stderr
 print("PASS: staging, immutable source selection, channel growth, hash failure, native dev profile")
 
@@ -859,8 +860,10 @@ pdf_flags = next(line for line in (root / "config.mk").read_text().splitlines()
                  if line.startswith("PDF_CFLAGS ?="))
 pdf_flags = pdf_flags.replace("$(shell pkg-config --cflags poppler libpng)",
                               "-I/fixture/poppler -DKEEP_FLAG=1 -I/fixture/png")
+config_env = {key: value for key, value in version_env.items()
+              if key not in ("PDF_CFLAGS", "AUDIO_DEVICE_LIBS")}
 actual = subprocess.check_output(["make", "-s", "--no-print-directory", "-f", "-"],
-    input=pdf_flags + '\nall:\n\t@printf "%s\\n" "$(PDF_CFLAGS)"\n', text=True)
+    env=config_env, input=pdf_flags + '\nall:\n\t@printf "%s\\n" "$(PDF_CFLAGS)"\n', text=True)
 assert actual.split() == ["-isystem", "/fixture/poppler", "-DKEEP_FLAG=1", "-isystem", "/fixture/png"]
 pdf_line = next(line for line in linux.splitlines() if '"PDF_CFLAGS=' in line)
 expression = re.search(r"sed -E '([^']+)'", pdf_line).group(1)
@@ -912,7 +915,7 @@ for target, expected in (
 ):
     actual = subprocess.check_output(["make", "-s", "--no-print-directory", "-f", "-",
                                       "TARGET_OS=" + target],
-        input=audio_flags + '\nall:\n\t@printf "%s\\n" "$(AUDIO_DEVICE_LIBS)"\n', text=True)
+        env=config_env, input=audio_flags + '\nall:\n\t@printf "%s\\n" "$(AUDIO_DEVICE_LIBS)"\n', text=True)
     assert actual.split() == expected, (target, actual)
 print("PASS: audio device link flags follow native and portable target OS names")
 
@@ -1477,9 +1480,9 @@ assert 'makeFlags = [ "ASMSTRIPFLAGS=" ];' in mac_av
 with tempfile.TemporaryDirectory(prefix="macos-asm-strip-", dir=root / "build") as tmp:
     makefile = Path(tmp) / "Makefile"
     makefile.write_text("ASMSTRIPFLAGS=-x\nall:\n\t$(if $(ASMSTRIPFLAGS),false,true)\n")
-    baseline = subprocess.run(["make", "-s", "-f", str(makefile)], capture_output=True)
+    baseline = subprocess.run(["make", "-s", "-f", str(makefile)], env=version_env, capture_output=True)
     assert baseline.returncode != 0
-    subprocess.run(["make", "-s", "-f", str(makefile), "ASMSTRIPFLAGS="], check=True)
+    subprocess.run(["make", "-s", "-f", str(makefile), "ASMSTRIPFLAGS="], env=version_env, check=True)
 assert '$(STRIP) -S -x "$$stage/$(BIN)"' in (root / "Makefile").read_text()
 print("PASS: macOS media keeps intermediate NASM symbols and final executable stripping")
 
@@ -1503,7 +1506,7 @@ with tempfile.TemporaryDirectory(prefix="darwin-archive-", dir=root / "build") a
         makefile = tmp / "Makefile"
         makefile.write_text("SUBDIR=\nLIBNAME=fixture.a\nOBJS=" + " ".join(objects) +
                             "\nAR=ar\nARFLAGS=rcs\nAR_O=$@\nRANLIB=ranlib\nRM=rm -f\n" + rule + "\n")
-        subprocess.run(["make", "-s", "-B"], cwd=tmp, check=True)
+        subprocess.run(["make", "-s", "-B"], cwd=tmp, env=version_env, check=True)
         names = subprocess.check_output(["ar", "t", "fixture.a"], cwd=tmp, text=True).splitlines()
         names = [name for name in names if name not in ("__.SYMDEF", "__.SYMDEF SORTED")]
         assert len(names) == 2, names

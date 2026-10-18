@@ -5481,6 +5481,68 @@ test_compacted_irc_turn_resume(struct snag_store *store, const char *cwd, bool c
 }
 
 static void
+test_work_context_checkpoint(struct snag_store *store, const char *cwd)
+{
+    char error[512] = {0};
+    struct snag_session session;
+    snag_session_init(&session);
+    assert(!snag_session_create(store, &session, cwd, "default", "fixture", "default",
+        error, sizeof(error)));
+    json_t *paths = json_array();
+    json_t *pins = json_array();
+    assert(paths && pins);
+    commit_data(&session, "turn_started", direct_turn_data(cwd, "temporary role task",
+        GOAL_ID, 1u, false, paths));
+    char id[SNAG_ID_HEX_LEN + 1u];
+    memcpy(id, session.id, sizeof(id));
+    for (unsigned int phase = 0u; phase < 4u; ++phase) {
+        json_t *visit = phase == 3u ? json_incref(json_null()) :
+            json_pack("{s:s,s:s,s:s,s:s,s:s}", "id", OTHER_ID, "root", cwd,
+                "task", "Act as project developer beneath ongoing work",
+                "return_cwd", cwd, "return_turn_id", GOAL_ID);
+        assert(visit);
+        if (phase == 1u) {
+            json_decref(paths);
+            paths = json_pack("[s]", "/role/AGENTS.md");
+            assert(paths);
+        }
+        commit_data(&session, "work_context_changed", json_pack("{s:s,s:s,s:O,s:O,s:O}",
+            "old_cwd", session.cwd, "new_cwd", cwd, "work_context", visit,
+            "active", pins, "instructions", paths));
+        if (phase == 2u) {
+            commit_data(&session, "skills_updated", json_pack("{s:O}", "active", pins));
+        }
+        struct snag_binary_checkpoint_sources sources = {0};
+        struct snag_binary_anchor anchor;
+        struct snag_binary_index_tree tree;
+        assert(!snag_session_binary_checkpoint_capture(&session, &anchor, &tree, &sources,
+            error, sizeof(error)));
+        assert(sources.work_context);
+        test_store_binary_payloads_state(session.log_fd, &anchor, &sources, &session);
+        snag_binary_checkpoint_sources_free(&sources);
+        json_t *state = snag_checkpoint_state_encode(&session);
+        struct snag_session decoded;
+        assert(state && !snag_checkpoint_state_decode(state, &decoded));
+        assert(json_equal(decoded.work_context, visit));
+        assert(json_equal(decoded.active_instructions, paths));
+        snag_session_close(&decoded);
+        json_decref(state);
+        assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+        snag_session_close(&session);
+        snag_session_init(&session);
+        int rc = snag_session_open(store, &session, id, error, sizeof(error));
+        if (rc < 0) fprintf(stderr, "working-context checkpoint: %s\n", error);
+        assert(!rc && json_equal(session.work_context, visit));
+        assert(json_equal(session.active_instructions, paths));
+        assert(!strcmp(session.cwd, cwd));
+        json_decref(visit);
+    }
+    json_decref(paths);
+    json_decref(pins);
+    snag_session_close(&session);
+}
+
+static void
 test_skill_checkpoint(struct snag_store *store, const char *cwd)
 {
     char error[512] = {0};
@@ -5518,8 +5580,6 @@ test_skill_checkpoint(struct snag_store *store, const char *cwd)
         struct snag_session decoded;
         assert(state && !snag_checkpoint_state_decode(state, &decoded));
         assert(json_equal(decoded.active_skills, pins));
-        assert(decoded.skills_revoked_seq == revoked);
-        assert(!strcmp(decoded.skills_policy_digest, ZERO_HASH));
         snag_session_close(&decoded);
         assert(!json_object_set_new(state, "active_skills", json_pack("[{}]")));
         assert(snag_checkpoint_state_decode(state, &decoded) < 0);
@@ -5531,8 +5591,6 @@ test_skill_checkpoint(struct snag_store *store, const char *cwd)
         int rc = snag_session_open(store, &session, id, error, sizeof(error));
         if (rc < 0) fprintf(stderr, "skill checkpoint: %s\n", error);
         assert(!rc && json_equal(session.active_skills, pins));
-        assert(session.skills_revoked_seq == revoked);
-        assert(!strcmp(session.skills_policy_digest, ZERO_HASH));
     }
     json_decref(pins);
     snag_session_close(&session);
@@ -5543,6 +5601,7 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
     test_host_snapshot_references(store, cwd);
     test_host_literal_candidates();
+    test_work_context_checkpoint(store, cwd);
     test_skill_checkpoint(store, cwd);
     test_live_native_snapshot(store, cwd);
     test_compacted_irc_turn_resume(store, cwd, false);

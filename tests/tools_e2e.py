@@ -157,7 +157,9 @@ def case_explicit_file_paths(binary, provider, root):
     assert results[8]["model_text"] == str(case / "subdir")
     assert str(case / "subdir") in results[9]["model_text"]
     assert not duplicate.exists()
-    assert any(entry["type"] == "cwd_changed" for entry in events)
+    changes = [entry["data"] for entry in events if entry["type"] == "work_context_changed"]
+    assert len(changes) == 1 and changes[0]["new_cwd"] == str(case / "subdir"), changes
+    assert changes[0]["work_context"] is None, changes
     print("tools e2e explicit paths + cwd: ok", flush=True)
 
 

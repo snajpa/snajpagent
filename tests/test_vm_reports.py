@@ -118,7 +118,7 @@ class ReportTests(unittest.TestCase):
         child.command('history')
         child.attached()
         self.assertEqual(self.owner.journal.read_bytes(), before)
-        child.write(b'i/fast\r')
+        child.write(b'i/fast on\r')
         child.repaint_until(b'ON')
         self.reports(2)
         self.escape(child)
@@ -204,7 +204,7 @@ class ReportTests(unittest.TestCase):
         child.finish('close')
         self.owner.status('detached')
         peer = self.owner.view(bind=True)
-        request = peer.command('/fast')
+        request = peer.command('/fast on')
         result = peer.result(request)
         self.assertEqual(result['status'], 'completed')
         instance = peer.capabilities['instance']
@@ -215,7 +215,7 @@ class ReportTests(unittest.TestCase):
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
         saved = json.loads(path.read_text())
         rollout(saved['state']['buffers'][0])['pending'] = {
-            'id': request, 'instance': instance, 'text': '/fast'}
+            'id': request, 'instance': instance, 'text': '/fast on'}
         path.write_text(json.dumps(saved))
         resumed = self.start('--resume', 'lost-receipt', expect=b'Workspace restored')
         resumed.repaint_until(b'ON')

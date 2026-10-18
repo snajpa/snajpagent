@@ -72,7 +72,7 @@ main(int argc, char **argv)
         if (!strcmp(mode, "close")) {
             snag_vm_connection_close(connection);
         } else {
-            submit(connection, "/fast", deadline);
+            submit(connection, "/fast on", deadline);
             while (connection->rollout->pending || !json_array_size(connection->reports))
                 step(connection, deadline);
             while (!snag_json_string(connection->state, "service_tier") ||
