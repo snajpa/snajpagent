@@ -241,6 +241,11 @@ activate(struct app_state *app, const char *id, const char *arguments, bool expl
     if (json_array_append(active, skill) < 0 || save_bindings(app, active, error, size) < 0) {
         json_decref(skill);
         skill = NULL;
+    } else if (snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_NOTICE,
+            .label = "Skill loaded: ", .text = snag_json_string(skill, "name")}) < 0) {
+        (void)snag_errorf(error, size, "skill loaded but success notice failed");
+        json_decref(skill);
+        skill = NULL;
     }
     json_decref(active);
     return skill;

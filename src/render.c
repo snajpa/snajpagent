@@ -666,17 +666,24 @@ view_block(struct snag_render *render, unsigned int boundary, enum snag_render_v
     return 0;
 }
 
-static int
-render_bullet(struct snag_render *render, const char *notice)
+int
+snag_render_notice(struct snag_render *render, const char *label, const char *notice)
 {
     struct snag_buf line;
-    snag_buf_init(&line, strlen(notice) + sizeof("• \n"));
-    int rc = snag_buf_printf(&line, "• %s\n", notice);
+    snag_buf_init(&line, strlen(label) + strlen(notice) + sizeof("• \n"));
+    int rc = *label ? snag_buf_printf(&line, "• %s%s\n", label, notice) :
+        snag_buf_printf(&line, "• %s\n", notice);
     if (rc == 0)
         rc = view_block(render, BOUNDARY_BULLET, SNAG_RENDER_ROLLOUT, STDERR_FILENO,
             COLOR_LIFECYCLE, (char *)line.data, line.len, line.len, render->stderr_terminal, true);
     snag_buf_free(&line);
     return rc;
+}
+
+static int
+render_bullet(struct snag_render *render, const char *notice)
+{
+    return snag_render_notice(render, "", notice);
 }
 
 static size_t

@@ -12,6 +12,8 @@ snag_presentation_apply(struct snag_render *render, const struct snag_ui_command
     switch (command->kind) {
     case SNAG_UI_HOST:
         return snag_render_host(render, command->text);
+    case SNAG_UI_NOTICE:
+        return snag_render_notice(render, command->label ? command->label : "", command->text);
     case SNAG_UI_HELP:
         return snag_render_help(render, command->text);
     case SNAG_UI_RUNTIME:
@@ -70,7 +72,8 @@ static const struct presentation_operation {
     enum snag_ui_operation kind;
     const char *name;
 } operations[] = {
-    {SNAG_UI_HOST, "host"}, {SNAG_UI_HELP, "help"}, {SNAG_UI_RUNTIME, "runtime"},
+    {SNAG_UI_HOST, "host"}, {SNAG_UI_NOTICE, "notice"},
+    {SNAG_UI_HELP, "help"}, {SNAG_UI_RUNTIME, "runtime"},
     {SNAG_UI_ERROR, "error"}, {SNAG_UI_WARNING, "warning"},
     {SNAG_UI_ROLLOUT_END, "end"}, {SNAG_UI_ROLLOUT_ABORT, "abort"},
     {SNAG_UI_SUBMITTED, "submitted"}, {SNAG_UI_CHOICES, "choices"},
@@ -302,8 +305,8 @@ snag_presentation_replay(struct snag_render *render, const json_t *record, int j
     default:
         break;
     }
-    if (snag_string_in(
-            op, "host help runtime error warning submitted choices orientation durable event") &&
+    if (snag_string_in(op,
+            "host notice help runtime error warning submitted choices orientation durable event") &&
         !command.text)
         goto invalid;
     if (snag_string_in(op, "submitted orientation protocol") && !command.label) goto invalid;

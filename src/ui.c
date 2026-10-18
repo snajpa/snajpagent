@@ -2218,6 +2218,7 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
             return display_conversation_event(display, message->command.data.irc);
         case SNAG_UI_HOST:
         case SNAG_UI_HELP:
+        case SNAG_UI_NOTICE:
         case SNAG_UI_RUNTIME:
         case SNAG_UI_ERROR:
         case SNAG_UI_WARNING:

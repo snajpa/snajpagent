@@ -4505,6 +4505,8 @@ The native model skills tool supports list, show and activate; activation pins
 attributed lower-priority instructions to the current task or persistent goal.
 Arguments are literal text. Package scripts use ordinary declared file/process
 tools with the existing permissions, yielding and cancellation behavior.
+Each newly loaded skill displays a green lifecycle notice, "Skill loaded: NAME",
+in the rollout. Reusing an active binding keeps the existing notice.
 Keep retained package contents unchanged and place outputs and caches elsewhere.
 Run Python helpers with python3 \-B or PYTHONDONTWRITEBYTECODE=1 to avoid bytecode
 cache writes. Changes inside a retained package invalidate its manifest at the next

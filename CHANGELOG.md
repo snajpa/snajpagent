@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Show newly loaded skills with the same green lifecycle bullet as compaction,
+  including prompt references, explicit selection and model activation.
+
 - Keep monitor backfill away from metrics-backed journals, including actively
   appended conversations. Show their live counters immediately without repeated
   history verification; historical sessions still load in the background.

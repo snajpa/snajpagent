@@ -241,6 +241,7 @@ int snag_render_update(struct snag_render *render, const char *text);
 int snag_render_help(struct snag_render *render, const char *text);
 int snag_render_choices(struct snag_render *, const char *);
 int snag_render_host(struct snag_render *render, const char *text);
+int snag_render_notice(struct snag_render *, const char *label, const char *text);
 int snag_render_voice_event(struct snag_render *, const json_t *, uint32_t, uint32_t);
 int snag_render_runtime(struct snag_render *render, const char *text);
 int snag_render_irc_event(struct snag_render *render, const struct snag_irc_event *event);
