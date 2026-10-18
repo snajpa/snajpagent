@@ -144,8 +144,8 @@ read_graph(int fd, const struct snag_binary_anchor *anchor,
     struct snag_binary_record record;
     if (find_record(fd, anchor, access, source->cwd.declaration,
             scratch, &batch, &record) < 0) return -1;
-    if (record.kind != SNAG_BINARY_SESSION_CREATED && record.kind != SNAG_BINARY_CWD_CHANGED)
-        return snag_errno(EINVAL);
+    if (record.kind != SNAG_BINARY_SESSION_CREATED && record.kind != SNAG_BINARY_CWD_CHANGED &&
+        record.kind != SNAG_BINARY_WORK_CONTEXT_CHANGED) return snag_errno(EINVAL);
     struct snag_binary_control_text_source directory;
     if (snag_binary_control_text_ref_resolve(&source->cwd.original.target,
             &batch, (enum snag_binary_kind)record.kind, &directory) < 0) return -1;

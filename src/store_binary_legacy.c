@@ -172,7 +172,8 @@ hosted_search_kind(enum snag_binary_kind kind)
 static bool
 legacy_kind(enum snag_binary_kind kind)
 {
-    return kind == SNAG_BINARY_SKILLS_UPDATED || hosted_search_kind(kind) ||
+    return kind == SNAG_BINARY_SKILLS_UPDATED || kind == SNAG_BINARY_WORK_CONTEXT_CHANGED ||
+        hosted_search_kind(kind) ||
         metadata_kind(kind) || timer_kind(kind) ||
         goal_kind(kind) || rule_voice_kind(kind) ||
         control_kind(kind) || download_kind(kind) || context_kind(kind) ||
@@ -2165,7 +2166,13 @@ snag_binary_legacy_encode(struct snag_buf *out, const char *type, const json_t *
     if (canonical_data(data) < 0) return -1;
     struct snag_buf scratch = {.max = SNAG_MAX_EVENT_LINE};
     int rc;
-    if (event.kind == SNAG_BINARY_SKILLS_UPDATED) {
+    if (event.kind == SNAG_BINARY_WORK_CONTEXT_CHANGED) {
+        rc = read_text(data, "old_cwd", &event.data.work_context.before);
+        if (rc == 0) rc = read_text(data, "new_cwd", &event.data.work_context.after);
+        if (rc == 0) rc = snag_binary_rule_value_encode(&scratch, data);
+        if (rc == 0) rc = snag_binary_rule_value_decode(scratch.data, scratch.len,
+            &event.data.work_context.context);
+    } else if (event.kind == SNAG_BINARY_SKILLS_UPDATED) {
         rc = snag_binary_rule_value_encode(&scratch, data);
         if (rc == 0) rc = snag_binary_rule_value_decode(scratch.data, scratch.len,
             &event.data.skills_updated);
@@ -3683,6 +3690,19 @@ snag_binary_legacy_decode(const struct snag_binary_record *record, const char **
     struct snag_binary_event event;
     int rc = snag_binary_event_decode(record, &event);
     if (rc < 0) return -1;
+    if (rc == 0 && event.kind == SNAG_BINARY_WORK_CONTEXT_CHANGED) {
+        *type = "work_context_changed";
+        if (snag_binary_rule_value_json(&event.data.work_context.context, data) < 0) return -1;
+        const char *before = snag_json_string(*data, "old_cwd");
+        const char *after = snag_json_string(*data, "new_cwd");
+        if (before && after && strlen(before) == event.data.work_context.before.size &&
+            strlen(after) == event.data.work_context.after.size &&
+            !memcmp(before, event.data.work_context.before.data, strlen(before)) &&
+            !memcmp(after, event.data.work_context.after.data, strlen(after))) return 0;
+        json_decref(*data);
+        *data = NULL;
+        return invalid();
+    }
     if (rc == 0 && event.kind == SNAG_BINARY_SKILLS_UPDATED) {
         *type = "skills_updated";
         return snag_binary_rule_value_json(&event.data.skills_updated, data);

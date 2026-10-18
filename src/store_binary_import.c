@@ -347,7 +347,7 @@ static int
 append_record(struct import_writer *writer, struct snag_binary_record record)
 {
     size_t overhead = SNAG_BINARY_BATCH_HEADER_SIZE + SNAG_BINARY_BATCH_FOOTER_SIZE;
-    size_t added = SNAG_BINARY_RECORD_HEADER_SIZE + writer->producer.field.len;
+    size_t added = SNAG_BINARY_RECORD_HEADER_SIZE + record.size;
     size_t used = overhead + writer->count * SNAG_BINARY_RECORD_HEADER_SIZE + writer->payload.len;
     if (writer->count && (used > SNAG_BINARY_BATCH_TARGET ||
         added > SNAG_BINARY_BATCH_TARGET - used) && flush_batch(writer) < 0) {
@@ -363,11 +363,9 @@ append_record(struct import_writer *writer, struct snag_binary_record record)
         writer->records = grown;
         writer->capacity = capacity;
     }
-    if (snag_buf_append(&writer->payload, writer->producer.field.data,
-        writer->producer.field.len) < 0) {
+    if (snag_buf_append(&writer->payload, record.payload, record.size) < 0) {
         return -1;
     }
-    record.size = writer->producer.field.len;
     record.payload = NULL; /* Bound after the aggregate buffer stops growing. */
     writer->records[writer->count++] = record;
     return 0;
@@ -475,6 +473,8 @@ import_event(void *opaque, const struct snag_session *state, uint64_t sequence,
         }
         record.kind = SNAG_BINARY_LEGACY_CHECKPOINT;
         record.flags = SNAG_BINARY_RECORD_OPTIONAL;
+        record.payload = writer->producer.field.data;
+        record.size = writer->producer.field.len;
     } else {
         enum snag_binary_kind kind;
         if (snag_binary_legacy_encode(&writer->producer.field, type, data, &kind) < 0) goto fail;

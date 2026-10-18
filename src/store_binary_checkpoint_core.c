@@ -425,6 +425,7 @@ copy_sources(struct snag_binary_checkpoint_sources *sources,
     sources->response_end = payloads->response_end;
     sources->resume_options = payloads->resume_options;
     sources->skills = payloads->skills;
+    sources->work_context = payloads->work_context;
     if (sources->process_count) {
         sources->processes = calloc(sources->process_count, sizeof(*sources->processes));
         if (!sources->processes) return -1;
@@ -571,6 +572,8 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     state->skills_revoked_seq = payload_state.skills_revoked_seq;
     memcpy(state->skills_policy_digest, payload_state.skills_policy_digest,
         sizeof(state->skills_policy_digest));
+    state->work_context = payload_state.work_context;
+    payload_state.work_context = NULL;
     state->active_skills = payload_state.skills;
     payload_state.skills = NULL;
     state->active_instructions = payload_state.instructions;

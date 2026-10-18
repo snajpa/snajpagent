@@ -6,6 +6,7 @@
 #include "json.h"
 #include "snajpagent.h"
 #include "skills.h"
+#include "work_context.h"
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
@@ -388,6 +389,7 @@ encode_state(const struct snag_session *s)
         goto fail;
     if (s->skills_revoked_seq) PUT("skills_revoked_seq",
         json_integer((json_int_t)s->skills_revoked_seq));
+    if (s->work_context) JSON_FIELD(work_context);
 #undef JSON_FIELD
 #define TEXT_FIELD(f) PUT("has_" #f, json_boolean(s->f != NULL))
     TEXT_FIELD(cwd); TEXT_FIELD(first_user); TEXT_FIELD(last_user);
@@ -486,6 +488,11 @@ decode_state(const json_t *data, struct snag_session *s)
         !snag_hex_is_lower(policy_digest, SNAG_SHA256_HEX_LEN))) return -1;
     if (json_object_get(data, "skills_revoked_seq") &&
         snag_json_integer_u64(data, "skills_revoked_seq", &s->skills_revoked_seq) < 0) return -1;
+    json_t *work_context = json_object_get(data, "work_context");
+    if (work_context) {
+        if (!snag_work_context_valid(work_context)) return -1;
+        s->work_context = json_incref(work_context);
+    }
     json_t *skills = json_object_get(data, "active_skills");
     if (skills) {
         if (!snag_skill_bindings_valid(skills)) return -1;

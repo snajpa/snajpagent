@@ -5,6 +5,7 @@
 #include "instructions.h"
 #include "irc.h"
 #include "skills.h"
+#include "work_context.h"
 #include "snajpagent.h"
 #include "store_binary_import.h"
 #include "store_binary_legacy.h"
@@ -263,6 +264,7 @@ free_session_state(struct snag_session *session)
     json_decref(session->checkpoint_context);
     json_decref(session->checkpoint_state);
     json_decref(session->skills_catalog);
+    json_decref(session->work_context);
     json_decref(session->active_skills);
     json_decref(session->download_queue);
     json_decref(session->irc_conversations);
@@ -1321,6 +1323,29 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
             snag_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0 || timestamp_ms == 0u)
             goto invalid;
         if (snag_json_set_new(session->strings, "irc_snapshot", json_string(text)) < 0) return -1;
+    } else if (!strcmp(type, "work_context_changed")) {
+        const char *before = snag_json_string(data, "old_cwd");
+        const char *after = snag_json_string(data, "new_cwd");
+        json_t *visit = json_object_get(data, "work_context");
+        json_t *active = json_object_get(data, "active");
+        json_t *instructions = json_object_get(data, "instructions");
+        if (!snag_json_exact_keys(data, "old_cwd new_cwd work_context active instructions") ||
+            !before || !session->cwd || strcmp(before, session->cwd) ||
+            !snag_text_valid(after, 1u, SNAG_PATH_MAX_BYTES) || !snag_path_root_len(after) ||
+            !visit || !snag_work_context_valid(visit) || !snag_skill_bindings_valid(active) ||
+            snag_instructions_metadata_valid(instructions, error, error_size) < 0) goto invalid;
+        /* All validation precedes the sole allocating mutation. Snapshot adoption below
+         * takes references only, so a failed preparation cannot leave half a switch. */
+        if (replace_text(session, &session->cwd, "cwd", after, SNAG_PATH_MAX_BYTES) < 0)
+            return -1;
+        json_decref(session->work_context);
+        session->work_context = json_incref(visit);
+        json_decref(session->active_skills);
+        session->active_skills = json_incref(active);
+        if (session->active_turn) {
+            json_decref(session->active_instructions);
+            session->active_instructions = json_incref(instructions);
+        }
     } else if (strcmp(type, "cwd_changed") == 0) {
         const char *old_cwd = snag_json_string(data, "old_cwd");
         const char *new_cwd = snag_json_string(data, "new_cwd");
@@ -4443,6 +4468,7 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->checkpoint_context = json_incref(source->checkpoint_context);
     staged->checkpoint_state = json_incref(source->checkpoint_state);
     staged->skills_catalog = json_incref(source->skills_catalog);
+    staged->work_context = json_incref(source->work_context);
     staged->active_skills = json_deep_copy(source->active_skills);
     staged->download_queue = json_deep_copy(source->download_queue);
     staged->irc_conversations = json_incref(source->irc_conversations);

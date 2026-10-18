@@ -225,6 +225,7 @@ struct snag_session {
     json_t *skills_catalog; /* Derived owner catalog; not checkpointed. */
     uint64_t skills_revoked_seq;
     char skills_policy_digest[SNAG_SHA256_HEX_LEN + 1u];
+    json_t *work_context; /* Current temporary visit, or NULL; journal-owned and immutable. */
     json_t *active_skills; /* Exact journal-owned snapshots, including task/goal bindings. */
     json_t *download_queue;    /* Pending workstation downloads, durable in the journal. */
     json_t *irc_conversations; /* Immutable connection/conversation directory, snapshot v3. */

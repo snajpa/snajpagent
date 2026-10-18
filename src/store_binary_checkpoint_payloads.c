@@ -28,7 +28,7 @@ valid(const struct snag_binary_checkpoint_payloads *view)
 {
     if (!view || view->turn == UINT64_MAX || view->compact_end == UINT64_MAX ||
         view->response_end == UINT64_MAX || view->resume_options == UINT64_MAX ||
-        view->skills == UINT64_MAX ||
+        view->skills == UINT64_MAX || view->work_context == UINT64_MAX ||
         (!!view->compact_start != !!view->compact_end) ||
         (view->compact_end && view->compact_start >= view->compact_end) ||
         (!!view->response_start != !!view->response_end) ||
@@ -52,8 +52,9 @@ snag_binary_checkpoint_payloads_decode(const void *data, size_t size,
     if (!data || !out || size < PAYLOAD_HEADER) return snag_errno(EINVAL);
     const unsigned char *bytes = data;
     uint64_t count = number(bytes + 42u);
-    size_t header = bytes[0] >= 2u ? PAYLOAD_HEADER + 8u : PAYLOAD_HEADER;
-    if ((bytes[0] < 1u || bytes[0] > 3u) || bytes[1] || bytes[50] > 1u ||
+    size_t header = PAYLOAD_HEADER + (bytes[0] >= 2u ? 8u : 0u) +
+        (bytes[0] >= 4u ? 8u : 0u);
+    if ((bytes[0] < 1u || bytes[0] > 4u) || bytes[1] || bytes[50] > 1u ||
         size < header || count > (SIZE_MAX - header) / 8u ||
         size != header + (size_t)count * 8u) return snag_errno(EINVAL);
     struct snag_binary_checkpoint_payloads value = {
@@ -62,7 +63,8 @@ snag_binary_checkpoint_payloads_decode(const void *data, size_t size,
         .response_end = number(bytes + 34u), .download_count = (size_t)count,
         .downloads_present = bytes[50] != 0u, .downloads = bytes + header,
         .resume_options = number(bytes + 51u),
-        .skills = bytes[0] >= 2u ? number(bytes + PAYLOAD_HEADER) : 0u};
+        .skills = bytes[0] >= 2u ? number(bytes + PAYLOAD_HEADER) : 0u,
+        .work_context = bytes[0] >= 4u ? number(bytes + PAYLOAD_HEADER + 8u) : 0u};
     if (!valid(&value)) return snag_errno(EINVAL);
     *out = value;
     return 0;
@@ -76,23 +78,30 @@ snag_binary_checkpoint_payloads_encode(struct snag_buf *out,
     json_t *options = json_object_get(state->strings, "resume_options");
     if ((options && !snag_session_options_valid(options)) ||
         (!!options != !!sources->resume_options) ||
-        (!!state->active_skills != !!sources->skills) ||
+        (!!state->active_skills != !!(sources->skills || sources->work_context)) ||
+        (!!state->work_context != !!sources->work_context) ||
         sources->download_count != json_array_size(state->download_queue) ||
         (sources->download_count && !sources->downloads) ||
         (state->download_queue && !json_is_array(state->download_queue)) ||
         (!!sources->compact_end != !!state->compact_output) ||
         (!!sources->response_end != !!state->response_public) ||
         (!!state->active_instructions != state->active_turn) ||
-        sources->download_count > (SIZE_MAX - PAYLOAD_HEADER) / 8u) return snag_errno(EINVAL);
+        sources->download_count > (SIZE_MAX - PAYLOAD_HEADER - 16u) / 8u) return snag_errno(EINVAL);
     uint64_t turn = state->active_instructions ?
         sources->texts.slots[SNAG_BINARY_TEXT_ACTIVE_PROMPT].declaration : 0u;
     if (!!turn != state->active_turn) return snag_errno(EINVAL);
-    unsigned char header[PAYLOAD_HEADER + 8u] = {1u};
+    unsigned char header[PAYLOAD_HEADER + 16u] = {1u};
     size_t header_size = PAYLOAD_HEADER;
     if (sources->skills) {
         header[0] = 3u;
         header_size += 8u;
         put_number(header + PAYLOAD_HEADER, sources->skills);
+    }
+    if (sources->work_context) {
+        header[0] = 4u;
+        header_size = sizeof(header);
+        put_number(header + PAYLOAD_HEADER, sources->skills);
+        put_number(header + PAYLOAD_HEADER + 8u, sources->work_context);
     }
     put_number(header + 2u, turn);
     put_number(header + 10u, sources->compact_start);
@@ -126,6 +135,7 @@ snag_binary_checkpoint_payloads_free(struct snag_binary_checkpoint_payloads_stat
     json_decref(value->downloads);
     json_decref(value->resume_options);
     json_decref(value->skills);
+    json_decref(value->work_context);
     memset(value, 0, sizeof(*value));
 }
 
@@ -366,7 +376,7 @@ snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *th
         (!!view->compact_end != !!state->compact_id[0]) ||
         (!!view->response_end != !!state->response_public_bytes) ||
         view->turn >= through->next_seq || view->resume_options >= through->next_seq ||
-        view->skills >= through->next_seq ||
+        view->skills >= through->next_seq || view->work_context >= through->next_seq ||
         view->compact_end >= through->next_seq || view->response_end >= through->next_seq) {
         return snag_errno(EINVAL);
     }
@@ -420,6 +430,32 @@ snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *th
         value.skills_revoked_seq = staged->skills_revoked_seq;
         memcpy(value.skills_policy_digest, staged->skills_policy_digest,
             sizeof(value.skills_policy_digest));
+    }
+    if (view->work_context) {
+        struct snag_binary_batch batch;
+        struct snag_binary_record record;
+        struct snag_binary_event event;
+        if (find_record(fd, through, access, view->work_context, SNAG_BINARY_WORK_CONTEXT_CHANGED,
+            &scratch, &batch, &record, &event) < 0) goto done;
+        const char *type;
+        json_t *data = NULL;
+        if (snag_binary_legacy_decode(&record, &type, &data) < 0) goto done;
+        /* This isolated source snapshot validates against its own before-cwd;
+         * the current cwd is restored independently from its indexed text source. */
+        staged->cwd = snag_json_string(data, "old_cwd");
+        staged->active_turn = state->active_turn;
+        int applied = snag_store_reduce_event(staged, type, data, view->work_context, NULL, 0u);
+        json_decref(data);
+        if (applied < 0) goto done;
+        value.work_context = json_incref(staged->work_context);
+        if (state->active_turn && view->work_context > view->turn) {
+            json_decref(value.instructions);
+            value.instructions = json_incref(staged->active_instructions);
+        }
+        if (view->work_context > view->skills) {
+            json_decref(value.skills);
+            value.skills = json_incref(staged->active_skills);
+        }
     }
     value.response_public = json_incref(staged->response_public);
     value.response_public_bytes = staged->response_public_bytes;

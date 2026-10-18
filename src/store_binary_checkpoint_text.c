@@ -89,6 +89,7 @@ record_source(const struct snag_binary_record *record, uint64_t sequence,
     switch (event->kind) {
     case SNAG_BINARY_SESSION_CREATED: text = event->data.created.cwd; break;
     case SNAG_BINARY_CWD_CHANGED: text = event->data.cwd.after; break;
+    case SNAG_BINARY_WORK_CONTEXT_CHANGED: text = event->data.work_context.after; break;
     case SNAG_BINARY_BANNER_UPDATED: text = event->data.banner; break;
     case SNAG_BINARY_SESSION_NAMED: text = event->data.name; break;
     case SNAG_BINARY_SERVICE_TIER_CHANGED: text = event->data.service_tier; break;
@@ -134,7 +135,8 @@ changed_slot(enum snag_binary_kind kind)
 {
     switch (kind) {
     case SNAG_BINARY_SESSION_CREATED:
-    case SNAG_BINARY_CWD_CHANGED: return SNAG_BINARY_TEXT_CWD;
+    case SNAG_BINARY_CWD_CHANGED:
+    case SNAG_BINARY_WORK_CONTEXT_CHANGED: return SNAG_BINARY_TEXT_CWD;
     case SNAG_BINARY_BANNER_UPDATED: return SNAG_BINARY_TEXT_BANNER;
     case SNAG_BINARY_SESSION_NAMED: return SNAG_BINARY_TEXT_NAME;
     case SNAG_BINARY_SERVICE_TIER_CHANGED: return SNAG_BINARY_TEXT_SERVICE_TIER;
@@ -289,7 +291,9 @@ slot_accepts(size_t slot, const struct snag_binary_event *event)
 {
     switch (slot) {
     case SNAG_BINARY_TEXT_CWD:
-        return event->kind == SNAG_BINARY_SESSION_CREATED || event->kind == SNAG_BINARY_CWD_CHANGED;
+        return event->kind == SNAG_BINARY_SESSION_CREATED ||
+            event->kind == SNAG_BINARY_CWD_CHANGED ||
+            event->kind == SNAG_BINARY_WORK_CONTEXT_CHANGED;
     case SNAG_BINARY_TEXT_FIRST_USER:
     case SNAG_BINARY_TEXT_LAST_USER:
         return event->kind == SNAG_BINARY_GOAL_STARTED ||
