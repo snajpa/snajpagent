@@ -660,18 +660,28 @@ snag_sha256_update(struct snag_sha256 *ctx, const void *data, size_t len)
 {
     const unsigned char *p = data;
 
-    while (len) {
+    if (!len) return;
+    ctx->bit_count += (uint64_t)len * 8u;
+    if (ctx->block_len) {
         size_t take = 64u - ctx->block_len;
         if (take > len) take = len;
         memcpy(ctx->block + ctx->block_len, p, take);
         ctx->block_len += take;
         p += take;
         len -= take;
-        ctx->bit_count += (uint64_t)take * 8u;
-        if (ctx->block_len == 64u) {
-            sha256_block(ctx, ctx->block);
-            ctx->block_len = 0;
-        }
+        if (ctx->block_len < 64u) return;
+        sha256_block(ctx, ctx->block);
+        ctx->block_len = 0u;
+    }
+    /* Hash complete borrowed blocks directly; retain only the partial tail. */
+    while (len >= 64u) {
+        sha256_block(ctx, p);
+        p += 64u;
+        len -= 64u;
+    }
+    if (len) {
+        memcpy(ctx->block, p, len);
+        ctx->block_len = len;
     }
 }
 
