@@ -30,6 +30,11 @@
 #if defined(__linux__) && defined(__x86_64__)
 #include <sys/syscall.h>
 static size_t private_fstat_count;
+static bool catalog_read_watch;
+static dev_t catalog_read_device;
+static ino_t catalog_read_inode;
+static off_t catalog_read_marker;
+static size_t catalog_marker_reads;
 
 /* Count actual metadata transfers, including the privacy helper's libc call. */
 int
@@ -37,6 +42,20 @@ fstat(int fd, struct stat *info)
 {
     ++private_fstat_count;
     return (int)syscall(SYS_fstat, fd, info);
+}
+
+ssize_t
+pread(int fd, void *buffer, size_t size, off_t offset)
+{
+    ssize_t count = syscall(SYS_pread64, fd, buffer, size, offset);
+    if (catalog_read_watch && count > 0 && offset >= 0 && offset <= catalog_read_marker &&
+        catalog_read_marker - offset < count) {
+        struct stat info;
+        assert(syscall(SYS_fstat, fd, &info) == 0);
+        if (info.st_dev == catalog_read_device && info.st_ino == catalog_read_inode)
+            ++catalog_marker_reads;
+    }
+    return count;
 }
 #endif
 
@@ -1886,10 +1905,77 @@ test_catalog_checkpoint_suffix(struct snag_store *store, const char *cwd)
     snag_session_close(&source);
 }
 
+static json_t *
+catalog_checkpoint_context(void *opaque, const struct snag_session *session)
+{
+    json_t *context = large_checkpoint_context(opaque, session);
+    assert(json_object_set_new(context, "recent", checked_json(json_pack(
+        "[{s:s,s:{s:s}}]", "type", "irc_snapshot", "data", "text",
+        "\nmodel nick: fixture\nhosted: fixture:7\nhistory:\n"))) == 0);
+    return context;
+}
+
+static void
+test_catalog_reuses_checkpoint(struct snag_store *store, const char *cwd, bool recent)
+{
+    struct snag_session session;
+    char error[256];
+    snag_session_init(&session);
+    assert(legacy_fixture_create(
+               store, &session, cwd, "default", "model", "medium", error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "irc_snapshot", checked_json(json_pack(
+        "{s:s,s:s,s:I}", "reason", "topology", "text",
+        recent ? "\nmodel nick: fixture\nhosted: fixture:7\nhistory:\n" :
+                 "\nmodel nick: fixture\nhosted: no\nno active endpoints\n",
+        "timestamp_ms", (json_int_t)1)),
+        NULL, error, sizeof(error)) == 0);
+    session.on_checkpoint = recent ? catalog_checkpoint_context : large_checkpoint_context;
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    session.on_checkpoint = NULL;
+    assert(snag_session_commit(&session, "effort_changed", checked_json(json_pack(
+        "{s:s,s:s}", "old_effort", "medium", "new_effort", "low")),
+        NULL, error, sizeof(error)) == 0);
+#if defined(__linux__) && defined(__x86_64__)
+    struct stat info;
+    assert(fstat(session.log_fd, &info) == 0);
+    catalog_read_device = info.st_dev;
+    catalog_read_inode = info.st_ino;
+    catalog_read_marker = session.checkpoint_offset + 8u * 1024u * 1024u;
+    catalog_marker_reads = 0u;
+    catalog_read_watch = true;
+#endif
+    json_t *rows =
+        snag_store_catalog(store, &session, UINT64_MAX, NULL, NULL, error, sizeof(error));
+#if defined(__linux__) && defined(__x86_64__)
+    catalog_read_watch = false;
+    fprintf(stderr, "catalog checkpoint payload reads: %zu\n", catalog_marker_reads);
+    /* Admission reads the checkpoint body. Formatting must reuse it rather
+     * than scan and verify that body again after processing the fresh suffix. */
+    assert(catalog_marker_reads == 1u);
+#endif
+    assert(rows);
+    bool found = false;
+    for (size_t i = 0u; i < json_array_size(rows); ++i) {
+        const json_t *row = json_array_get(rows, i);
+        if (strcmp(snag_json_string(row, "id"), session.id)) continue;
+        const json_t *cells = json_object_get(row, "cells");
+        assert(!strcmp(json_string_value(json_array_get(cells, 2u)), "model"));
+        assert(!strcmp(json_string_value(json_array_get(cells, 6u)),
+            recent ? "s/fixture@fixture:7" : "-"));
+        found = true;
+    }
+    assert(found);
+    json_decref(rows);
+    assert_session_lock_retained(&session, "after cached checkpoint formatting");
+    snag_session_close(&session);
+}
+
 static void
 test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
 {
     test_catalog_checkpoint_suffix(store, cwd);
+    test_catalog_reuses_checkpoint(store, cwd, true);
+    test_catalog_reuses_checkpoint(store, cwd, false);
     struct snag_session session;
     char id[SNAG_ID_HEX_LEN + 1u], error[256];
     snag_session_init(&session);
