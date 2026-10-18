@@ -173,6 +173,42 @@ class TopTests(unittest.TestCase):
         top.until(b'process=987 session=987', timeout=1)
         self.quit(top)
 
+    def test_metrics_do_not_replay_cold_or_changing_journals(self):
+        sid, _ = self.session(100, live=True)
+        journal = self.state / 'sessions' / sid / 'events.jsonl'
+        watch = -1
+        if sys.platform.startswith('linux'):
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            watch = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+            self.assertGreaterEqual(watch, 0)
+            self.addCleanup(os.close, watch)
+            self.assertGreaterEqual(libc.inotify_add_watch(watch, os.fsencode(journal), 1), 0)
+        top = self.top(delay=None)
+        top.until(b'process=100 session=100')
+        # A different historical session still needs the real backfill child.
+        # That child must not replay a metrics-backed owner's changing journal.
+        historical = store_history.create_legacy(self.state, self.root, 'fake', 'historical')
+        top.until(historical.parent.name[:8].encode(), timeout=3)
+        self.assertTrue(historical.with_name('catalog.json').is_file())
+        self.assertFalse(journal.with_name('catalog.json').exists())
+        if watch >= 0:
+            self.assertFalse(select.select([watch], [], [], 0)[0],
+                             'monitor backfill read a metrics-backed journal')
+        from test_session_listing import append_event
+        append_event(journal, 'session_named', {'name': 'still-live'})
+        # append_event reads the old tail to produce a valid next record.
+        if watch >= 0:
+            os.read(watch, 4096)
+        self.metrics(sid, 456)
+        top.output.clear()
+        top.until(b'process=456 session=456', timeout=1)
+        self.quit(top)
+        self.assertFalse(journal.with_name('catalog.json').exists())
+        if watch >= 0:
+            self.assertFalse(select.select([watch], [], [], 0)[0],
+                             'monitor replayed a changed metrics-backed journal')
+
     def test_first_frame_and_quit_do_not_wait_for_cold_verification(self):
         journal = store_history.create_legacy(self.state, self.root, 'fake', 'cold')
         # A large canonical record is valid but takes real verification work;
@@ -213,8 +249,8 @@ class TopTests(unittest.TestCase):
         self.quit(top)
 
     def test_failed_cache_publication_is_reported_and_retryable(self):
-        sid, _ = self.session()
-        catalog = self.state / 'sessions' / sid / 'catalog.json'
+        journal = store_history.create_legacy(self.state, self.root, 'fake', 'historical')
+        catalog = journal.with_name('catalog.json')
         catalog.mkdir(mode=0o700)
         marker = catalog / 'unrelated'
         marker.write_bytes(b'preserved')
