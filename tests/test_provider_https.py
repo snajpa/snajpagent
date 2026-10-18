@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Provider TLS chooses HTTP/1.1 when HTTP/2 streams are reset by the gateway."""
+"""Provider HTTP/1.1 keeps TLS verification, safe retries and connection reuse."""
 import http.server
 import json
 import os
 import shutil
+import socket
 import ssl
 import struct
 import subprocess
@@ -42,6 +43,22 @@ def response(partial=False):
     return body
 
 
+def tool_response(attempt):
+    item = {"id": f"item-{attempt}", "type": "function_call", "status": "completed",
+            "call_id": f"call-{attempt}", "name": "exec_command",
+            "arguments": json.dumps({"command": "printf fixture", "max_output_bytes": 128})}
+    identity = f"response-{attempt}"
+    body = event("response.created", response={"id": identity, "status": "in_progress",
+                                               "output": []})
+    body += event("response.output_item.added", output_index=0,
+                  item=dict(item, status="in_progress", arguments=""))
+    body += event("response.function_call_arguments.done", output_index=0,
+                  item_id=item["id"], arguments=item["arguments"])
+    body += event("response.output_item.done", output_index=0, item=item)
+    return body + event("response.completed", response={"id": identity, "status": "completed",
+        "output": [item], "usage": {"input_tokens": 1, "output_tokens": 3, "total_tokens": 4}})
+
+
 def frame(kind, flags, stream, payload=b""):
     return len(payload).to_bytes(3, "big") + bytes([kind, flags]) + struct.pack("!I", stream) + payload
 
@@ -62,6 +79,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
     def handle(self):
+        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         negotiated = self.connection.selected_alpn_protocol()
         self.server.protocols.append(negotiated)
         self.connection.settimeout(8)
@@ -86,14 +104,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
     def reply(self, status, body, content_type="application/json", truncated=False):
+        keepalive = (self.server.mode in ("reuse-tools", "reuse-drop") or
+                     self.server.mode.startswith("reuse-accepted-close")) and not truncated
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body) + (100 if truncated else 0)))
-        self.send_header("Connection", "close")
+        self.send_header("Connection", "keep-alive" if keepalive else "close")
         self.end_headers()
         self.wfile.write(body)
         self.wfile.flush()
-        self.close_connection = True
+        self.close_connection = not keepalive or (
+            self.server.mode == "reuse-drop" and self.server.attempt == 1)
 
     def do_GET(self):
         self.server.requests.append((self.command, self.path, self.request_version))
@@ -110,6 +131,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         mode = self.server.mode
         attempt = self.server.attempt
         self.server.attempt += 1
+        if mode.startswith("reuse-accepted-close") and (attempt == 1 or (
+                mode.endswith("exhausted") and attempt > 1)):
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_RDWR)
+            return
         if mode.startswith("reasoning") and (attempt == 0 or mode == "reasoning-exhausted"):
             body = event("response.created", response={"id": "abandoned",
                 "status": "in_progress", "output": []})
@@ -129,7 +155,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 body += b'data: {"type":'
             self.reply(200, body, "text/event-stream", truncated=True)
             return
-        body = response(mode == "partial")
+        body = tool_response(attempt) if mode.startswith("reuse-") and attempt < 2 else response(
+            mode == "partial")
         if mode == "broken-trailer":
             body += b'data: {"type":'
         elif mode == "late-event":
@@ -169,6 +196,7 @@ def check(binary):
         context.load_cert_chain(cert, key)
         context.set_alpn_protocols(["h2", "http/1.1"])
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = False  # server_close joins all accepted connections.
         server.socket = context.wrap_socket(server.socket, server_side=True)
         server.protocols, server.requests, server.resets = [], [], 0
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -188,10 +216,14 @@ def check(binary):
                          "complete", "partial", "untrusted", "reasoning",
                          "complete-cutoff", "chunked-complete", "broken-trailer", "late-event",
                          "reasoning-tool", "reasoning-hosted", "reasoning-unknown",
-                         "reasoning-partial-record", "reasoning-exhausted"):
+                         "reasoning-partial-record", "reasoning-exhausted",
+                         "reuse-tools", "reuse-server-close", "reuse-drop",
+                         "reuse-accepted-close", "reuse-accepted-close-retry",
+                         "reuse-accepted-close-exhausted"):
                 state = root / name
                 server.mode, server.attempt = name, 0
                 before = len(server.requests)
+                connections_before = len(server.protocols)
                 case_env = dict(env)
                 case_config = config
                 if name.startswith("persistent-ca"):
@@ -209,6 +241,11 @@ def check(binary):
                     if name == "persistent-ca-hostname":
                         case_config.write_text(case_config.read_text().replace(
                             "https://localhost:", "https://127.0.0.1:"))
+                    case_config.chmod(0o600)
+                elif name == "reuse-accepted-close":
+                    case_config = root / (name + ".ini")
+                    case_config.write_text(config.read_text().replace(
+                        "max_turn_retries=0", "max_turn_retries=0\nretry_auto=false"))
                     case_config.chmod(0o600)
                 elif name == "untrusted":
                     case_env.pop("SSL_CERT_FILE")
@@ -232,6 +269,37 @@ def check(binary):
                     events = read_events(path)
                     assert sum(e["type"] == "response_completed" for e in events) == 1
                     assert not any(e["type"] == "response_failed" for e in events)
+                elif name.startswith("reuse-accepted-close"):
+                    path, = journal_paths(state)
+                    events = read_events(path)
+                    assert sum(e["type"] == "tool_finished" for e in events) == 1
+                    connections = len(server.protocols) - connections_before
+                    if name.endswith("retry"):
+                        assert result.returncode == 0, result.stderr
+                        assert result.stdout.strip() == "HTTPS answer once", result.stdout
+                        assert len(requests) == 3, requests
+                        assert connections == 2, (name, connections)
+                        assert result.stderr.count("provider retry 1/2") == 1, result.stderr
+                        assert sum(e["type"] == "response_completed" for e in events) == 2
+                    else:
+                        exhausted = name.endswith("exhausted")
+                        assert result.returncode != 0, result
+                        assert len(requests) == (4 if exhausted else 2), requests
+                        assert connections == (3 if exhausted else 1), (name, connections)
+                        failure, = [e["data"] for e in events if e["type"] == "response_failed"]
+                        assert failure["retry_count"] == (2 if exhausted else 0), failure
+                        assert sum(e["type"] == "response_completed" for e in events) == 1
+                elif name.startswith("reuse-"):
+                    assert result.returncode == 0, result.stderr
+                    assert result.stdout.strip() == "HTTPS answer once", result.stdout
+                    assert len(requests) == 3, requests
+                    connections = len(server.protocols) - connections_before
+                    expected = {"reuse-tools": 1, "reuse-server-close": 3, "reuse-drop": 2}[name]
+                    assert connections == expected, (name, connections, expected)
+                    path, = journal_paths(state)
+                    events = read_events(path)
+                    assert sum(e["type"] == "tool_finished" for e in events) == 2
+                    assert sum(e["type"] == "response_completed" for e in events) == 3
                 elif name == "partial":
                     assert result.returncode != 0, result
                     assert "provider transport failed" in result.stderr, result.stderr
@@ -262,7 +330,8 @@ def check(binary):
                 assert all(r[2] == "HTTP/1.1" for r in server.requests)
             print("provider HTTPS: persistent CA, token counting, trust/hostname rejection, "
                   "TLS, safe reasoning retry, completed cutoff retention, "
-                  "partial output and malformed trailers: ok", flush=True)
+                  "partial output, malformed trailers and tool-loop connection reuse: ok",
+                  flush=True)
         finally:
             server.shutdown()
             server.server_close()

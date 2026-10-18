@@ -2196,7 +2196,84 @@ transport_connection(
         config->providers[0].base_url, sizeof(config->providers[0].base_url), base_url));
     transport_settings(&config->providers[0], credential);
     return (struct snag_provider_connection){
-        config, &config->providers[0], credential, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL};
+        config, &config->providers[0], credential, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL,
+        NULL};
+}
+
+struct nested_transport {
+    struct snag_provider_connection connection;
+    CURLM *outer;
+    unsigned int calls;
+    bool cancel;
+};
+
+static int
+nested_transport_pump(void *opaque, unsigned int wait_ms)
+{
+    struct nested_transport *nested = opaque;
+    struct snag_provider_transport *transport = nested->connection.transport;
+    json_t *models = NULL;
+    char error[256] = {0};
+    (void)wait_ms;
+
+    if (nested->calls++) return nested->cancel ? 2 : 0;
+    assert(transport->busy && transport->multi);
+    nested->outer = transport->multi;
+    assert(snag_provider_models_list(nested->connection, &models, error, sizeof(error)) == 0);
+    assert(json_array_size(models) == 2u);
+    json_decref(models);
+    assert(transport->busy && transport->multi == nested->outer);
+    return nested->cancel ? 2 : 0;
+}
+
+static void
+test_session_transport_reentry(void)
+{
+    struct snag_provider_transport transport = {0};
+
+    for (unsigned int cancel = 0u; cancel < 2u; ++cancel) {
+        struct local_server outer, inner;
+        struct snag_config config, nested_config;
+        struct snag_credential credential = {0}, nested_credential = {0};
+        json_t *models = NULL;
+        char error[256] = {0};
+        start_server(&outer, MODEL_OPENAI, false, "/v1");
+        start_server(&inner, MODEL_OPENAI, false, "/v1");
+        struct snag_provider_connection connection =
+            transport_connection(&config, &credential, outer.endpoint);
+        struct nested_transport nested = {
+            .connection = transport_connection(&nested_config, &nested_credential, inner.endpoint),
+            .cancel = cancel != 0u};
+        nested.connection.transport = &transport;
+        connection.transport = &transport;
+        connection.pump = nested_transport_pump;
+        connection.pump_opaque = &nested;
+        assert(snag_provider_models_list(connection, &models, error, sizeof(error)) ==
+            (cancel ? 2 : 0));
+        assert(nested.calls && !transport.busy && transport.multi == nested.outer);
+        json_decref(models);
+        stop_server(&inner);
+        stop_server(&outer);
+
+        /* A nested request or cancellation must leave the cache usable for a
+         * later request to another origin, without sharing an active multi. */
+        start_server(&outer, MODEL_OPENAI, false, "/v1");
+        assert(snag_strcpy(config.providers[0].base_url,
+            sizeof(config.providers[0].base_url), outer.endpoint));
+        connection.pump = NULL;
+        models = NULL;
+        assert(snag_provider_models_list(connection, &models, error, sizeof(error)) == 0);
+        assert(!transport.busy && transport.multi == nested.outer);
+        json_decref(models);
+        stop_server(&outer);
+        snag_credential_clear(&nested_credential);
+        snag_credential_clear(&credential);
+        snag_config_free(&nested_config);
+        snag_config_free(&config);
+    }
+    snag_provider_transport_close(&transport);
+    assert(!transport.multi && !transport.busy);
+    snag_provider_transport_close(&transport);
 }
 
 /* The proxy keys prompt-cache affinity on a session identity from its session lane; without it
@@ -2225,7 +2302,7 @@ test_session_identity_header(void)
     snag_config_init(&config);
     connection = (struct snag_provider_connection){
         &config, &config.providers[1], &credential, NULL, NULL, NULL, session_id, 0, NULL, NULL,
-        NULL};
+        NULL, NULL};
     snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name, sizeof(config.providers[1].name), "transport") > 0);
@@ -2285,7 +2362,8 @@ test_local_provider_transport(void)
     struct snag_provider_connection connection;
     snag_config_init(&config);
     connection = (struct snag_provider_connection){
-        &config, &config.providers[1], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL};
+        &config, &config.providers[1], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL,
+        NULL};
     snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name, sizeof(config.providers[1].name), "transport") > 0);
@@ -2381,7 +2459,8 @@ test_codex_path_selection(void)
 
     snag_config_init(&config);
     connection = (struct snag_provider_connection){
-        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL};
+        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL,
+        NULL};
     transport_settings(&config.providers[0], &credential);
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         json_t *models = NULL;
@@ -2668,7 +2747,7 @@ test_create_retries(void)
         int rc = snag_provider_responses_create(
             (struct snag_provider_connection){&config, &config.providers[0], &credential,
                 cancellation.code ? &ui : NULL, cancellation.code ? cancel_retry : NULL,
-                &cancellation, NULL, 0, NULL, NULL, NULL},
+                &cancellation, NULL, 0, NULL, NULL, NULL, NULL},
             request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph, &failure, NULL, error,
             sizeof(error), &retries);
         if (cancellation.code) {
@@ -2743,7 +2822,7 @@ test_policy_clarification_after_reasoning(void)
     int rc = snag_provider_responses_create(
         (struct snag_provider_connection){
             &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL,
-            NULL},
+            NULL, NULL},
         request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph, &failure, NULL, error,
         sizeof(error), &retries);
     assert(rc < 0 && retries == 0u && emitted.text.len == 0u);
@@ -3140,7 +3219,7 @@ test_native_compaction_probe(void)
         int rc = snag_provider_native_compaction_probe(
             (struct snag_provider_connection){
                 &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL,
-                NULL},
+                NULL, NULL},
             "gpt-5.5", error, sizeof(error));
         if (cases[i].live) stop_server(&server);
         assert(rc == cases[i].expected);
@@ -6463,7 +6542,7 @@ test_provider_auth(void)
             int rc = snag_provider_models_list(
                 (struct snag_provider_connection){
                     &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL,
-                    NULL, NULL},
+                    NULL, NULL, NULL},
                 &models, error, sizeof(error));
             if (rc < 0 && mode == MODEL_AUTH_401)
                 (void)fprintf(stderr, "auth fixture failed: %s\n", error);
@@ -6580,7 +6659,7 @@ test_provider_auth(void)
         int rc = snag_provider_responses_compact(
             (struct snag_provider_connection){
                 &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0, NULL, NULL,
-                NULL},
+                NULL, NULL},
             request, &output, error, sizeof(error), NULL);
         assert(rc == (pass < 3u ? SNAG_PROVIDER_UNSUPPORTED : -1));
         assert(output.value == NULL);
@@ -11337,6 +11416,7 @@ main(int argc, char **argv)
     test_read_only_dispatch();
     test_goal_tool_manipulates_unfinished_goals();
     test_local_provider_transport();
+    test_session_transport_reentry();
     test_session_identity_header();
     test_openrouter_search_transport();
     test_codex_path_selection();

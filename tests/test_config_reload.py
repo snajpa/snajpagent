@@ -5,6 +5,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import socket
 import sys
 import tempfile
 import threading
@@ -16,6 +17,13 @@ from test_remote_terminal import RemoteProcess
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(10)
+        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
     def log_message(self, *_):
         pass
 
@@ -32,6 +40,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         self.server.requests.append((self.path, self.headers.get('Authorization'),
                                      self.headers.get('ChatGPT-Account-Id'), body))
+        self.server.connections.append(self.client_address[1])
         self.server.entered.set()
         assert self.server.release.wait(10), 'fixture response was not released'
         payload = response().replace(b"HTTPS answer once", b"RELOAD_OK")
@@ -54,7 +63,9 @@ class Fixture:
         (self.state / 'auth').mkdir(mode=0o700)
         self.config = self.state / 'config.ini'
         self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.server.daemon_threads = False
         self.server.requests, self.server.renewals = [], []
+        self.server.connections = []
         self.server.entered = threading.Event()
         self.server.release = threading.Event()
         self.server.release.set()
@@ -138,8 +149,10 @@ def check(binary):
             f.query(b, '/old/v1/responses', 'fixture-old')
             f.send(a, '/model other/gpt-switched/low', 'READY>')
             f.query(a, '/other/v1/responses', 'fixture-other-old', 'gpt-switched')
+            previous_connection = f.server.connections[-1]
             f.send(a, '/configure', 'configuration reloaded:')
             f.query(a, '/other/v1/responses', 'fixture-other-new', 'gpt-switched')
+            assert f.server.connections[-1] != previous_connection
             f.query(b, '/old/v1/responses', 'fixture-old')
             f.send(a, '/model openai/gpt-saved/high', 'READY>')
             f.query(a, '/new/v1/responses', 'fixture-new')
