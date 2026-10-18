@@ -113,7 +113,8 @@ source_record(void *opaque, const struct snag_binary_record *record, uint64_t se
     const char *type = NULL;
     json_t *data = NULL;
     int rc = snag_binary_checkpoint_record_project(selection->source->fd,
-        selection->source->verified, selection->source->access, record, sequence, &type, &data);
+        selection->source->verified, selection->source->access, record, sequence,
+        NULL, &type, &data);
     if (!rc) rc = select_source(selection, sequence, type, data);
     json_decref(data);
     return rc;
@@ -183,7 +184,7 @@ recover_prompt_source(void *opaque, const struct snag_binary_record *record, uin
     const char *type = NULL;
     json_t *data = NULL;
     int rc = snag_binary_checkpoint_record_project(source->fd, source->verified,
-        NULL, record, sequence, &type, &data);
+        NULL, record, sequence, NULL, &type, &data);
     struct snag_irc_event event;
     if (!rc) rc = snag_irc_event_record_read(type, data, &event);
     if (!rc && prompt_names_event(selection->prompt, &event))
@@ -503,7 +504,7 @@ walk_sources(void *opaque, const json_t *wanted, const char *prompt,
                 record.kind != SNAG_BINARY_LEGACY_CHECKPOINT &&
                 record.kind != SNAG_BINARY_CHECKPOINT_RECEIPT) continue;
             if (snag_binary_checkpoint_record_project(source->fd, source->verified,
-                source->access, &record, seq, &type, &data) < 0) goto done;
+                source->access, &record, seq, NULL, &type, &data) < 0) goto done;
             int called = fn(argument, NULL, seq, type, data, error, error_size);
             json_decref(data);
             if (called < 0) goto done;

@@ -4959,17 +4959,18 @@ native_history_visit(void *opaque, const struct snag_binary_record *record, uint
     const char *type = NULL;
     json_t *data = NULL;
     int rc = snag_binary_checkpoint_record_project(
-        history->fd, &history->through, &history->available, record, sequence, &type, &data);
+        history->fd, &history->through, &history->available, record, sequence, NULL, &type, &data);
     if (rc < 0 && errno == ENOENT && history->index_fd >= 0) {
         if (history->has_query) {
             rc = snag_binary_checkpoint_record_project(
-                history->fd, &history->through, &history->query, record, sequence, &type, &data);
+                history->fd, &history->through, &history->query, record, sequence,
+                NULL, &type, &data);
         }
         if (rc < 0 && errno == ENOENT) {
             rc = native_history_query(history, sequence);
             if (!rc) {
                 rc = snag_binary_checkpoint_record_project(history->fd, &history->through,
-                    &history->query, record, sequence, &type, &data);
+                    &history->query, record, sequence, NULL, &type, &data);
             }
         }
     }

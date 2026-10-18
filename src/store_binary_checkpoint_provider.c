@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_binary_checkpoint.h"
 #include "json.h"
+#include "store_binary_producer.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -232,6 +233,7 @@ struct source_rows {
     bool (*cancelled)(void *);
     void *opaque;
     json_t *out;
+    struct snag_binary_host_source *host;
 };
 
 static bool
@@ -260,15 +262,17 @@ static int
 source_row_read(void *opaque, const struct snag_binary_record *record, uint64_t sequence)
 {
     struct source_rows *rows = opaque;
-    if (rows->at >= rows->count || sequence != get_number(rows->rows + rows->at * rows->stride))
-        return snag_errno(EINVAL);
+    if (rows->at >= rows->count) return snag_errno(EINVAL);
+    uint64_t wanted = get_number(rows->rows + rows->at * rows->stride);
+    if (sequence < wanted) return 0;
+    if (sequence != wanted) return snag_errno(EINVAL);
     bool marker = record->kind == SNAG_BINARY_CHECKPOINT_RECEIPT ||
         record->kind == SNAG_BINARY_LEGACY_CHECKPOINT;
     if (record->flags != (marker ? SNAG_BINARY_RECORD_OPTIONAL : 0u)) return snag_errno(EINVAL);
     const char *type;
     json_t *data = NULL;
     if (snag_binary_checkpoint_record_project(rows->fd, rows->through, rows->access,
-        record, sequence, &type, &data) < 0) return -1;
+        record, sequence, &rows->host, &type, &data) < 0) return -1;
     return source_row_append(rows, sequence, type, data);
 }
 
@@ -311,18 +315,18 @@ read_source_rows(int fd, const struct snag_binary_anchor *through,
             source_row_read, source_rows_cancelled, &selected) < 0) goto done;
         if (selected.at != captured) { errno = ENOENT; goto done; }
     }
-    while (selected.at < count) {
-        if (source_rows_cancelled(&selected)) { errno = ECANCELED; goto done; }
-        uint64_t sequence = get_number(rows + selected.at * stride);
-        if (sequence > INT64_MAX) { errno = EOVERFLOW; goto done; }
-        const char *type;
-        json_t *data = NULL;
-        if (snag_binary_checkpoint_projection_read(fd, through, access, sequence,
-                &type, &data) < 0 || source_row_append(&selected, sequence, type, data) < 0)
+    if (selected.at < count) {
+        uint64_t first = get_number(rows + selected.at * stride);
+        uint64_t last = get_number(rows + (count - 1u) * stride);
+        if (last > INT64_MAX) { errno = EOVERFLOW; goto done; }
+        if (snag_binary_checkpoint_records_read(fd, through, access, first, last + 1u,
+            source_row_read, source_rows_cancelled, &selected) < 0)
             goto done;
+        if (selected.at != count) { errno = ENOENT; goto done; }
     }
     rc = 0;
 done:
+    snag_binary_host_source_release(selected.host);
     snag_buf_free(&locations);
     return rc;
 }

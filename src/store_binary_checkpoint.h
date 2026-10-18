@@ -42,10 +42,13 @@ int snag_binary_checkpoint_projection_read(int fd, const struct snag_binary_anch
  * without rereading this record or interpreting it against final semantic state.
  * Return0 replaces outputs,1 skips unknown optional metadata,-1 leaves outputs
  * untouched. Source identity/ancestry/immutability/membership remain caller proof;
- * this lookup grants no receipt authority, execution or semantic admission. */
+ * this lookup grants no receipt authority, execution or semantic admission.
+ * An optional host cache belongs to one journal/anchor and reuses authenticated
+ * host facts across ordered records. The caller releases it after the walk. */
+struct snag_binary_host_source;
 int snag_binary_checkpoint_record_project(int fd, const struct snag_binary_anchor *through,
     const struct snag_binary_checkpoint_index *, const struct snag_binary_record *, uint64_t,
-    const char **type, json_t **out);
+    struct snag_binary_host_source **host, const char **type, json_t **out);
 
 /* Restore this recipe directly from canonical sources and complete pinned
  * working-set closure. Recent/history membership, metadata and lifecycle require

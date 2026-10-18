@@ -1194,11 +1194,12 @@ checks exact counted literal bytes against the already reduced and encoded JSON
 facts; it reuses that validation instead of decoding the complete snapshot again.
 Reader validation and original-source checks remain independent.
 
-Writer staging shares an immutable latest-snapshot cache. Linear readers retain
-that same bounded working set and reuse verified JSON facts by exact original
-tuple, so stable facts require neither text copies nor historical scans on each
-response. Cold point and suffix readers resolve original sources through the
-existing verified batch/index path. Checkpoint closures retain each referenced
+Writer staging shares an immutable latest-snapshot cache. Linear readers and
+ordered checkpoint source restoration retain that same bounded working set and
+reuse verified JSON facts by exact original tuple, so stable facts require neither
+text copies nor historical scans on each response. Unindexed checkpoint suffixes
+use one ordered batch walk. Cold point readers resolve original sources through
+the existing verified batch/index path. Checkpoint closures retain each referenced
 literal source as a field dependency. Checkpoint acknowledgement and resume clear
 the writer cache; the next snapshot seeds fresh literal sources. Cache loss affects
 storage reuse only. Expanded snapshots retain the existing native event size bound.
@@ -1207,6 +1208,39 @@ Canonical history and context replay receive complete ordered snapshots. The
 provider still receives only changed host facts. The reducer checks boundary
 texts, current turn/response cycle, provider/profile identity, admitted steering,
 watermark and compaction/accounting relationships before adoption.
+
+#### Sharing qualification, October 18, 2026
+
+An instrumented producer probe encoded 4,096 snapshots containing one stable
+64-KiB fact and one changing fact. Both paths used the same current literal
+encoder and staged clone/reference/adopt transaction. The control used the
+`16cb5267` producer with cache-constructor/release link glue for the current
+reader; the candidate used the optimized producer in `5a344aa2`.
+
+| Producer metric | Literal control | Shared host facts |
+| --- | ---: | ---: |
+| Encoded payload bytes | 270,556,074 | 1,485,909 |
+| Instrumented CPU seconds, three runs | 2.552–2.560 | 2.530–2.537 |
+| C-path allocation calls | 28,672 | 32,768 |
+| Requested C-path allocation bytes | 2,151,677,952 | 2,152,038,400 |
+| C-path copied bytes | 1,081,724,584 | 1,081,916,208 |
+
+The cache adds one 88-byte allocation per changed snapshot in this fixture;
+relocating changing literals adds 191,624 copied bytes over the complete probe.
+The working set retains only the latest snapshot and its original-source tuples.
+Counters interposed on C allocation and copy symbols; Jansson's dynamically linked
+internal operations are outside their scope. Both paths include the same literal
+staging. The probe measures neither disk writes nor provider/network cost, and its
+instrumented CPU timings establish this comparison only.
+
+Permanent store tests cover exact payload savings, canonical JSON equality,
+UTF-8/base64 excerpts, literal predecessor versions, malformed offsets/counts,
+staged-error ownership, original-source identity, rejected reference chains,
+checkpoint dependency closure and cold reopened writers. A read-only qualification
+of an 851,436,259-byte historical journal opened its checkpoint in 0.264 seconds;
+independent replay of 407,109 batches from an immutable prefix took 67.716 seconds.
+Checkpoint and replay agreed on provider-context seams and active goal/turn state.
+That exercise qualifies historical recovery; existing journal bytes stay intact.
 
 ### Streamed public output and canonical fragments
 

@@ -712,7 +712,7 @@ project_record(struct replay_context *context, const struct snag_session *state,
 int
 snag_binary_checkpoint_record_project(int fd, const struct snag_binary_anchor *through,
     const struct snag_binary_checkpoint_index *access, const struct snag_binary_record *record,
-    uint64_t sequence, const char **type, json_t **out)
+    uint64_t sequence, struct snag_binary_host_source **host, const char **type, json_t **out)
 {
     if (fd < 0 || !through || !record || !sequence || sequence >= through->next_seq ||
         !type || !out) return snag_errno(EINVAL);
@@ -737,8 +737,10 @@ snag_binary_checkpoint_record_project(int fd, const struct snag_binary_anchor *t
         return 1;
     } else {
         struct replay_context context = {.fd = fd, .through = *through,
-            .sequence = sequence, .access = access, .source_projection = true};
+            .sequence = sequence, .access = access, .source_projection = true,
+            .cache_host = host != NULL, .host = host ? *host : NULL};
         rc = project_record(&context, NULL, record, &name, &data);
+        if (host) *host = context.host;
         if (rc < 0) return -1;
     }
     if (!data) return snag_errno(ENOMEM);
@@ -772,7 +774,7 @@ snag_binary_checkpoint_projection_read(int fd, const struct snag_binary_anchor *
             goto done;
         }
         rc = snag_binary_checkpoint_record_project(fd, through, access, &record,
-            wanted, type, out);
+            wanted, NULL, type, out);
         goto done;
     }
     if (rc > 0) rc = snag_errno(EINVAL);
