@@ -522,6 +522,7 @@ endif
 	python3 tests/test_provider_upload.py ./$(BIN)
 	python3 tests/test_provider_irc_retry.py ./$(BIN)
 	python3 tests/test_retry_auto.py ./$(BIN)
+	python3 tests/test_interaction_sync.py ./$(BIN)
 	python3 tests/test_command_wait.py ./$(BIN)
 	python3 tests/test_token_preflight.py ./$(BIN)
 	./tests/test_context

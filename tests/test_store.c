@@ -1720,8 +1720,8 @@ test_one_file_checkpoint(struct snag_store *store, const char *cwd)
     writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
     assert(writer >= 0 && pwrite(writer, &original, 1u, 0) == 1);
     assert(snag_sync_file(writer) == 0 && close(writer) == 0);
-    /* A broken referenced checkpoint is a hard error, never a quiet prefix
-     * scan. An incomplete trailing append is separately recoverable. */
+    /* Strict admission rejects a broken referenced checkpoint without repair.
+     * Exclusive resume separately reconstructs a verified canonical prefix. */
     int64_t checkpoint = session.checkpoint_offset;
     unsigned char checkpoint_byte;
     assert(pread(session.log_fd, &checkpoint_byte, 1u, checkpoint) == 1);
@@ -1730,7 +1730,9 @@ test_one_file_checkpoint(struct snag_store *store, const char *cwd)
     assert(snag_sync_file(writer) == 0 && close(writer) == 0);
     snag_session_close(&session);
     snag_session_init(&session);
-    assert(snag_session_open(store, &session, id, error, sizeof(error)) < 0);
+    assert(!snag_store_open_session_directory(store, &session, id, error, sizeof(error)));
+    assert(!snag_store_open_session_files(&session, false, error, sizeof(error)));
+    assert(snag_store_scan_log(&session, SNAG_TAIL_REJECT, error, sizeof(error)) < 0);
     snag_session_close(&session);
     int dir = openat(store->sessions_fd, id, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     assert(dir >= 0);

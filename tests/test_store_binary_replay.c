@@ -5112,7 +5112,12 @@ test_irc_admission_after_checkpoint(struct snag_store *store, const char *cwd, b
         unsigned char damaged = original ^ 0x80u;
         assert(snag_seek(journal, neighbor, SEEK_SET) == neighbor);
         assert(!snag_write_full(journal, &damaged, 1u));
-        assert(snag_session_open(store, &session, id, error, sizeof(error)) < 0);
+        /* Explicit strict admission rejects damage without repairing the
+         * writer's journal. Exclusive resume has a separate prefix-repair rule. */
+        assert(!snag_store_open_session_directory(store, &session, id, error, sizeof(error)));
+        assert(snag_store_open_session_files(&session, false, error, sizeof(error)) == 1);
+        assert(snag_store_load_binary_session(&session, SNAG_TAIL_REJECT,
+            error, sizeof(error)) < 0);
         snag_session_close(&session);
         snag_session_init(&session);
         assert(snag_seek(journal, neighbor, SEEK_SET) == neighbor);
