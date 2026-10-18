@@ -26,8 +26,11 @@ int snag_instructions_add_owned(struct snag_instruction_set *set, char *path,
                                char *error, size_t error_size);
 int snag_instructions_label_last(struct snag_instruction_set *set, const char *label,
                                 char *error, size_t error_size);
+int snag_instructions_project_root(const char *cwd, char **root, char *error, size_t error_size);
 int snag_instructions_discover(struct snag_instruction_set *set, const char *cwd,
                               char *error, size_t error_size);
+int snag_instructions_discover_context(struct snag_instruction_set *set, const char *cwd,
+                                      const char *visit_root, char *error, size_t error_size);
 int snag_instructions_worknote(const char *cwd, char **note,
                               char *error, size_t error_size);
 json_t *snag_instructions_metadata_json(const struct snag_instruction_set *set);
