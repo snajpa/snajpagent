@@ -258,9 +258,8 @@ load_rows(struct top_context *context, char *error, size_t error_size)
     if (context->selected < context->row_count)
         copy_text(selected_id, sizeof(selected_id), context->rows[context->selected].id);
 
-    catalog = context->cache_only ? snag_store_catalog_cached(
-        &context->store, context->catalog_pending, error, error_size) :
-        snag_store_catalog(&context->store, NULL, UINT64_MAX, NULL, NULL, error, error_size);
+    catalog = snag_store_catalog_monitor(&context->store,
+        context->cache_only ? context->catalog_pending : NULL, error, error_size);
     if (!catalog) return -1;
     count = json_array_size(catalog);
     if (count) {

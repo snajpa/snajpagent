@@ -218,7 +218,7 @@ read_snapshot(struct snag_session *session, bool native)
     return rc;
 }
 
-enum catalog_content { CATALOG_IDENTITY, CATALOG_CELLS };
+enum catalog_content { CATALOG_IDENTITY, CATALOG_CELLS, CATALOG_MONITOR };
 
 struct catalog_row {
     json_t *owner;
@@ -870,7 +870,7 @@ load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const 
     unsigned int columns, enum catalog_content content, bool (*cancel)(void *),
     void *cancel_opaque, struct snag_sha256 *pending, struct catalog_row *summary)
 {
-    if (!columns && content == CATALOG_CELLS) columns = 80u;
+    if (!columns && content != CATALOG_IDENTITY) columns = 80u;
     if (strlen(id) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) return false;
     snag_session_init(snapshot);
     /* Discovery and read-only recovery need only private descriptors. Reuse
@@ -888,10 +888,7 @@ load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const 
     if (snapshot->log_fd < 0 ||
         snag_store_verify_private_fd(snapshot->log_fd, false, "journal", NULL, 0u) < 0 ||
         snag_fstat(snapshot->log_fd, &before) < 0) goto fail;
-    json_t *row = catalog_read(snapshot->dir_fd, id, &before, columns);
-    if (row) goto cached;
-    json_decref(row);
-    if (pending) {
+    if (content == CATALOG_MONITOR) {
         /* Metrics already supply every monitor field. Do not queue journal
          * verification for a live owner on each append, or replay a completed
          * conversation only to discard its preview in the monitor. */
@@ -905,6 +902,11 @@ load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const 
             *summary = (struct catalog_row){.owner = cells, .cells = cells};
             return true;
         }
+    }
+    json_t *row = catalog_read(snapshot->dir_fd, id, &before, columns);
+    if (row) goto cached;
+    json_decref(row);
+    if (pending) {
         json_int_t source[8];
         catalog_source(&before, source);
         snag_sha256_update(pending, id, SNAG_ID_HEX_LEN);
@@ -1104,7 +1106,7 @@ static int
 list_sessions(struct snag_store *store, const struct snag_session *owned, uint64_t stored_limit,
     unsigned int columns, snag_store_emit_fn emit, void *opaque, json_t *catalog,
     bool (*cancel)(void *), void *cancel_opaque, struct snag_sha256 *pending,
-    char *error, size_t error_size)
+    enum catalog_content content, char *error, size_t error_size)
 {
     struct snag_directory *dir = open_sessions_dir(store, error, error_size);
     const char *entry;
@@ -1120,7 +1122,7 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
         if (cancel && cancel(cancel_opaque)) goto canceled;
         struct catalog_row summary;
         if (!load_catalog_row(
-                store, snapshot, entry, columns, CATALOG_CELLS,
+                store, snapshot, entry, columns, content,
                 cancel, cancel_opaque, pending, &summary)) {
             if (cancel && cancel(cancel_opaque)) goto canceled;
             continue;
@@ -1135,7 +1137,7 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
         }
         struct snag_metrics_view metrics;
         unsigned int status = live ? 2u : 3u;
-        if (live && !pending) {
+        if (live && content != CATALOG_MONITOR) {
             int attachment = snag_session_endpoint_status(snapshot->dir_fd, snapshot->dir_path);
             if (attachment >= 0) status = attachment ? 0u : 1u;
         } else if (live &&
@@ -1225,7 +1227,7 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned, uint
     size_t error_size)
 {
     return list_sessions(store, owned, stored_limit, columns, emit, opaque, NULL, NULL,
-        NULL, NULL, error, error_size);
+        NULL, NULL, CATALOG_CELLS, error, error_size);
 }
 
 json_t *
@@ -1235,7 +1237,7 @@ snag_store_catalog(struct snag_store *store, const struct snag_session *owned,
 {
     json_t *rows = json_array();
     if (rows && list_sessions(store, owned, stored_limit, 0u, NULL, NULL, rows, cancel,
-                    cancel_opaque, NULL, error, error_size) < 0) {
+                    cancel_opaque, NULL, CATALOG_CELLS, error, error_size) < 0) {
         json_decref(rows);
         rows = NULL;
     }
@@ -1243,20 +1245,20 @@ snag_store_catalog(struct snag_store *store, const struct snag_session *owned,
 }
 
 json_t *
-snag_store_catalog_cached(
+snag_store_catalog_monitor(
     struct snag_store *store, char pending[SNAG_SHA256_HEX_LEN + 1u],
     char *error, size_t error_size)
 {
     struct snag_sha256 source;
     snag_sha256_init(&source);
-    pending[0] = '\0';
+    if (pending) pending[0] = '\0';
     json_t *rows = json_array();
     if (rows && list_sessions(store, NULL, UINT64_MAX, 0u, NULL, NULL, rows, NULL,
-            NULL, &source, error, error_size) < 0) {
+            NULL, pending ? &source : NULL, CATALOG_MONITOR, error, error_size) < 0) {
         json_decref(rows);
         return NULL;
     }
-    if (source.bit_count) snag_sha256_final_hex(&source, pending);
+    if (pending && source.bit_count) snag_sha256_final_hex(&source, pending);
     return rows;
 }
 
