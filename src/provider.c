@@ -1308,22 +1308,22 @@ url_request_target(const char *url)
 }
 
 static void
-provider_ctx_init(struct provider_ctx *ctx, struct snag_provider_connection connection,
+provider_ctx_init(struct provider_ctx *ctx, const struct snag_provider_connection *connection,
     size_t body_max, size_t response_max)
 {
     memset(ctx, 0, sizeof(*ctx));
-    ctx->config = connection.config;
-    ctx->protection_in = connection.protection;
-    ctx->provider = connection.provider;
-    ctx->session_id = connection.session_id;
-    ctx->transport = connection.transport;
-    ctx->render = connection.render;
-    ctx->pump = connection.pump;
-    ctx->progress = connection.progress;
-    ctx->retry_allowed = connection.retry_allowed;
-    ctx->pump_opaque = connection.pump_opaque;
-    ctx->low_speed_ms = connection.low_speed_override_ms;
-    ctx->credential = *connection.credential;
+    ctx->config = connection->config;
+    ctx->protection_in = connection->protection;
+    ctx->provider = connection->provider;
+    ctx->session_id = connection->session_id;
+    ctx->transport = connection->transport;
+    ctx->render = connection->render;
+    ctx->pump = connection->pump;
+    ctx->progress = connection->progress;
+    ctx->retry_allowed = connection->retry_allowed;
+    ctx->pump_opaque = connection->pump_opaque;
+    ctx->low_speed_ms = connection->low_speed_override_ms;
+    ctx->credential = *connection->credential;
     snag_buf_init(&ctx->body, body_max);
     snag_buf_init(&ctx->error_body, response_max);
 }
@@ -1601,7 +1601,7 @@ provider_models_list(struct snag_provider_connection connection, json_t **models
     if (models) *models = NULL;
     if (!connection_valid(connection) || !models)
         return snag_fail(error, error_size, EINVAL, "invalid model-list request");
-    provider_ctx_init(&ctx, connection, SNAG_WIRE_BODY_MAX, SNAG_WIRE_BODY_MAX);
+    provider_ctx_init(&ctx, &connection, SNAG_WIRE_BODY_MAX, SNAG_WIRE_BODY_MAX);
     codex = provider_uses_codex_catalog(connection.provider);
     path = codex ? SNAG_CODEX_CATALOG_PATH : "/v1/models";
     if (provider_request_setup(&ctx, connection.credential, path, "application/json", NULL, NULL,
@@ -1657,7 +1657,7 @@ snag_provider_responses_count(struct snag_provider_connection connection,
         return snag_fail(error, error_size, ENOTSUP,
             "direct Codex does not provide exact input-token preflight");
     }
-    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
+    provider_ctx_init(&ctx, &connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
     if (provider_request_setup(&ctx, connection.credential, "/v1/responses/input_tokens",
             "application/json", count_request,
             "input-token count request exceeds the bounded body limit", count_write_cb, error,
@@ -1780,7 +1780,7 @@ snag_provider_responses_compact(struct snag_provider_connection connection,
     if (!connection_valid(connection) || !compact_request || !output)
         return snag_fail(error, error_size, EINVAL, "invalid compact request");
     bool codex = snag_auth_uses_codex(connection.provider->auth);
-    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
+    provider_ctx_init(&ctx, &connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
     /* A summary can stay silent for minutes while the provider ingests a large
      * source; the request timeout bounds it, not the provider idle timeout. */
     ctx.low_speed_ms = connection.provider->request_timeout_ms;
@@ -1834,7 +1834,7 @@ snag_provider_native_compaction_probe(
         snag_json_document_free(&probe);
         return rc == 0 ? 1 : -1;
     }
-    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
+    provider_ctx_init(&ctx, &connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
     if (provider_request_setup(&ctx, connection.credential, "/v1/responses/compact",
             "application/json", probe.value,
             "native compaction probe exceeds the bounded body limit", count_write_cb, error,
@@ -1890,7 +1890,7 @@ snag_provider_responses_create(struct snag_provider_connection connection,
     if (retry_count) *retry_count = 0u;
     if (!connection_valid(connection) || !create_request || !graph)
         return snag_fail(error, error_size, EINVAL, "invalid provider request");
-    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
+    provider_ctx_init(&ctx, &connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
     ctx.ready = ready;
     ctx.protection_out = protection;
     ctx.ready_opaque = ready_opaque;
@@ -2090,7 +2090,7 @@ snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
         return snag_fail(error, error_size, ENOTSUP,
             "Selected provider supports dictation and live voice, not this audio API operation");
     provider_ctx_init(&ctx,
-        (struct snag_provider_connection){
+        &(struct snag_provider_connection){
             config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL, NULL, NULL},
         20u * 1024u * 1024u, 65536u);
     ctx.audio_output = output;
@@ -2186,7 +2186,7 @@ snag_provider_voice_call(const struct snag_config *config,
     if (failure) memset(failure, 0, sizeof(*failure));
     if (!snag_provider_native_audio(provider) || !sdp || !json_is_object(session)) return -1;
     provider_ctx_init(&ctx,
-        (struct snag_provider_connection){
+        &(struct snag_provider_connection){
             config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL, NULL, NULL},
         65536u, 65536u);
     /* The caller resolves credentials before starting voice. Keep that same
