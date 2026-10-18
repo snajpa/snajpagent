@@ -2307,11 +2307,7 @@ change_fast(struct app_state *app, const char *argument)
                 return app_error(app, error), -1;
         }
     }
-    return app_textf(app, SNAG_UI_HOST, "Fast mode: %s (%s); model and effort unchanged",
-        enabled ? "ON" : "OFF",
-        enabled                     ? "priority for subsequent requests"
-        : app->session.service_tier ? "standard for subsequent requests"
-                                    : "provider default");
+    return app_textf(app, SNAG_UI_HOST, "Fast mode: %s", enabled ? "ON" : "OFF");
 }
 
 static int

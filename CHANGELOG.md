@@ -7,6 +7,8 @@
 - Show loaded skills by name and qualified ID with `/skills`, including a clear
   empty state. Refresh policy before the summary to retire revoked bindings.
 
+- Keep `/fast` confirmations to `Fast mode: ON` or `Fast mode: OFF`.
+
 - Display the final word as soon as its message completes, including while the
   provider continues streaming tool arguments or other response items.
 
