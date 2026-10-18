@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Display the final word as soon as its message completes, including while the
+  provider continues streaming tool arguments or other response items.
+
 - Show current settings for bare `/fast`, `/retry auto` and `/voice` commands.
   Explicit `on` or `off` changes fast service and retry policy; inspecting a
   configured default keeps it eligible for configuration reload.

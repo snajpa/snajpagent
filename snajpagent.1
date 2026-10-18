@@ -1695,6 +1695,8 @@ The renderer holds an unfinished word until whitespace or the end of an item,
 keeping attached punctuation together across provider chunks and Markdown
 style changes. Words that fit a row wrap as a unit; longer tokens stream in
 bounded pieces. Intervening messages flush pending text in order.
+Message completion releases the last word immediately, including while the
+provider continues generating tool arguments or other response items.
 The editable draft also wraps whole words when they fit a terminal row; longer
 words use terminal wrapping.  These displayed wraps do not insert submitted
 newlines.  Explicit newlines and leading whitespace remain part of the draft.

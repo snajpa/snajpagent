@@ -158,6 +158,12 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
     int fd = STDOUT_FILENO, rc = -1;
     const char *label = NULL;
 
+    if (!text) {
+        if (app->steering_requested || app->interrupt_requested || !app->stream_item_active ||
+            item_index != app->stream_item_index)
+            return 0;
+        return snag_app_close_stream_item(app, false);
+    }
     if (snag_app_active_input_pump(app, 0u) < 0)
         return stream_fail(app, errno, "active input failed before public output");
     while (len && !app->steering_requested && !app->interrupt_requested) {

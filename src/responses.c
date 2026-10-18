@@ -424,7 +424,7 @@ emit_text(struct snag_responses_stream *stream, size_t output_index, struct snag
 {
     enum snag_item_phase phase = item->phase ? phase_value(item->phase) : SNAG_PHASE_COMMENTARY;
 
-    if (!len || !stream->emit) return 0;
+    if ((!len && text) || !stream->emit) return 0;
     if (phase == SNAG_PHASE_NONE)
         return stream_fail(stream, EPROTO, "assistant message has no qualified phase");
     if (kind == SNAG_WIRE_PART_REFUSAL) {
@@ -573,6 +573,15 @@ message_snapshot(struct snag_responses_stream *stream, size_t output_index, cons
     if (complete && item->part_count != json_array_size(content))
         return stream_fail(stream, EPROTO, "message completion snapshot omitted observed content");
     if (complete) {
+        /* Message completion releases the final word even while the provider
+         * continues reasoning or producing another item's tool arguments. */
+        if (!item->complete && stream->emit) {
+            struct snag_wire_part *last = NULL;
+            for (struct snag_wire_part *part = item->parts; part; part = part->next)
+                if (part->text.len) last = part;
+            if (last && emit_text(stream, output_index, item, last->kind, NULL, 0u) < 0)
+                return -1;
+        }
         /* Reconcile any final text using the phase already emitted to the UI. */
         if (phase && item->phase && strcmp(item->phase, phase)) {
             free(item->phase);

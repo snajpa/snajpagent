@@ -23,6 +23,8 @@ struct snag_provider_failure {
     uint32_t retry_after_ms;
 };
 
+/* Text fragments are borrowed for the call. A NULL text with zero length closes
+ * the message after its first validated completion snapshot; it adds no text. */
 typedef int (*snag_responses_emit_fn)(void *opaque, size_t output_index, enum snag_item_kind kind,
     enum snag_item_phase phase, const char *provider_item_id, const char *text, size_t len);
 /* Provider-executed hosted tool activity: bounded, display-only evidence,

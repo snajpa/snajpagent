@@ -185,6 +185,9 @@ the completed phase; subsequent completed snapshots must agree. Identity and
 content consistency checks remain strict. This accommodates DeepSeek Flash's
 `final_answer` announcement followed by completed pre-tool `commentary` without
 replaying text or retrying a successful response.
+That first completed snapshot also closes the live message, flushing its final
+word while later response items continue streaming. Duplicate snapshots leave
+the closed message alone; word wrapping remains independent of chunk boundaries.
 Assistant messages retain their recorded `commentary` or `final_answer` phase
 through tool follow-ups, goal continuation, interrupted-prefix replay and
 compaction input. User, system, legacy developer and tool items carry no assistant phase.
