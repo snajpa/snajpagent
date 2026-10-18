@@ -1795,6 +1795,11 @@ must be complete and ordered. A response range starts after its accepting turn.
 The flag distinguishes an absent download queue from a present empty queue.
 A saved-options declaration selects the exact validated argument list in that
 session-options record. An empty list retains its declaration; absence uses zero.
+The argument grammar includes the interactive chat/rollout view alongside color,
+Markdown and verbosity. Accepted view and operator-verbosity changes update this
+same record immediately; unchanged choices borrow the existing list without an
+allocation or append. One-shot resume retains the interactive view while rendering
+in rollout. These preferences affect presentation only, not provider context.
 There are no copied instruction lists, compaction arrays, stream strings or
 file metadata or saved argument lists in the checkpoint. Decode borrows receipt
 bytes; encode stages an atomic append, including when source storage aliases its destination.

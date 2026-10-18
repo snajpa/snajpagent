@@ -1116,7 +1116,7 @@ Set verbosity to the number of flags. New sessions start at 0 without flags;
 resume retains the saved level when flags are omitted.
 More than six flags is an error.  The runtime command
 .B /verbose N
-sets the same process-local level.  See
+sets the same level and saves it for session resume.  See
 .BR DISPLAY .
 .TP
 .BR \-\-color [= when ]
@@ -1141,6 +1141,12 @@ Render supported model Markdown on terminals.  This is the default.
 .TP
 .BR \-\-no-markdown
 Show model Markdown literally.
+.TP
+.BI \-\-view " chat|rollout"
+Select the interactive startup view. On a stopped session this overrides the
+saved view. Sessions without a saved view start in chat with network roles and
+rollout without them. One-shot execution uses rollout and preserves the saved
+interactive view. Live attachment keeps the owner's current view.
 .TP
 .BR \-\-resume " [" session-id "]"
 Interactively attach to a running native session, or resume a stopped durable
@@ -1426,7 +1432,12 @@ steering text is bounded to 8 MiB in a turn.  Interactive EOF interrupts
 active work and exits, preserving the saved goal and queue arming state.
 The session remains resumable.
 .SS Views and prompt
-Startup without network roles opens rollout; startup with roles opens chat. Empty Tab,
+New sessions without network roles open rollout; new sessions with roles open chat.
+Stopped sessions restore their saved view; use
+.B \-\-view chat
+or
+.B \-\-view rollout
+to override it. Empty Tab,
 .BR /chat ,
 and
 .B /rollout
@@ -1445,7 +1456,10 @@ still take precedence. With one operator channel and no query, the chat prompt
 uses the plain operator name. Multiple channels or queries add a destination
 label; agent conversations always show their read-only identity. Classic prompts
 omit unread counts. Tab selection never sends or queues its draft.
-Rollout, each channel and each query keep separate process-local drafts.
+The selected chat/rollout view and operator verbosity are saved when changed in
+a saved session, including during active work. Resume restores them after an
+interrupted process as well as a normal exit. Rollout, each channel and each query
+keep separate process-local drafts.
 .PP
 All default prompts share an activity slot, a goal slot, a space, the local
 HH:MM:SS timestamp, and another space, in that order.
@@ -6568,7 +6582,9 @@ checkpoints and resume.
 Normal exit prints a two-line resume hint for every resumable session.  It
 includes the exact session and a nondefault dotdir. Saved configuration paths,
 documentation roots, presentation and IRC settings, and model/provider/effort
-preferences are restored from the session. The command contains no prompts or
+preferences are restored from the session. Presentation includes the selected
+chat/rollout view, verbosity, color and Markdown settings. Explicit startup options
+override saved choices when restarting a stopped session. The command contains no prompts or
 credential values. Disabled roles stay disabled across changed config defaults;
 temporary connection outages retain the desired endpoints.
 .PP

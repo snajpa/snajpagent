@@ -203,7 +203,8 @@ snag_session_option_arity(const char *name)
 {
     if (snag_string_in(name, "--no-listen --no-client --markdown --no-markdown -v")) return 0;
     if (snag_string_in(name,
-            "--config -d -dl --color --listen --client --model-nick --operator-nick --room-name")) {
+            "--config -d -dl --color --view --listen --client --model-nick "
+            "--operator-nick --room-name")) {
         return 1;
     }
     return -1;

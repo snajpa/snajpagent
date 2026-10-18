@@ -108,6 +108,8 @@ terminal loss. Use `/s d` to detach, then `snajpagent --attach SESSION_ID`
 running-session picker. `/s a ID` switches live sessions; failure keeps the source.
 Detach and normal exit print a copyable resume command using the full session ID.
 It reconnects to a running owner and retains session settings.
+Current source also restores the last chat/rollout view and verbosity when
+restarting a saved session.
 
 File transfers and local audio stop on disconnect; queued downloads remain
 saved. Restart microphone capture after reconnecting. New editors and pagers

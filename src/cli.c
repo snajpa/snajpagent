@@ -207,6 +207,7 @@ parse_options(
         {"--dotdir", 0, true, &cli->dotdir, NULL},
         {"--provider", 0, true, &cli->provider, NULL},
         {"--config", 0, true, &cli->config_path, NULL},
+        {"--view", 0, true, NULL, NULL},
         {"--effort", 0, true, &cli->effort, NULL},
         {"--listen", 's', true, &cli->irc_listen, NULL},
         {"--client", 'c', true, NULL, NULL},
@@ -296,6 +297,14 @@ parse_options(
                                         : snag_instructions_add_directory(&cli->doc_instructions,
                                               value, error, error_size)) < 0)
                 return -1;
+        } else if (!strcmp(name, "--view")) {
+            if (cli->view) return snag_errorf(error, error_size, "duplicate --view option");
+            const char *value =
+                option_argument(argc, argv, index, attached, name, error, error_size);
+            if (!value) return -1;
+            if (!snag_string_in(value, "chat rollout"))
+                return snag_errorf(error, error_size, "--view requires chat or rollout");
+            cli->view = !strcmp(value, "chat") ? SNAG_CLI_VIEW_CHAT : SNAG_CLI_VIEW_ROLLOUT;
         } else if (strcmp(name, "--color") == 0) {
             if (!attached && *index + 1 < argc &&
                 snag_string_in(argv[*index + 1], "auto always never"))
@@ -376,13 +385,16 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
         if (cli->resume || cli->execute || cli->list || cli->last || dashdash ||
             (positional >= 0 && positional < argc) || cli->doc_instructions.count || cli->model ||
             cli->provider || cli->effort || cli->verbosity || cli->config_path ||
-            cli->update_model_cache || cli->color || cli->markdown || cli->irc_listen ||
+            cli->update_model_cache || cli->color || cli->markdown || cli->view ||
+            cli->irc_listen ||
             cli->irc_no_listen || cli->irc_no_client || cli->irc_client_count ||
             cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name)
             return snag_errorf(error, error_size,
                 "--attach accepts only --dotdir and a live session id or -N NAME");
         return 0;
     }
+    if (cli->execute && cli->view)
+        return snag_errorf(error, error_size, "--view selects an interactive view; omit -e");
     if ((cli->irc_no_listen && cli->irc_listen) || (cli->irc_no_client && cli->irc_client_count))
         return snag_errorf(error, error_size, "conflicting positive and negative IRC role options");
     if (cli->list && positional >= 0 && positional < argc)
@@ -494,6 +506,7 @@ snag_cli_usage(int fd)
         "      --no-color               alias for --color=never\n"
         "      --markdown               render model Markdown (default)\n"
         "      --no-markdown            show model Markdown literally\n"
+        "      --view VIEW              start in chat or rollout (saved on resume)\n"
         "  -d DIR                       additional working docs with AGENTS.md; repeatable\n"
         "  -dl LABEL                   label the preceding -d directory\n"
         "  -m [PROVIDER/]MODEL[/EFFORT][:CONTEXT]  model/context on start or resume\n"

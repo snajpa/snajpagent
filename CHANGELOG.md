@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Restore the selected chat/rollout view when restarting a saved session. Save
+  view and operator-verbosity changes immediately for interrupted-process resume;
+  `--view chat|rollout` overrides the saved view on interactive startup. Reuse
+  unchanged resume arguments without allocating or copying a replacement list.
+
 - Preserve pending IRC reply reminders and output corrections through active-turn
   compaction and resume. Keep these inputs outside the summary until the next
   response consumes them, avoiding repeated local snapshot-validation failures.

@@ -3278,11 +3278,12 @@ change_context(struct app_state *app, const char *value, bool active)
 static int
 select_view(struct app_state *app, enum snag_render_view view, bool active)
 {
-    if (snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_VIEW, .data.value = view}) <
-            0 ||
-        set_input_prompt(app, active) < 0)
+    char error[256] = {0};
+    if (snag_ui_send(&app->ui,
+            (struct snag_ui_command){.kind = SNAG_UI_VIEW, .data.value = view}) < 0)
         return -1;
-    return 0;
+    if (snag_app_save_resume_options(app, error, sizeof(error)) < 0) return app_error(app, error);
+    return set_input_prompt(app, active);
 }
 /* A user-requested view switch. Announce it before the repaint, which can take a moment, so the
  * keystroke is visibly accepted, and refuse to start another switch while one is in flight so
@@ -3911,6 +3912,8 @@ handle_common_command(
 #endif
         if (!pane && level != snag_ui_verbosity(&app->ui) &&
             snag_ui_set_verbosity(&app->ui, level) < 0) return -1;
+        if (!pane && snag_app_save_resume_options(app, error, sizeof(error)) < 0)
+            return app_error(app, error);
         return app_reportf(app, "%s", feedback);
     }
     if (strncmp(line, "/compact", 8u) == 0 && (!line[8] || isspace((unsigned char)line[8]))) {
@@ -4068,20 +4071,17 @@ handle_common_command(
     int irc_rc = snag_app_irc_command(app, line, handled);
     if (*handled || irc_rc < 0) return irc_rc;
     *handled = true;
-    if (strcmp(line, "/chat") == 0) {
-        int rc = app->ui.input_view_applied ? set_input_prompt(app, active)
-                                            : user_switch_view(app, SNAG_RENDER_CHAT, active);
-
+    if (!strcmp(line, "/chat") || !strcmp(line, "/rollout")) {
+        enum snag_render_view view = !strcmp(line, "/chat") ? SNAG_RENDER_CHAT :
+            SNAG_RENDER_ROLLOUT;
+        if (app->ui.input_view_applied &&
+            snag_app_save_resume_options(app, error, sizeof(error)) < 0)
+            return app_error(app, error);
+        int rc = app->ui.input_view_applied ? set_input_prompt(app, active) :
+            user_switch_view(app, view, active);
         *prompt_ready = rc == 0;
-        if (rc == 0 && !app->networked)
+        if (rc == 0 && view == SNAG_RENDER_CHAT && !app->networked)
             rc = app_textf(app, SNAG_UI_HOST, "chat is offline; use /connect or /server start");
-        return rc;
-    }
-    if (strcmp(line, "/rollout") == 0) {
-        int rc = app->ui.input_view_applied ? set_input_prompt(app, active)
-                                            : user_switch_view(app, SNAG_RENDER_ROLLOUT, active);
-
-        *prompt_ready = rc == 0;
         return rc;
     }
     if (!strcmp(line, "/fallback")) return change_fallback(app, NULL);
@@ -4641,6 +4641,21 @@ snag_app_input_command(
     return rc;
 }
 
+/* Local UI commands can finish in the worker without a submitted command line. */
+static int
+poll_input(struct app_state *app, int timeout_ms, enum snag_term_action *action, char **line)
+{
+    int rc = snag_ui_poll(&app->ui, timeout_ms, action, line);
+    char error[256] = {0};
+    if (rc >= 0 && snag_app_save_resume_options(app, error, sizeof(error)) < 0) {
+        free(*line);
+        *line = NULL;
+        (void)app_error(app, error);
+        return -1;
+    }
+    return rc;
+}
+
 int
 snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
 {
@@ -4692,7 +4707,7 @@ again:;
     /* Input remains actionable before response.created. An early steer rebuilds
      * the active request; a foreground slash command owns the composer until
      * it finishes. Neither needs a provider acknowledgement to be displayed. */
-    rc = snag_ui_poll(&app->ui, (int)timeout_ms, &action, &line);
+    rc = poll_input(app, (int)timeout_ms, &action, &line);
     history_warning(app);
     if (rc < 0) {
         int input_errno = errno;
@@ -7125,7 +7140,7 @@ pick_session_id(
         snag_ui_prompt(&app->ui, false, "session › ", frames, 1u, 0u) < 0)
         return -1;
     do {
-        rc = snag_ui_poll(&app->ui, -1, &action, &prefix);
+        rc = poll_input(app, -1, &action, &prefix);
     } while (rc == 0);
     if (rc < 0 || action != SNAG_TERM_SUBMIT || !prefix) {
         snag_errorf(error, error_size, "session selection cancelled");
@@ -7444,7 +7459,7 @@ interactive_loop(struct app_state *app, const char *initial)
                 !app->session.active_turn && snag_monotonic_ms() - app->remote_probe_at >= 1000u &&
                 snag_app_remote_probe(app) < 0)
                 goto ui_failed;
-            int poll_rc = snag_ui_poll(&app->ui, idle_poll_timeout(app), &action, &owned);
+            int poll_rc = poll_input(app, idle_poll_timeout(app), &action, &owned);
             if (owned) app->input_received_ms = app->ui.input_received_ms;
             history_warning(app);
             if (poll_rc < 0) {
@@ -7750,8 +7765,10 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     app.networked = !cli->execute && !cli->list && snag_irc_enabled(&config);
     snag_ui_send(&app.ui, (struct snag_ui_command){.kind = SNAG_UI_COMMANDS,
                               .data.commands = {snag_commands, snag_command_count()}});
-    if (app.networked && snag_ui_send(&app.ui, (struct snag_ui_command){.kind = SNAG_UI_VIEW,
-                                                   .data.value = SNAG_RENDER_CHAT}) < 0)
+    if (!cli->execute && (app.networked || cli->view) &&
+        snag_ui_send(&app.ui, (struct snag_ui_command){.kind = SNAG_UI_VIEW,
+            .data.value = cli->view == SNAG_CLI_VIEW_ROLLOUT ? SNAG_RENDER_ROLLOUT :
+                SNAG_RENDER_CHAT}) < 0)
         goto out;
     snag_ui_send(&app.ui,
         (struct snag_ui_command){.kind = SNAG_UI_PAUSE,

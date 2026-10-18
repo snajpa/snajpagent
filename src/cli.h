@@ -14,6 +14,8 @@
 enum snag_cli_auth_command {
     SNAG_CLI_AUTH_NONE, SNAG_CLI_LOGIN, SNAG_CLI_LOGIN_STATUS, SNAG_CLI_LOGOUT };
 
+enum snag_cli_view { SNAG_CLI_VIEW_DEFAULT, SNAG_CLI_VIEW_CHAT, SNAG_CLI_VIEW_ROLLOUT };
+
 struct snag_cli {
     int mcp_argc;
     char **mcp_argv;
@@ -36,6 +38,7 @@ struct snag_cli {
     bool update_model_cache;
     bool version;
     bool all_skills; /* Operator inspection only; never changes model catalogs. */
+    uint8_t view; /* enum snag_cli_view, packed with flags to preserve CLI copy size. */
     unsigned int verbosity;
     /* Immutable option values borrow argv for the lifetime of the CLI. */
     const char *color, *markdown; /* NULL means use configuration. */
