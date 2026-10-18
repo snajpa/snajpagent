@@ -13,6 +13,7 @@ struct parsed_stream {
     struct snag_buf text;
     size_t calls;
     size_t last_index;
+    size_t closed;
     enum snag_item_kind last_kind;
     enum snag_item_phase last_phase;
     char last_provider_id[64];
@@ -41,6 +42,11 @@ capture_emit(void *opaque, size_t output_index, enum snag_item_kind kind,
 {
     struct parsed_stream *emitted = opaque;
 
+    if (!text) {
+        assert(len == 0u);
+        ++emitted->closed;
+        return 0;
+    }
     ++emitted->calls;
     emitted->last_index = output_index;
     emitted->last_kind = kind;
@@ -134,6 +140,7 @@ test_deltas_survive_empty_terminal_output(void)
     assert(snag_response_graph_item(&emitted.graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
     assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "haha") == 0);
     assert(emitted.calls == 2u);
+    assert(emitted.closed == 1u);
     assert(emitted.text.len == 4u);
     assert(memcmp(emitted.text.data, "haha", 4u) == 0);
     assert(emitted.graph.usage.input_known && emitted.graph.usage.input_tokens == 12u);

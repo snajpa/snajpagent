@@ -2153,6 +2153,7 @@ emit_capture(void *opaque, size_t item_index, enum snag_item_kind kind, enum sna
     (void)kind;
     (void)phase;
     (void)provider_item_id;
+    if (!text) return 0;
     ++emitted->calls;
     return snag_buf_append(&emitted->text, text, len);
 }
