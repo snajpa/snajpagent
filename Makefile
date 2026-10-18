@@ -144,7 +144,7 @@ HEADERS += src/irc_address.h src/commands.h
 FIXTURE_BIN = tests/$(NAME)-fixture
 TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_skills tests/test_credential tests/test_sse tests/test_json tests/test_store_record tests/test_metrics $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire tests/test_clipboard tests/test_clipboard_transfer $(FIXTURE_BIN)
 TEST_BIN += tests/test_json_abi
-TEST_BIN += tests/test_ui_input
+TEST_BIN += tests/test_ui_input tests/test_batch_poll
 BUILD_INPUTS = build/.build-inputs
 TEST_BIN += tests/test_irc_address
 TEST_BIN += tests/test_irc_event
@@ -401,6 +401,12 @@ tests/test_ui_input:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter-out src/ui.c,$(filter %.c %.o,$^)) $(LDLIBS) $(CURL_LIBS)
 
+tests/test_batch_poll: $(filter-out src/app.o,$(COMMON_OBJ)) tests/test_batch_poll.c src/app.c $(HEADERS)
+
+tests/test_batch_poll:
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-o $@ $(filter-out src/app.c,$(filter %.c %.o,$^)) $(LDLIBS) $(CURL_LIBS)
+
 tests/test_tools:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) -O0 $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c %.o,$^) $(LDLIBS)
@@ -413,6 +419,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_base
 	./tests/test_config
 	./tests/test_ui_input
+	./tests/test_batch_poll
 	python3 tests/test_top.py ./$(BIN)
 	./tests/test_irc
 	./tests/test_irc_address
