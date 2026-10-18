@@ -3728,16 +3728,18 @@ def run_fast_case(binary, root, provider, environment):
                 case / "screen.txt") as terminal:
             terminal.wait("fake/host-model/medium")
             acknowledge(terminal, "/fast status", "Fast mode: OFF (provider default)")
+            acknowledge(terminal, "/fast", "Fast mode: OFF (provider default)")
             ask(terminal, "fast-initial", None)
-            screen = acknowledge(terminal, "/fast", "Fast mode: ON")
-            assert len(re.findall(r"^.*› /fast$", screen, re.MULTILINE)) == 1, screen
+            screen = acknowledge(terminal, "/fast on", "Fast mode: ON")
+            assert len(re.findall(r"^.*› /fast on$", screen, re.MULTILINE)) == 1, screen
             acknowledge(terminal, "/fast invalid", "usage: /fast [on|off|status]")
             acknowledge(terminal, "/configure", "configuration reloaded:")
             acknowledge(terminal, "/status", "fast: ON (priority requested)")
             ask(terminal, "fast-enabled", "priority")
             terminal.submit("fast-held")
             assert held.wait(10), terminal.capture()
-            acknowledge(terminal, "/fast", "Fast mode: OFF (standard")
+            acknowledge(terminal, "/fast", "Fast mode: ON")
+            acknowledge(terminal, "/fast off", "Fast mode: OFF (standard")
             assert seen[-1]["service_tier"] == "priority"
             assert len(seen) == 3, seen
             release.set()

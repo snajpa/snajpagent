@@ -30,6 +30,42 @@ class ModelFallbackTests(unittest.TestCase):
         os.write(child.master, text.encode() + b'\r')
         child.until(notice.encode(), 5)
 
+    def inspect_setting(self, command, notice):
+        settings = {'service_tier_changed', 'retry_auto_changed', 'fallback_changed'}
+        before = [e for e in self.owner.events() if e['type'] in settings]
+        config = self.owner.config.read_bytes()
+        requests = len(self.provider.requests)
+        for _ in range(2):
+            self.command(command, notice)
+        self.assertEqual([e for e in self.owner.events() if e['type'] in settings], before)
+        self.assertEqual(self.owner.config.read_bytes(), config)
+        self.assertEqual(len(self.provider.requests), requests)
+
+    def test_bare_fast_inspects_default_and_explicit_settings(self):
+        self.inspect_setting('/fast', 'Fast mode: OFF (provider default)')
+        for value, state in [('on', 'ON'), ('off', 'OFF')]:
+            self.command('/fast ' + value, 'Fast mode: ' + state)
+            self.inspect_setting('/fast', 'Fast mode: ' + state)
+
+    def test_bare_retry_keeps_configuration_default_reloadable(self):
+        self.inspect_setting('/retry auto', 'Automatic retry: ON (configuration)')
+        config = self.owner.config
+        config.write_text(config.read_text().replace('[agent]\n', '[agent]\nretry_auto=false\n'))
+        self.command('/configure', 'configuration reloaded')
+        self.inspect_setting('/retry auto', 'Automatic retry: OFF (configuration)')
+        self.command('/retry auto on', 'Automatic retry: ON (session override)')
+        self.inspect_setting('/retry auto', 'Automatic retry: ON (session override)')
+
+    def test_bare_voice_inspects_without_starting_capture(self):
+        self.inspect_setting('/voice', 'Voice: OFF')
+
+    def test_bare_fallback_preserves_selected_model_and_off(self):
+        self.inspect_setting('/fallback', 'Fallback: off')
+        self.command('/fallback fake/two-model/high')
+        self.inspect_setting('/fallback', 'two-model')
+        self.command('/fallback off')
+        self.inspect_setting('/fallback', 'Fallback: off')
+
     def deny(self, handler, sequence, yellow=False, code='cyber_policy'):
         # Unknown provider activity makes this a terminal error under the
         # existing classifier. Its incomplete local call must never execute.

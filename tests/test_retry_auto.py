@@ -100,16 +100,17 @@ class RetryFixture(QueryFixture):
 
 
 class RetryAutoTests(RetryFixture):
-    def test_toggle_feedback_echo_invalid_and_status(self):
-        self.command('/retry auto', 'Automatic retry: OFF (session override)')
+    def test_setting_feedback_echo_invalid_and_status(self):
+        self.command('/retry auto', 'Automatic retry: ON (configuration)')
+        self.command('/retry auto off', 'Automatic retry: OFF (session override)')
         self.assertIn(b'/retry auto', bytes(self.term.output))
         self.command('/status', 'automatic retry: OFF (session override)')
         self.command('/retry auto on', 'Automatic retry: ON (session override)')
         self.command('/retry auto on', 'Automatic retry: ON (session override)')
         self.command('/retry auto off extra', 'usage: /retry auto [on|off]')
-        self.command('/retry auto', 'Automatic retry: OFF (session override)')
+        self.command('/retry auto', 'Automatic retry: ON (session override)')
         values = [e['data']['value'] for e in self.events() if e['type'] == 'retry_auto_changed']
-        self.assertEqual(values, ['off', 'on', 'off'])
+        self.assertEqual(values, ['off', 'on'])
 
     def test_default_recovers_same_turn_and_keeps_tool_effect(self):
         self.begin(failures=3, prior_tool=True)
