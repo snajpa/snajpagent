@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep monitor backfill away from metrics-backed journals, including actively
+  appended conversations. Show their live counters immediately without repeated
+  history verification; historical sessions still load in the background.
+
 - Publish idle attachment-state changes before the owner metrics sampling deadline,
   keeping session listings current after controllers attach or detach, including
   signalled classic-view exits and broken terminal connections.

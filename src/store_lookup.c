@@ -892,6 +892,19 @@ load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const 
     if (row) goto cached;
     json_decref(row);
     if (pending) {
+        /* Metrics already supply every monitor field. Do not queue journal
+         * verification for a live owner on each append, or replay a completed
+         * conversation only to discard its preview in the monitor. */
+        struct snag_metrics_view metrics;
+        if (snag_metrics_read(store->root_fd, id, &metrics, NULL, 0u) == 0 && metrics.valid) {
+            char turns[32];
+            (void)snprintf(turns, sizeof(turns), "%llu", (unsigned long long)metrics.turns);
+            json_t *cells = json_pack("[s,s,s,s,s,s,s]", id, "-", metrics.model,
+                turns, "stored", "-", "-");
+            if (!cells) goto fail;
+            *summary = (struct catalog_row){.owner = cells, .cells = cells};
+            return true;
+        }
         json_int_t source[8];
         catalog_source(&before, source);
         snag_sha256_update(pending, id, SNAG_ID_HEX_LEN);
@@ -904,16 +917,6 @@ load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const 
             json_integer_value(json_array_get(stamp, 1u)) == (json_int_t)before.st_ino &&
             json_integer_value(json_array_get(stamp, 2u)) <= before.st_size) goto cached;
         json_decref(row);
-        struct snag_metrics_view metrics;
-        if (snag_metrics_read(store->root_fd, id, &metrics, NULL, 0u) == 0 && metrics.valid) {
-            char turns[32];
-            (void)snprintf(turns, sizeof(turns), "%llu", (unsigned long long)metrics.turns);
-            json_t *cells = json_pack("[s,s,s,s,s,s,s]", id, "-", metrics.model,
-                turns, "stored", "-", "-");
-            if (!cells) goto fail;
-            *summary = (struct catalog_row){.owner = cells, .cells = cells};
-            return true;
-        }
         goto fail;
     }
     memcpy(snapshot->id, id, sizeof(snapshot->id));
@@ -1274,6 +1277,9 @@ snag_store_catalog_refresh(struct snag_store *store, bool (*cancel)(void *), voi
         }
         struct catalog_row row;
         if (strlen(id) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) continue;
+        struct snag_metrics_view metrics;
+        if (snag_metrics_read(store->root_fd, id, &metrics, NULL, 0u) == 0 && metrics.valid)
+            continue;
         if (load_catalog_row(store, snapshot, id, 0u, CATALOG_CELLS,
                 cancel, opaque, NULL, &row)) {
             if (!row.published)

@@ -115,6 +115,13 @@ and leaves the caller's prepared session unchanged. Collision, private-directory
 validation and parent durability checks retain their existing behavior. The generic
 nonblocking directory-lock contract is unchanged for configuration writers.
 
+Monitor backfill excludes sessions with valid published metrics. Their model,
+turns, token totals and live owner identity are already available without parsing
+a conversation or publishing an unused preview. The foreground still verifies
+private session/journal descriptors and the current writer lock; metrics never
+replace recovery checks or authorize termination. Historical sessions without
+metrics retain verified background discovery and cache publication diagnostics.
+
 ## Format evolution and compatibility
 
 The new encoding is provisional while implementation and recovery testing expose
