@@ -4049,6 +4049,21 @@ handle_common_command(
             return app_error(app, "usage: /history [N]");
         if (chat) {
             const struct snag_irc_conversation_target *target = &app->ui.input_conversation;
+            struct snag_irc_conversation_target room = {.kind = SNAG_IRC_CHANNEL};
+            /* A default-room draft can precede the first routed event after resume. */
+            if (target->kind == SNAG_IRC_CONNECTION_EVENTS && !target->conversation[0] &&
+                !target->connection[0]) {
+                for (size_t i = 0u; i < app->ui.input_scopes.count; ++i) {
+                    const struct snag_irc_scope *scope = &app->ui.input_scopes.items[i];
+                    if (scope->target.destination != app->ui.input_destination || !scope->room[0])
+                        continue;
+                    memcpy(room.endpoint, scope->endpoint, sizeof(room.endpoint));
+                    memcpy(room.room, scope->room, sizeof(room.room));
+                    room.casemapping = scope->casemapping[SNAG_IRC_OPERATOR];
+                    target = &room;
+                    break;
+                }
+            }
             if (target->kind == SNAG_IRC_CHANNEL ? !target->endpoint[0] :
                     !target->connection[0] || !target->conversation[0])
                 return app_error(app, "select an IRC conversation first");
