@@ -413,6 +413,87 @@ class RuntimeSkills(SkillsCase):
         return subprocess.run(arguments, cwd=self.workspace, env=self.environment,
             input="", capture_output=True, text=True, timeout=30)
 
+    def test_prices_variables_and_unknown_dollar_words_stay_literal(self):
+        provider = self.configured_provider()
+        requests = []
+        prompt = "Check $5k and $500, $HOME, $missing, ${PATH}, `code $sample`."
+        def respond(handler, request, sequence):
+            requests.append(request)
+            provider.reply(handler, provider.response_body(sequence, "literal request done").encode(),
+                close_header=True)
+        provider.runtime_handler = respond
+        result = self.execute(prompt)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(requests), 1)
+        self.assertIn(prompt, json.dumps(requests[0]["input"]))
+
+    def test_price_alongside_approved_skill_preserves_activation(self):
+        provider = self.configured_provider()
+        self.skill(self.dotdir / "skills", body="APPROVED-PRICE-GUIDANCE")
+        self.operator_approve(self.run_cli("review", "sample"))
+        requests = []
+        def respond(handler, request, sequence):
+            requests.append(request)
+            provider.reply(handler, provider.response_body(sequence, "approved request done").encode(),
+                close_header=True)
+        provider.runtime_handler = respond
+        result = self.execute("Use $sample to check $5k with $HOME.")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(requests), 1)
+        self.assertIn("APPROVED-PRICE-GUIDANCE", json.dumps(requests[0]["input"]))
+
+    def test_explicit_missing_selection_is_recoverable_before_provider(self):
+        from tmux_terminal import TmuxTerminal
+        provider = self.configured_provider()
+        requests = []
+        def respond(handler, request, sequence):
+            requests.append(request)
+            provider.reply(handler, provider.response_body(sequence, "session still working").encode(),
+                close_header=True)
+        provider.runtime_handler = respond
+        with TmuxTerminal(self.root / "missing-terminal", BINARY, self.workspace, self.dotdir,
+                self.dotdir / "config.ini", 140, 42, args=("--no-listen", "--no-client"),
+                environment=self.environment) as terminal:
+            terminal.wait("host-model")
+            terminal.submit_wait("/skills use missing -- request", "skill unavailable")
+            self.assertEqual(len(requests), 0)
+            terminal.submit_wait("Continue with the $5k price.", "session still working")
+            self.assertEqual(len(requests), 1)
+
+    def test_refused_selection_then_resume_accepts_price(self):
+        provider = self.configured_provider()
+        requests = []
+        def respond(handler, request, sequence):
+            requests.append(request)
+            provider.reply(handler, provider.response_body(sequence, "resumed price done").encode(),
+                close_header=True)
+        provider.runtime_handler = respond
+        refused = self.execute("/skills use missing -- request")
+        self.assertEqual(refused.returncode, 4, refused.stderr)
+        self.assertIn("skill unavailable", refused.stderr)
+        self.assertEqual(len(requests), 0)
+        session, = (self.dotdir / "sessions").iterdir()
+        resumed = self.execute("Continue with $5k and $HOME.", session=session.name)
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(len(requests), 1)
+
+    def test_pending_or_banned_dollar_words_do_not_admit_guidance(self):
+        provider = self.configured_provider()
+        self.skill(self.dotdir / "skills", "pending", description="HOSTILE-PENDING",
+            body="HOSTILE-PENDING-BODY")
+        self.skill(self.dotdir / "skills", "banned", body="HOSTILE-BANNED-BODY")
+        self.run_cli("ban", "banned")
+        requests = []
+        def respond(handler, request, sequence):
+            requests.append(request)
+            provider.reply(handler, provider.response_body(sequence, "literal names done").encode(),
+                close_header=True)
+        provider.runtime_handler = respond
+        result = self.execute("Discuss $pending and $banned at $5k.")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(requests), 1)
+        self.assertNotIn("HOSTILE-", json.dumps(requests))
+
     def test_completion_filters_pending_and_banned_packages(self):
         from tmux_terminal import TmuxTerminal
         self.configured_provider()
@@ -527,7 +608,7 @@ class RuntimeSkills(SkillsCase):
             terminal.wait("host-model")
             terminal.submit("hold first response")
             self.assertTrue(started.wait(5))
-            terminal.send_text("/queue use $sample after this response")
+            terminal.send_text("/queue //skills use sample -- after this response")
             terminal.send_key("Enter")
             deadline = time.monotonic() + 5
             while not event_list(self.runtime_events(), "future_turn_queued"):
