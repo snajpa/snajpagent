@@ -1113,7 +1113,11 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
         }
         struct snag_metrics_view metrics;
         unsigned int status = live ? 2u : 3u;
-        if (live && snag_metrics_read(store->root_fd, entry, &metrics, NULL, 0u) == 0) {
+        if (live && !pending) {
+            int attachment = snag_session_endpoint_status(snapshot->dir_fd, snapshot->dir_path);
+            if (attachment >= 0) status = attachment ? 0u : 1u;
+        } else if (live &&
+            snag_metrics_read(store->root_fd, entry, &metrics, NULL, 0u) == 0) {
             if (!strcmp(metrics.state, "attached")) status = 0u;
             else if (!strcmp(metrics.state, "detached")) status = 1u;
         }

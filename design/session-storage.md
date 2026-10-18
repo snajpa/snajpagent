@@ -91,6 +91,9 @@ is reported in the monitor; explicit refresh retries the same source generation.
 show their previous verified display cells while current counters come from the
 existing private metrics files. Replaced journals never reuse the previous cells.
 A redirected monitor or ordinary listing waits for a complete verified snapshot.
+Ordinary listings query live owners through the read-only, version-compatible
+status exchange. Attachment state is independent of cached display cells and old
+metrics files; the interactive monitor uses metrics to keep its repaint loop nonblocking.
 
 Session-prefix calculation sorts retained row identities once and streams session
 and trash selectors once each, including unreadable directories. It uses adjacent
