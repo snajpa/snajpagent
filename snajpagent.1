@@ -3705,6 +3705,8 @@ blindly executed again.  Paused queues and goals remain paused.
 With automatic retry enabled, ordinary turns retry failures up to
 .B max_turn_retries
 additional times (default five), then display the manual retry hint. A repeated identical definitive provider rejection fails at once instead of replaying.
+Recovery progress appears as compact yellow status lines. Consecutive retries
+share one line per status; terminal failures retain their error diagnostic.
 Automatic retry counts and their original limit survive restart.  A successful
 actionable response or manual retry after terminal failure starts a fresh budget.
 Invalid local model/context settings wait for correction in interactive mode;

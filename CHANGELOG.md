@@ -13,6 +13,9 @@
   compaction and resume. Keep these inputs outside the summary until the next
   response consumes them, avoiding repeated local snapshot-validation failures.
 
+- Show automatic recovery as consecutive yellow retry status lines, with one
+  diagnostic for a terminal failure.
+
 - Store tool-output excerpts only once when their exact bytes already occur in
   the same result's model text. Native result references preserve the original
   transcript, byte accounting and older journal readability without a session

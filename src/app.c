@@ -196,6 +196,11 @@ turn_retry_available(const struct app_state *app, const struct turn_retry *retry
 static int
 failure_notice(struct app_state *app, const char *message, bool recovering)
 {
+    if (recovering) {
+        (void)snag_strcpy(app->recovery_error, sizeof(app->recovery_error), message);
+        app->recovery_notice_ms = 0u;
+        return 0;
+    }
     uint64_t now = snag_monotonic_ms();
     if ((app->session.goal_status == SNAG_GOAL_ACTIVE || app->session.active_turn) &&
         app->recovery_delay_ms && !strcmp(app->recovery_error, message) &&
@@ -203,13 +208,6 @@ failure_notice(struct app_state *app, const char *message, bool recovering)
         return 0;
     (void)snag_strcpy(app->recovery_error, sizeof(app->recovery_error), message);
     app->recovery_notice_ms = now;
-    if (recovering) {
-        struct snag_buf text = {.max = 4096u};
-        int rc = snag_buf_printf(&text, "%s; recovering automatically", message);
-        if (!rc) rc = snag_ui_text(&app->ui, SNAG_UI_WARNING, (const char *)text.data);
-        snag_buf_free(&text);
-        return rc;
-    }
     return snag_ui_text(&app->ui, SNAG_UI_ERROR, message);
 }
 
@@ -5609,11 +5607,11 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
             "Running commands retained.");
     } else if (delay <= 1000u || snag_monotonic_ms() - app->recovery_status_ms >= 30000u) {
         if (goal)
-            (void)app_textf(app, SNAG_UI_HOST,
+            (void)app_textf(app, SNAG_UI_WARNING,
                 "Goal active; retrying after error in %.2f seconds (Ctrl-C interrupts)",
                 delay / 1000.0);
         else
-            (void)app_textf(app, SNAG_UI_HOST,
+            (void)app_textf(app, SNAG_UI_WARNING,
                 "Retrying turn after error (%llu/%u) in %.2f seconds (Ctrl-C interrupts)",
                 (unsigned long long)retry->attempts, retry->limit, delay / 1000.0);
         app->recovery_status_ms = snag_monotonic_ms();
@@ -6825,6 +6823,7 @@ run_tracked_turn(struct app_state *app, const char *prompt, const struct snag_qu
         .limit = app->session.active_turn ? app->session.turn_retry_limit
                                           : app->config->max_turn_retries,
         .goal_status = app->session.goal_status};
+    app->recovery_error[0] = '\0';
     if (retry.goal_status != SNAG_GOAL_ACTIVE) app->recovery_delay_ms = 0u;
     if (queued) {
         queued_copy = *queued;
@@ -6908,7 +6907,10 @@ run_tracked_turn(struct app_state *app, const char *prompt, const struct snag_qu
                      "Automatic retry disabled; use /retry to continue.", error, sizeof(error)) < 0
                      ? 3
                      : 4;
-            if (rc == 3) (void)app_error(app, error);
+            if (rc == 3)
+                (void)app_error(app, error);
+            else if (app->recovery_error[0])
+                (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, app->recovery_error);
             break;
         }
         if (wait_rc) {
