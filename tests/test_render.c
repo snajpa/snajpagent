@@ -2307,6 +2307,14 @@ test_spacing_classes(void)
         (void)drain_available(capture.fd, output, sizeof(output), 0u);
         assert(!strstr(output, "\n\n•") || i == 0u);
     }
+    snag_render_set_color(&render, SNAG_COLOR_ALWAYS);
+    for (unsigned int i = 0u; i < 3u; ++i) {
+        assert(!snag_render_warning_ctx(&render, "Retrying turn after error"));
+        assert(term.prompt_visible && term.output_detour == 1u);
+        (void)drain_available(capture.fd, output, sizeof(output), 0u);
+        assert(strstr(output, "\033[1;33msnajpagent: Retrying turn after error"));
+        if (i) assert(!strstr(output, "\n\n"));
+    }
     snag_render_free(&render);
     snag_term_close(&term);
     (void)capture_close(&capture, output, sizeof(output), 0u);

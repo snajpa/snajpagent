@@ -2,6 +2,7 @@
 """Automatic retry policy through real HTTP, live input and durable sessions."""
 
 import json
+import re
 import unittest
 
 from test_irc_queries import QueryFixture
@@ -24,7 +25,7 @@ class RetryFixture(QueryFixture):
         if self.retry_default is not None and 'retry_auto=' not in self.config.read_text():
             self.config.write_text(self.config.read_text().replace(
                 '[agent]\n', '[agent]\nretry_auto=' + str(self.retry_default).lower() + '\n'))
-        return super().start(*args, **kwargs)
+        return super().start(*args, '--color=always', **kwargs)
 
     def command(self, text, marker):
         self.term.output.clear()
@@ -67,6 +68,31 @@ class RetryFixture(QueryFixture):
         self.term.write(b'/rollout\r' + (b'/goal ' if goal else b'') + b'retry fixture work\r')
         self.wait(self.held.is_set)
 
+    def begin_stream(self, outcomes, goal=False):
+        self.attempts = []
+        self.before = self.events()[-1]['seq']
+        self.term.output.clear()
+
+        def respond(handler, request, sequence):
+            outcome = outcomes[len(self.attempts)]
+            self.attempts.append(request)
+            if outcome == 'failure':
+                body = self.provider.event('response.failed', {'response': {'error': {
+                    'code': 'service_unavailable',
+                    'message': 'The server is overloaded or not ready yet. Please try again later. '
+                               f'(fixture request {len(self.attempts)})'}}})
+            elif outcome == 'tool':
+                body = self.provider.function_body(sequence, 'between', 'exec_command', {
+                    'command': 'printf x >> retry-once', 'workdir': str(self.root),
+                    'stdin': None, 'pty': False, 'timeout_ms': None,
+                    'yield_ms': 1000, 'max_output_tokens': 1000})
+            else:
+                body = self.provider.response_body(sequence, 'retry fixture recovered')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        self.term.write(b'/rollout\r' + (b'/goal ' if goal else b'') + b'retry fixture work\r')
+
     def finished(self, kind):
         self.wait(lambda: any(e['seq'] > self.before and e['type'] == kind
                              for e in self.events()))
@@ -92,6 +118,48 @@ class RetryAutoTests(RetryFixture):
         self.assertEqual(sum(e['type'] == 'turn_started' for e in events), 1)
         self.assertEqual(sum(e['type'] == 'turn_recovery' for e in events), 1)
         self.assertEqual((self.root / 'retry-once').read_text(), 'x')
+
+    def test_stream_failures_are_consecutive_yellow_status_lines(self):
+        self.begin_stream(['failure'] * 3 + ['success'])
+        events = self.finished('turn_completed')
+        output = bytes(self.term.output)
+        self.assertNotIn(b'recovering automatically', output)
+        self.assertNotIn(b'snajpagent: response.failed', output)
+        lines = re.findall(rb'\x1b\[1;33m([^\x1b]*Retrying turn after error[^\x1b]*)', output)
+        self.assertEqual(len(lines), 3, output)
+        for number, line in enumerate(lines, 1):
+            self.assertIn(f'({number}/5)'.encode(), line)
+        failures = [e for e in events if e['type'] == 'response_failed']
+        self.assertEqual(len(failures), 3)
+        self.assertTrue(all('overloaded' in e['data']['message'] for e in failures))
+        self.assertEqual(len(self.attempts), 4)
+
+    def test_healthy_tool_graph_resets_consecutive_retry_counter(self):
+        self.begin_stream(['failure', 'tool', 'failure', 'success'])
+        self.finished('turn_completed')
+        output = bytes(self.term.output)
+        self.assertEqual(output.count(b'Retrying turn after error (1/5)'), 2, output)
+        self.assertNotIn(b'Retrying turn after error (2/5)', output)
+        self.assertEqual((self.root / 'retry-once').read_text(), 'x')
+
+    def test_off_during_stream_backoff_shows_terminal_failure(self):
+        self.begin_stream(['failure', 'success'])
+        self.term.until(b'Retrying turn after error (1/5)')
+        self.command('/retry auto off', 'Automatic retry: OFF')
+        self.finished('turn_failed')
+        self.term.until(b'snajpagent: response.failed')
+        self.assertEqual(len(self.attempts), 1)
+
+    def test_terminal_stream_failure_keeps_error_diagnostic(self):
+        self.command('/retry auto off', 'Automatic retry: OFF')
+        self.begin_stream(['failure'])
+        self.finished('turn_failed')
+        self.term.until(b'snajpagent: response.failed')
+        output = bytes(self.term.output)
+        self.assertRegex(output, rb'\x1b\[1;31m[^\x1b]*response.failed')
+        self.assertNotIn(b'Retrying turn after error', output)
+        self.assertNotIn(b'recovering automatically', output)
+        self.assertEqual(len(self.attempts), 1)
 
     def test_off_skips_retries_and_manual_retry_preserves_tool(self):
         self.command('/retry auto off', 'Automatic retry: OFF')

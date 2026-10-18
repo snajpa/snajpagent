@@ -459,7 +459,8 @@ def case_incomplete_stream_recovery(binary, provider, root):
     assert failed["data"]["message"] == "provider stream ended before response.completed", failed
     assert len(harness.event_list(events, "turn_recovery")) == 1
     assert len(harness.event_list(events, "turn_completed")) == 1
-    assert "recovering automatically" in result.stderr, result.stderr
+    assert "Retrying turn after error (1/5)" in result.stderr, result.stderr
+    assert "recovering automatically" not in result.stderr, result.stderr
     print("tools e2e incomplete stream recovery without duplicate effects: ok", flush=True)
 
 

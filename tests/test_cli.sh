@@ -441,7 +441,8 @@ printf ping | $bin -e --resume "$crash_id" >"$root/crash-piped.out" 2>"$root/cra
 
 $bin -e -- provider_fail >"$root/fail.out" 2>"$root/fail.err"
 [ -s "$root/fail.out" ]
-grep -q 'fixture provider failed' "$root/fail.err"
+! grep -q 'fixture provider failed' "$root/fail.err"
+grep -q 'Retrying turn after error (1/5)' "$root/fail.err"
 [ "$(resume_count "$root/fail.err")" -eq 1 ]
 fail_id=$(find_session "$dotdir" 'fixture provider failed')
 [ "$(journal_rows "$dotdir/sessions/$fail_id/journal.bin" | grep -c '"type":"turn_recovery"')" -eq 1 ]
