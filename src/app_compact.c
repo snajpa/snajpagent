@@ -138,7 +138,8 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     rc = snag_provider_responses_create(
         (struct snag_provider_connection){app->config, app->turn_provider, credential, &app->ui,
             snag_app_provider_input_pump, app, app->session.id,
-            app->turn_provider->request_timeout_ms, snag_app_retry_allowed, NULL, NULL},
+            app->turn_provider->request_timeout_ms, snag_app_retry_allowed, NULL, NULL,
+            &app->provider_transport},
         create_request, NULL, NULL, NULL, NULL, NULL, NULL, &graph, &failure, NULL, error,
         error_size, NULL);
     if (rc != 0 && snag_provider_failure_is_capacity(&failure)) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
@@ -186,7 +187,7 @@ prepare_native_compaction(struct app_state *app, struct snag_json_document *requ
         int discovery = snag_provider_native_compaction_protocol(
             (struct snag_provider_connection){app->config, app->turn_provider, credential,
                 &app->ui, snag_app_provider_input_pump, app, app->session.id, 0,
-                snag_app_retry_allowed, NULL, NULL},
+                snag_app_retry_allowed, NULL, NULL, &app->provider_transport},
             snag_json_string(request->value, "model"), &responses_v2, error, error_size);
         if (discovery != 0) return discovery;
     }

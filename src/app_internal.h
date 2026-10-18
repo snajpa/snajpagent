@@ -14,6 +14,7 @@
 #include "model_cache.h"
 #include "metrics.h"
 #include "mcp.h"
+#include "provider.h"
 #include "render.h"
 #include "responses.h"
 #include "store.h"
@@ -55,6 +56,7 @@ struct snag_output_cache {
 };
 struct app_state {
     const char *program;
+    struct snag_provider_transport provider_transport;
     struct snag_mcp *mcp;
     bool retry_skill_binding;
     /* Informational output from one command is shown in one pager invocation. */

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Reuse compatible provider HTTP/1.1 connections across session tool cycles,
+  token counting and compaction, while retaining TLS verification and safe
+  replacement of closed or interrupted connections. Connection reuse requires
+  libcurl 7.80 or later so retries remain controlled by the configured policy.
+
 - Add native operator-curated skills with dotdir-only default lookup, explicit
   configured roots and path inventory, exact full-package review/approval,
   name-wide bans and inspection-only `--all-skills`. Preserve admitted task/goal

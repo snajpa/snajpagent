@@ -7070,8 +7070,13 @@ Provider HTTP requests use HTTP/1.1, including HTTPS Responses streams, to avoid
 HTTP/2 framing failures from intermediaries during long responses. Bundled TLS 1.3
 keeps session-ticket notifications internal so blocked uploads preserve each
 request byte. TLS certificate
-and hostname verification remain enabled. Each exchange has its own connection;
-provider requests do not share a multiplexed HTTP/2 connection.
+and hostname verification remain enabled. Builds with libcurl 7.80 or later reuse
+compatible HTTP/1.1 connections for successive requests from the same session
+owner. Earlier libcurl builds open a connection per exchange. A closed or
+interrupted connection is replaced through the configured retry policy; libcurl
+cannot silently resend a request. Reloading configuration retires the owner's
+connection cache.
+Provider requests do not share a multiplexed HTTP/2 connection.
 .PP
 If a provider stream closes before
 .BR response.completed ,

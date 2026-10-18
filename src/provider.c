@@ -38,6 +38,7 @@ struct provider_ctx {
     struct snag_credential credential;
     struct curl_slist *headers;
     CURL *curl;
+    struct snag_provider_transport *transport;
     const struct snag_config *config;
     const struct snag_secret_set *protection_in;
     const struct snag_provider_config *provider;
@@ -70,6 +71,8 @@ struct provider_ctx {
     bool body_failed;
     bool semantic_body_seen;
     bool request_may_have_been_sent;
+    bool request_started;
+    bool implicit_retry;
     bool new_input;
     uint64_t attempt_started_ms;
     char error[256];
@@ -307,15 +310,34 @@ process_controls(void *opaque, unsigned int timeout_ms)
     return 0;
 }
 
-static CURLcode
-perform_request(
-    CURL *curl, snag_provider_pump_fn pump, void *opaque, snag_wake_fd wake_fd, int poll_ms)
+void
+snag_provider_transport_close(struct snag_provider_transport *transport)
 {
-    CURLM *multi = curl_multi_init();
+    if (transport->multi) curl_multi_cleanup(transport->multi);
+    memset(transport, 0, sizeof(*transport));
+}
+
+static CURLcode
+perform_request(CURL *curl, snag_provider_pump_fn pump, void *opaque,
+    snag_wake_fd wake_fd, int poll_ms, struct snag_provider_transport *transport)
+{
+    bool borrowed = transport && !transport->busy;
+#if LIBCURL_VERSION_NUM < 0x075000
+    /* Older libcurl cannot veto a hidden resend on a reused connection. */
+    borrowed = false;
+#endif
+    CURLM *multi;
     CURLcode result = CURLE_FAILED_INIT;
     int running = 0;
 
+    if (borrowed) {
+        if (!transport->multi) transport->multi = curl_multi_init();
+        multi = transport->multi;
+    } else {
+        multi = curl_multi_init();
+    }
     if (!multi) return CURLE_OUT_OF_MEMORY;
+    if (borrowed) transport->busy = true;
     if (curl_multi_add_handle(multi, curl) != CURLM_OK) goto out;
     for (;;) {
         struct curl_waitfd wake = {.fd = wake_fd, .events = CURL_WAIT_POLLIN};
@@ -339,7 +361,12 @@ perform_request(
     }
     (void)curl_multi_remove_handle(multi, curl);
 out:
-    (void)curl_multi_cleanup(multi);
+    if (!borrowed) {
+        (void)curl_multi_cleanup(multi);
+    } else {
+        transport->busy = false;
+        if (result == CURLE_FAILED_INIT) snag_provider_transport_close(transport);
+    }
     return result;
 }
 
@@ -431,7 +458,7 @@ auth_request(const char *issuer, const char *path, const char *type, const void 
         curl_easy_setopt(curl, CURLOPT_USERAGENT, SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) !=
             CURLE_OK)
         goto out;
-    CURLcode code = perform_request(curl, pump, opaque, SNAG_WAKE_INVALID, 100);
+    CURLcode code = perform_request(curl, pump, opaque, SNAG_WAKE_INVALID, 100, NULL);
     if (code == CURLE_ABORTED_BY_CALLBACK) {
         (void)snag_fail(error, error_size, ECANCELED, "login or token refresh cancelled");
         goto out;
@@ -551,6 +578,8 @@ static void
 begin_attempt(struct provider_ctx *ctx)
 {
     ctx->attempt_started_ms = snag_monotonic_ms();
+    ctx->request_started = false;
+    ctx->implicit_retry = false;
     if (ctx->sse.record) {
         snag_responses_emit_fn emit = ctx->stream.emit;
         snag_responses_hosted_fn hosted = ctx->stream.hosted;
@@ -700,7 +729,13 @@ perform_with_retry(
     for (;;) {
         long request_size = 0;
         begin_attempt(ctx);
-        code = perform_request(curl, process_controls, ctx, snag_ui_wake_fd(ctx->render), 25);
+        code = perform_request(curl, process_controls, ctx, snag_ui_wake_fd(ctx->render), 25,
+            ctx->transport);
+        /* Re-enter through the normal retry policy after a reused connection
+         * fails. libcurl's internal retry otherwise bypasses retry_auto. */
+        if (ctx->implicit_retry && !ctx->cancel_code &&
+            (code == CURLE_ABORTED_BY_CALLBACK || code == CURLE_COULDNT_CONNECT))
+            code = CURLE_GOT_NOTHING;
         /* A validated terminal response survives a lost HTTP terminator. Still
          * finish the SSE parser so malformed or partial trailers remain errors. */
         bool completed_disconnect = ctx->stream.terminal && !ctx->stream.failed &&
@@ -1281,6 +1316,7 @@ provider_ctx_init(struct provider_ctx *ctx, struct snag_provider_connection conn
     ctx->protection_in = connection.protection;
     ctx->provider = connection.provider;
     ctx->session_id = connection.session_id;
+    ctx->transport = connection.transport;
     ctx->render = connection.render;
     ctx->pump = connection.pump;
     ctx->progress = connection.progress;
@@ -1373,6 +1409,42 @@ request_auth_headers(struct provider_ctx *ctx)
     return 0;
 }
 
+#if LIBCURL_VERSION_NUM >= 0x075000
+static int
+request_socket_options(void *opaque, curl_socket_t socket, curlsocktype purpose)
+{
+    struct provider_ctx *ctx = opaque;
+
+    (void)socket;
+    (void)purpose;
+    /* Stop a reconnect before TCP/TLS setup; the prerequisite callback also
+     * protects retries that can reuse an existing connection. */
+    if (ctx->request_started) {
+        ctx->implicit_retry = true;
+        return CURL_SOCKOPT_ERROR;
+    }
+    return CURL_SOCKOPT_OK;
+}
+
+static int
+request_prerequisite(void *opaque, char *remote_ip, char *local_ip, int remote_port,
+    int local_port)
+{
+    struct provider_ctx *ctx = opaque;
+
+    (void)remote_ip;
+    (void)local_ip;
+    (void)remote_port;
+    (void)local_port;
+    if (ctx->request_started) {
+        ctx->implicit_retry = true;
+        return CURL_PREREQFUNC_ABORT;
+    }
+    ctx->request_started = true;
+    return CURL_PREREQFUNC_OK;
+}
+#endif /* LIBCURL_VERSION_NUM >= 0x075000 */
+
 static int
 provider_request_setup(struct provider_ctx *ctx, const struct snag_credential *credential,
     const char *path, const char *accept, const json_t *request, const char *body_error,
@@ -1408,13 +1480,20 @@ provider_request_setup(struct provider_ctx *ctx, const struct snag_credential *c
     ctx->curl = curl_easy_init();
     if (!ctx->curl)
         return snag_fail(error, error_size, ENOMEM, "libcurl easy handle could not initialize");
+#if LIBCURL_VERSION_NUM >= 0x075000
+    if (curl_easy_setopt(ctx->curl, CURLOPT_PREREQFUNCTION, request_prerequisite) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_PREREQDATA, ctx) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_SOCKOPTFUNCTION, request_socket_options) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_SOCKOPTDATA, ctx) != CURLE_OK)
+        return snag_fail(error, error_size, EIO, "provider request guard setup failed");
+#endif
     if (request_auth_headers(ctx) < 0)
         return snag_errorf(error, error_size, "provider headers could not be allocated");
     if (render_request_headers(ctx, request_line, accept, has_body) < 0)
         return snag_errorf(error, error_size,
             ctx->error[0] ? ctx->error : "provider request headers could not be rendered");
-    /* Each exchange has its own connection; HTTP/2 adds no multiplexing here
-     * and gateway stream resets can discard a long-running Responses request. */
+    /* Keep HTTP/1.1 for gateways which reset HTTP/2 Responses streams. The
+     * owner's multi handle retains compatible connections between exchanges. */
     if (snag_http_provider_trust(ctx->curl, ctx->provider->ca_bundle) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_URL, endpoint) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_1_1) !=
@@ -2012,7 +2091,7 @@ snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
             "Selected provider supports dictation and live voice, not this audio API operation");
     provider_ctx_init(&ctx,
         (struct snag_provider_connection){
-            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL, NULL},
+            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL, NULL, NULL},
         20u * 1024u * 1024u, 65536u);
     ctx.audio_output = output;
     ctx.multipart = operation == SNAG_AUDIO_TRANSCRIBE;
@@ -2053,7 +2132,7 @@ snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
     }
     begin_attempt(&ctx);
     CURLcode code = perform_request(ctx.curl, process_controls, &ctx, SNAG_WAKE_INVALID,
-        25); /* Deliberately not perform_with_retry. */
+        25, ctx.transport); /* Deliberately not perform_with_retry. */
     if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {
         rc = ctx.cancel_code;
         snag_errorf(
@@ -2108,7 +2187,7 @@ snag_provider_voice_call(const struct snag_config *config,
     if (!snag_provider_native_audio(provider) || !sdp || !json_is_object(session)) return -1;
     provider_ctx_init(&ctx,
         (struct snag_provider_connection){
-            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL, NULL},
+            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL, NULL, NULL},
         65536u, 65536u);
     /* The caller resolves credentials before starting voice. Keep that same
      * snapshot for the call and WebSocket attachment. The session owner protects
@@ -2127,7 +2206,8 @@ snag_provider_voice_call(const struct snag_config *config,
         curl_easy_setopt(ctx.curl, CURLOPT_HTTPHEADER, ctx.headers) != CURLE_OK)
         goto out;
     begin_attempt(&ctx);
-    CURLcode code = perform_request(ctx.curl, process_controls, &ctx, SNAG_WAKE_INVALID, 25);
+    CURLcode code = perform_request(ctx.curl, process_controls, &ctx, SNAG_WAKE_INVALID, 25,
+        ctx.transport);
     if (ctx.cancel_code) {
         rc = ctx.cancel_code;
         goto out;

@@ -2986,6 +2986,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     snag_mcp_configure(app->mcp, mcp_candidate);
     mcp_candidate = NULL;
     snag_app_irc_summary_close(app);
+    snag_provider_transport_close(&app->provider_transport);
     app->irc_summary_attempt_count = 0;
     previous = *app->config;
     *app->config = candidate;
@@ -7945,6 +7946,7 @@ out:
     }
     snag_app_irc_summary_close(&app);
     snag_app_audio_close(&app);
+    snag_provider_transport_close(&app.provider_transport);
     (void)snag_app_shutdown(&app);
     /* A POSIX process lock is released by closing any descriptor on its inode. */
     (void)snag_ui_text(&app.ui, SNAG_UI_CLOSE, NULL);

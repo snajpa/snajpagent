@@ -4,6 +4,7 @@
 
 #include "config.h"
 #include "credential.h"
+#include "http.h"
 #include "responses.h"
 #include "turn.h"
 
@@ -31,6 +32,14 @@ typedef int (*snag_provider_progress_fn)(void *opaque, size_t output_bytes);
  * rejected, so shrinking the source would only re-send the same call. */
 #define SNAG_PROVIDER_REJECTED 6
 
+/* One synchronous caller owns this connection cache; nested requests use their
+ * own transport while it is busy. Close after the owner's requests have joined. */
+struct snag_provider_transport {
+    CURLM *multi;
+    bool busy;
+};
+void snag_provider_transport_close(struct snag_provider_transport *);
+
 /* Borrowed for one synchronous call; refreshed credentials remain private. */
 struct snag_provider_connection {
     const struct snag_config *config;
@@ -51,6 +60,7 @@ struct snag_provider_connection {
     snag_provider_progress_fn progress;
     /* Optional frozen secrets, borrowed for this call and merged before filtering. */
     const struct snag_secret_set *protection;
+    struct snag_provider_transport *transport;
 };
 
 enum snag_audio_operation { SNAG_AUDIO_LISTEN, SNAG_AUDIO_TRANSCRIBE, SNAG_AUDIO_SPEAK };

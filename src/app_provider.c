@@ -97,7 +97,7 @@ fail:
     rc = snag_provider_models_list(
         (struct snag_provider_connection){app->config, provider, &credential, &app->ui,
             snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL,
-            NULL},
+            NULL, &app->provider_transport},
         models, error, error_size);
     snag_credential_clear(&credential);
     return rc;
@@ -237,7 +237,7 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
     rc = snag_provider_responses_count(
         (struct snag_provider_connection){app->config, app->turn_provider, credential, &app->ui,
             snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL,
-            NULL},
+            NULL, &app->provider_transport},
         count_request, &exact_tokens, &endpoint_unsupported, error, error_size, NULL);
     if (rc == 0) {
         *input_tokens = exact_tokens;
@@ -301,7 +301,7 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
     return snag_provider_responses_compact(
         (struct snag_provider_connection){app->config, app->turn_provider, credential, &app->ui,
             snag_app_provider_input_pump, app, app->session.id, 0, snag_app_retry_allowed, NULL,
-            NULL},
+            NULL, &app->provider_transport},
         compact_request, output, error, error_size, NULL);
 #endif
 }
@@ -386,7 +386,8 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
                                               .pump_opaque = app,
                                               .session_id = app->session.id,
                                               .retry_allowed = snag_app_retry_allowed,
-                                              .progress = snag_app_context_progress},
+                                              .progress = snag_app_context_progress,
+                                              .transport = &app->provider_transport},
         create_request, snag_app_stream_public, app, hosted_search_activity, app,
         snag_app_request_ready, app, graph, failure, NULL, error, error_size, retry_count);
 #endif
