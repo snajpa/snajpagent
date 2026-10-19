@@ -978,7 +978,8 @@ The monitor uses
 .B --dotdir
 or the default session directory. It accepts
 .B --config PATH
-for command-line compatibility; provider configuration and credentials are unused.
+to select the configuration containing saved monitor defaults. Provider credentials
+are unused. Explicit delay, sort and color options override saved values.
 The command also accepts
 .B --sort total|state|turns|id
 and
@@ -987,23 +988,56 @@ The default order is attached, detached, running, stored, then descending
 process total.
 .PP
 In an interactive terminal, Up/Down or
-.B j / k
-moves the selection.  Selection stays with its session as rows reorder, and the
-table scrolls to keep the selected row visible.  Terminal rows are clipped to
-the current width without wrapping or interpreting model text as terminal codes.
-.B r
-refreshes immediately, and
-.B q
-exits.  Press
+.B j
+moves the selection. Selection stays with its session as rows reorder.
+.B <
+and
+.B >
+select the previous or next visible sort field;
+.B R
+reverses the order.
+.B h
+or
+.B ?
+shows keyboard help.
+.B s
+or
+.B d
+edits the refresh delay in seconds, retaining the 0.2-second minimum.
+.PP
+.B f
+or
+.B F
+opens field management: Up/Down selects a field, Space or d toggles visibility,
+s selects the sort field, Right begins moving the field, Left finishes moving,
+and q or Enter returns to the table. At least one field remains visible.
 .B x
-then
-.B y
-to request termination of a live owner.  The confirmation names the session and
-stays bound to that owner across refreshes.  A changed process id or process-start
-time cancels the request; the current metrics process must also hold the session's
-writer lock before receiving SIGTERM.  Stored sessions display their totals but
-cannot be killed.  The inverted final line summarizes the complete session table,
-including rows outside the viewport.
+toggles bold sort-column highlighting, and
+.B z
+toggles color.
+.B c
+switches the model column to the session's full resume command.
+.B X
+sets extra column width: zero restores defaults, a positive value adds that many
+cells, and any negative value enables automatic growth. Automatic widths grow
+to fit values and remain until explicitly reset. Fixed-width cuts end in +.
+.PP
+.B k
+prompts for a live owner PID, defaulting to the selected session, then a signal,
+defaulting to 15 (SIGTERM). Enter accepts each default; a signal number or name
+such as TERM or SIGTERM selects another signal. Escape cancels; signal zero
+cancels. A changed PID or process-start time cancels the request. The metrics PID
+must still hold that session's writer lock; unrelated PIDs and stored sessions
+are refused. The inverted final line summarizes all rows, including those outside
+the viewport.
+.PP
+.B W
+atomically saves the current monitor settings in
+.B [top]
+in the selected configuration file. Saved defaults apply to later invocations;
+command-line options take precedence for that invocation. Existing comments,
+credentials, unrelated settings and file permissions are preserved. The default
+file is $DOTDIR/config.ini. A refused save leaves the original file intact.
 .PP
 Redirected output renders once and ends, which permits simple collection of the
 same file-backed data without a network endpoint.
@@ -2942,6 +2976,23 @@ shows the same goal forms separately.
 is an alias for
 .BR /state " goal" .
 .TP
+.BR /r , " /r list"
+Show active tool calls first, followed by pinned PTY jobs. The compact form shows
+up to eight entries; /r list shows all. Rows include short IDs and lifecycle state.
+Pinned rows show whether an on-resume hook is enabled; verbosity zero omits hook
+text. /r ID inspects a pinned job, including its command, directory and a bounded
+redacted output tail. Unique ID prefixes and unambiguous job names are accepted.
+.TP
+.BR "/r k ID" , " /r kill ID"
+Request termination of an ordinary command or pinned job. For a pinned job,
+durably disable its resume hook before signaling its process group. A stop
+request is not proof that the child has exited. Pending non-command tool calls
+are listed for observation and cannot be stopped through this command.
+.TP
+.BR "/r k -a" , " /r k --all" , " /r kill -a" , " /r kill --all"
+Request termination of all owned ordinary commands and pinned jobs, disabling
+all pinned resume hooks durably first.
+.TP
 .B /status
 Show session, model and fast-mode selections, queue, verbosity, capacity, token
 accounting, command concurrency and actual network state. Context selection,
@@ -4655,6 +4706,14 @@ The numeric forms 1 and 0 are also accepted for boolean settings.
 Command-line values override file values.  A missing default configuration
 uses built-ins; an explicit file must exist.  Configuration must be a regular
 file, not a symlink.  Section names below go in square brackets.
+.SS "top"
+Monitor preferences saved by W. delay_ms is 200..86400000; sort is the field
+index 0..8; visible is a nonzero nine-bit visibility mask; fields is a permutation
+of 012345678. The field order is session ID, state, model/command, turns, active
+turn, process tokens, session tokens, prefill rate, decode rate. color is
+0 (automatic), 1 (always) or 2 (never). reverse, highlight and commands are
+booleans. extra_width is 0 for defaults, a positive integer for additional cells, or -1 for
+automatic growth. W writes every preference; omitted settings use built-ins.
 .SS "mcp NAME"
 Each name identifies a separately configured server/account.
 .TP
@@ -5697,6 +5756,33 @@ Commands that yield, reach a foreground handoff deadline, or receive urgent
 input continue under a process handle; the model can wait, interact, or
 explicitly terminate them with
 .BR write_stdin .
+.SS "Pinned PTY jobs"
+The model's
+.B running_commands
+tool starts a session-owned job with action=start, name and command. Optional
+on_resume supplies an explicit shell command for a future resumed owner;
+workdir selects its directory. The selected session shell is saved with the
+job. Every pinned job owns a full PTY. Jobs remain alive across model replies,
+turns and compaction while the same session owner is alive.
+.PP
+Use action=list for state, show with an id or unambiguous name for the saved
+definition and redacted output tail, write with id and optional data/eof for PTY
+input, and stop with id or all to stop. Input acceptance means queued, not
+delivered. Inspection returns at most 4096 bytes per stream, base64-encoded;
+output files remain private in the session directory. Output is captured quietly
+until explicitly inspected. Existing command concurrency limits apply.
+.PP
+A new owner runs each enabled nonempty on_resume hook once, creating a new child
+under the same job ID. Attaching to a live owner, compaction and ordinary later
+requests do not run hooks. Hooks are explicit saved commands; natural child exit
+does not restart a job. An explicit stop disables its hook before signaling,
+including after future resume. Owner shutdown closes its children; this is a
+session lifecycle, not a detached daemon. Start failures remain inspectable.
+Read-only turns can list and inspect jobs, while start, input and stop are refused.
+.PP
+Ordinary exec_command/write_stdin handles retain their existing settlement rules.
+Use running_commands explicitly for jobs intended to outlive a model reply.
+.SS "Ordinary command settlement"
 .PP
 In interactive sessions, a final model reply while commands are running keeps
 the turn open and waits for operator input or command completion.  This lets

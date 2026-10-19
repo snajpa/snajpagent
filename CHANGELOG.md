@@ -18,6 +18,15 @@
   peer departure or channel membership replacement. Preserve the original
   undelivered target and exact private/channel routing boundaries on resume.
 
+- Add session-owned pinned PTY jobs with explicit saved resume hooks and model
+  start, inspection, input and stop controls. `/r` lists active calls before jobs;
+  `/r k|kill ID` and all four `-a|--all` forms stop commands and disable hooks.
+
+- Add GNU-top-style sorting, reverse order, help, PID/signal prompts, delay editing,
+  field management, sort highlighting, color and resume-command display to
+  `snajpagent top`. `X` adjusts widths or enables automatic growth; `W` saves
+  defaults in the selected config, with explicit CLI options taking precedence.
+
 - Display concise human-readable skill command reports by default; preserve
   explicit CLI `--json` and model tool results. Summarize MCP tools and pending
   calls while keeping exact approval arguments inspectable.

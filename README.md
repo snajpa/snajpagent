@@ -78,6 +78,12 @@ without adding it to the conversation.
 Command output remains pageable after resume. `/compact` summarizes context
 while retaining the full log; failure preserves previous context.
 
+Ask the model to pin a long-running PTY job with `running_commands`. `/r` lists
+active calls and pinned jobs; `/r ID` inspects output and `/r k ID` stops one.
+An explicit saved resume hook runs once when a new owner resumes the session.
+`snajpagent top` monitors sessions; `h` lists its controls and `W` saves monitor
+defaults in the selected config.
+
 ### Keep working, or leave and come back
 
 Automatic retry defaults on. `/retry auto` reports its state; `/retry auto on|off`

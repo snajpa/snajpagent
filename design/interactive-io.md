@@ -942,3 +942,20 @@ A completed bracketed paste requests the final composer redraw. Native input
 coalesces intermediate edits until the last buffered byte; the closing paste
 marker inserts no text but still completes the edit. This preserves batching
 while making the complete draft visible without another key or engine output.
+
+## Running jobs and monitor preferences
+
+`/r` renders pending calls and ordinary unsettled commands before pinned PTY jobs.
+The default report is eight rows; `list` expands it. Verbosity0 reports only hook
+presence. ID/name resolution rejects ambiguity across ordinary and pinned jobs;
+all kill aliases disable pinned resume hooks durably before requesting stop.
+Pinned jobs pump quietly while idle and remain visible after compaction.
+
+`top` retains one table and its arrow selection. GNU-style `< > R h ? k s d W X
+f F x z c` controls mutate that table's settings; `f` handles fields/order/sort.
+Kill prompts retain the originally selected owner identity and reverify both
+metrics generation and the writer lock. Saved `[top]` preferences are loaded
+without provider credentials. W reuses the atomic config writer; CLI delay/sort/
+color overrides apply after loading. X uses terminal cells, preserves UTF8 cuts,
+and keeps automatic widths until an explicit reset. The c column is a full
+resume command for the session, not a claim to display the owner's OS argv.

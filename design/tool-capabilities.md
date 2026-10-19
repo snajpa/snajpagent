@@ -73,3 +73,20 @@ Detached, unwrapped, interrupted and changed-source exports remain pending.
 Explicit `/receive` and `/send` retain trzsz-go interoperability.
 See [remote-terminal.md](remote-terminal.md) and the manual's Model tools and
 Terminal file transfers sections for the wire and recovery lifecycle.
+
+## Pinned commands
+
+`running_commands` explicitly owns a full-PTY child for the session rather than
+for one pending tool call. Actions start/list/show/write/stop use the existing
+managed-process pump, redaction, input queue and cancellation machinery. Ordinary
+exec/write_stdin handles remain separate and must settle normally. Read-only
+turns admit list/show only. Each request receives derived job states without
+captured output, keeping compaction aware of the existing children.
+
+Definitions (stable ID, name, initial command, shell, directory, explicit resume
+command, enabled flag) use required journal event kind274/version1 and optional
+checkpoint payload version5. A newly resumed owner executes enabled hooks once;
+live attachment and compaction do not. Stop commits disabled flags before signals.
+Failures preserve definitions and report start_failed. Output stays in private
+session files, inspected as bounded redacted base64 tails rather than repeated
+conversation output. Natural exits never trigger implicit restarts.
