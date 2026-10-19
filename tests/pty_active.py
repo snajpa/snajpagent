@@ -4983,7 +4983,7 @@ def test_known_context_meter():
     child.exit_cleanly(answered)
 
 
-def test_context_meter_repaints_during_turn_and_at_idle():
+def test_context_meter_at_idle_after_tool_chain():
     config = write_config("prompt-live-meter.ini",
         "[provider openai]\n"
         f"[model-limit openai/{DEFAULT_MODEL}]\nmax_input_tokens = 250000\n")
@@ -5000,10 +5000,6 @@ def test_context_meter_repaints_during_turn_and_at_idle():
                                  item["usage"]["output_tokens"]) * 100 + hard - 1) // hard)
                        for item in completed]
         assert len(set(percentages)) == 5, percentages
-        active_output = bytes(child.buf[start:answered])
-        assert any(f"{percent}%".encode() in active_output for percent in percentages[:-1]), (
-            "active prompt never painted a completed response measurement", percentages,
-            re.findall(rb"[0-9?]{1,3}%", active_output)[-20:])
         child.send(b"\x0c")
         child.wait_context_percent(percentages[-1], start=answered)
         child.exit_cleanly(answered)
@@ -7172,7 +7168,7 @@ if __name__ == "__main__":
     test_model_configuration_save()
     test_config_editor_reload()
     test_known_context_meter()
-    test_context_meter_repaints_during_turn_and_at_idle()
+    test_context_meter_at_idle_after_tool_chain()
     test_context_meter_exact_start_and_lineage()
     test_model_selection_stays()
     test_config_and_cli_model_passthrough()

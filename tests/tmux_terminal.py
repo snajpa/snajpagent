@@ -9875,6 +9875,7 @@ def run_irc_case(binary, root, group="all"):
             run_automatic_turn_retry_cases(binary, root, provider, environment)
             run_post_exit_drain_cases(binary, root, provider, environment)
             run_tool_yield_cases(binary, root, provider, environment)
+            run_context_meter_case(binary, root, provider, environment)
             run_tool_cases(binary, root, provider, environment)
         elif group == "provider":
             run_manual_retry_cases(binary, root, provider, environment)
@@ -9916,6 +9917,68 @@ def run_irc_case(binary, root, group="all"):
         run_interrupted_history_case(binary, root / "interrupted-catchup")
 
 
+def run_context_meter_case(binary, root, provider, environment):
+    case = root / "context-meter"
+    workspace, config = irc_workspace(case / "workspace", provider.port, "host-model")
+    with config.open("a") as out:
+        out.write("prompt = {chat:CHAT}{rollout-idle:IDLE}{rollout-active:ACTIVE} {context}% > \n"
+                  "[model-limit fake/host-model]\nmax_input_tokens = 250000\n")
+    releases = [workspace / f"meter-release-{cycle}" for cycle in range(1, 5)]
+    inputs = [8000 + cycle * 24000 for cycle in range(5)]
+    percentages = [((value + 100) * 100 + 249999) // 250000 for value in inputs]
+    attempts = 0
+    terminal = None
+
+    def respond(handler, request, sequence):
+        nonlocal attempts
+        cycle = attempts
+        attempts += 1
+        assert cycle < len(inputs), attempts
+        assert provider.latest_user(request) == "meter chain"
+        if cycle < len(releases):
+            command = f"while test ! -e {releases[cycle].name}; do sleep 0.02; done"
+            body = provider.function_body(sequence, f"meter_{cycle}", "exec_command", {
+                "command": command, "workdir": str(workspace), "stdin": "",
+                "yield_ms": 60000, "timeout_ms": 60000, "max_output_bytes": 1024})
+        else:
+            body = provider.response_body(sequence, "meter chain complete")
+        usage = '"input_tokens":1,"output_tokens":1,"total_tokens":2'
+        assert body.count(usage) == 1
+        body = body.replace(usage, f'"input_tokens":{inputs[cycle]},"output_tokens":100,'
+                                  f'"total_tokens":{inputs[cycle] + 100}')
+        provider.reply(handler, body.encode(), close_header=True)
+        handler.close_connection = True
+
+    provider.runtime_handler = respond
+    try:
+        terminal = TmuxTerminal(case / "terminal", binary, workspace, case / "state",
+            config, 80, 16, args=("--no-listen", "--no-client"), environment=environment)
+        terminal.wait("IDLE 0% >")
+        terminal.submit("meter chain")
+        for percent, release in zip(percentages, releases):
+            terminal.wait_until(
+                lambda screen: screen.rstrip().splitlines()[-1].strip() == f"ACTIVE {percent}% >",
+                f"active screen meter {percent}%")
+            release.touch()
+        terminal.wait("meter chain complete")
+        terminal.wait_until(
+            lambda screen: screen.rstrip().splitlines()[-1].strip() == f"IDLE {percentages[-1]}% >",
+            "idle screen meter")
+        log = wait_event_count(case / "state", "turn_completed", 1)
+        completed = event_list(log, "response_completed")
+        assert [item["data"]["usage"]["input_tokens"] for item in completed] == inputs
+        assert len(event_list(log, "tool_finished")) == len(releases)
+        terminal.exit()
+        print("context meter active/idle rendered cells: ok", flush=True)
+    finally:
+        for release in releases:
+            release.touch()
+        if terminal is not None:
+            (case / "screen.txt").write_text(terminal.capture(), encoding="utf-8")
+            terminal.close()
+        provider.runtime_handler = None
+
+
 def run_tools_only(binary, root):
     binary = os.path.abspath(binary)
     root = root.resolve()
@@ -9923,6 +9986,7 @@ def run_tools_only(binary, root):
     provider = FakeResponses()
     environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
     try:
+        run_context_meter_case(binary, root, provider, environment)
         run_tool_cases(binary, root, provider, environment)
     finally:
         provider.close()
