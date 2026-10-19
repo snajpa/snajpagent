@@ -441,10 +441,25 @@ snag_mcp_command(struct snag_mcp *client, const char *command, struct snag_buf *
     if (!strcmp(verb, "pending")) {
         json_t *pending = *argument ? json_object_get(client->pending, argument) : client->pending;
         if (!pending) return snag_buf_printf(report, "No pending call with that digest.\n");
-        char *text = json_dumps(pending, JSON_INDENT(2) | JSON_SORT_KEYS);
-        int rc = text ? snag_buf_printf(report, "%s\n", text) : -1;
-        if (!rc && *argument) rc = json_object_set_new(client->inspected, argument, json_true());
-        free(text);
+        if (!*argument) {
+            if (!json_object_size(pending))
+                return snag_buf_printf(report, "No pending MCP calls.\n");
+            const char *digest;
+            json_t *entry;
+            json_object_foreach(pending, digest, entry) {
+                if (snag_buf_printf(report, "%s: %s / %s\n", digest,
+                    snag_mcp_string(entry, "server"),
+                    snag_mcp_string(json_object_get(entry, "tool"), "name")) < 0) return -1;
+            }
+            return 0;
+        }
+        int rc = snag_buf_printf(report, "Pending MCP call: %s\nServer: %s\nEndpoint: %s\n"
+            "Tool declaration: ", argument, snag_mcp_string(pending, "server"),
+            snag_mcp_string(pending, "endpoint"));
+        if (rc == 0) rc = snag_json_inspect(json_object_get(pending, "tool"), report);
+        if (rc == 0) rc = snag_buf_printf(report, "Arguments: ");
+        if (rc == 0) rc = snag_json_inspect(json_object_get(pending, "arguments"), report);
+        if (rc == 0) rc = json_object_set_new(client->inspected, argument, json_true());
         return rc;
     }
     if (!strcmp(verb, "approve") || !strcmp(verb, "deny")) {
@@ -485,12 +500,20 @@ snag_mcp_command(struct snag_mcp *client, const char *command, struct snag_buf *
             *s->error ? s->error : rc ? "logout failed" : "logged out");
     }
     if (!strcmp(verb, "tools")) {
-        char *tools = json_dumps(s->catalog ? s->catalog : json_null(), JSON_INDENT(2));
-        char *filtered = json_dumps(s->filtered ? s->filtered : json_null(), JSON_INDENT(2));
-        int rc = tools && filtered ? snag_buf_printf(report, "%s tools:\n%s\nFiltered:\n%s\n",
-            s->name, tools, filtered) : -1;
-        free(tools);
-        free(filtered);
+        int rc = snag_buf_printf(report, "%s tools (%zu):\n", s->name,
+            json_array_size(s->catalog));
+        for (size_t i = 0; rc == 0 && i < json_array_size(s->catalog); ++i) {
+            json_t *tool = json_array_get(s->catalog, i);
+            const char *description = snag_mcp_string(tool, "description");
+            rc = snag_buf_printf(report, "  %s — %.*s\n", snag_mcp_string(tool, "name"),
+                (int)strcspn(description, "\r\n"), description);
+        }
+        const char *name;
+        json_t *reason;
+        json_object_foreach(s->filtered, name, reason) {
+            if (rc == 0) rc = snag_buf_printf(report, "  Filtered %s: %s\n", name,
+                snag_mcp_string(reason, "reason"));
+        }
         return rc;
     }
     if (!strcmp(verb, "status")) {

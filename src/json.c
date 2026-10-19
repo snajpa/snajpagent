@@ -194,6 +194,43 @@ snag_json_diagnostic(const json_t *value, struct snag_buf *out)
     return encode_value(value, out, 0u, true);
 }
 
+static int
+inspect_value(const json_t *value, struct snag_buf *out, unsigned int depth)
+{
+    if (!value || depth > 48u) return snag_errno(EOVERFLOW);
+    if (!json_is_object(value) && !json_is_array(value)) {
+        if (encode_value(value, out, depth, true) < 0) return -1;
+        return snag_buf_putc(out, '\n');
+    }
+    bool object = json_is_object(value);
+    size_t count = object ? json_object_size(value) : json_array_size(value);
+    if (snag_buf_printf(out, "%s (%zu)\n", object ? "object" : "array", count) < 0) return -1;
+    void *iterator = object ? json_object_iter((json_t *)value) : NULL;
+    for (size_t i = 0; i < count; ++i) {
+        for (unsigned int j = 0; j <= depth; ++j)
+            if (snag_buf_append(out, "  ", 2u) < 0) return -1;
+        json_t *child;
+        if (object) {
+            if (encode_string(out, json_object_iter_key(iterator),
+                json_object_iter_key_len(iterator)) < 0 || snag_buf_append(out, ": ", 2u) < 0)
+                return -1;
+            child = json_object_iter_value(iterator);
+            iterator = json_object_iter_next((json_t *)value, iterator);
+        } else {
+            child = json_array_get(value, i);
+            if (snag_buf_printf(out, "[%zu]: ", i) < 0) return -1;
+        }
+        if (inspect_value(child, out, depth + 1u) < 0) return -1;
+    }
+    return 0;
+}
+
+int
+snag_json_inspect(const json_t *value, struct snag_buf *out)
+{
+    return inspect_value(value, out, 0u);
+}
+
 int
 snag_json_wire_digest(const json_t *value, size_t max,
     char hash[SNAG_SHA256_HEX_LEN + 1u], size_t *bytes)
