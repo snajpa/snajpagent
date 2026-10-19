@@ -376,7 +376,7 @@ tests/test_context: src/skills.c src/store_binary_checkpoint_closure.c
 
 tests/test_store: tests/test_store_binary_image.c
 tests/test_store: src/store_binary_index.c src/store_binary_index.h tests/test_store_binary_index.c
-tests/test_store: src/store_binary_checkpoint_index.c tests/test_store_binary_checkpoint_index.c
+tests/test_store: src/store_binary_checkpoint_index.c tests/test_store_binary_checkpoint_index.c tests/test_store_optimize.c
 tests/test_context: src/store_binary_index.c src/store_binary_index_tree.c src/store_binary_checkpoint_index.c
 tests/test_store: src/store_binary_index_tree.c tests/test_store_binary_index_tree.c
 tests/test_store: src/store_binary_io.c src/store_binary_io.h tests/test_store_binary_io.c
@@ -512,6 +512,7 @@ endif
 	python3 tests/test_session_status_protocol.py ./$(BIN)
 	python3 tests/test_resume_options.py ./$(BIN)
 	python3 tests/test_store_conversion.py ./$(BIN)
+	python3 tests/test_store_optimization.py ./$(BIN)
 	./tests/test_provider_retry
 	./tests/test_provider_transport
 	python3 tests/test_native_context_frames.py ./tests/snajpagent-transport

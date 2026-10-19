@@ -35,6 +35,8 @@ static dev_t catalog_read_device;
 static ino_t catalog_read_inode;
 static off_t catalog_read_marker;
 static size_t catalog_marker_reads;
+static bool storage_read_watch;
+static uint64_t storage_read_calls, storage_read_bytes;
 
 /* Count actual metadata transfers, including the privacy helper's libc call. */
 int
@@ -48,6 +50,10 @@ ssize_t
 pread(int fd, void *buffer, size_t size, off_t offset)
 {
     ssize_t count = syscall(SYS_pread64, fd, buffer, size, offset);
+    if (storage_read_watch) {
+        ++storage_read_calls;
+        if (count > 0) storage_read_bytes += (uint64_t)count;
+    }
     if (catalog_read_watch && count > 0 && offset >= 0 && offset <= catalog_read_marker &&
         catalog_read_marker - offset < count) {
         struct stat info;
@@ -3226,6 +3232,8 @@ test_checkpoint_text_width(void)
 }
 
 void test_store_binary(void);
+void test_store_optimize(void);
+int fixture_storage_command(const char *operation, const char *path);
 void test_store_binary_receipt(void);
 void test_store_binary_receipts_find(void);
 void test_store_binary_image(void);
@@ -3250,6 +3258,49 @@ void test_store_binary_replay(struct snag_store *store, const char *cwd);
 int
 main(int argc, char **argv)
 {
+    if (argc == 4 && !strcmp(argv[1], "--rebase-context")) {
+        struct snag_store store;
+        struct snag_session session;
+        snag_store_init(&store);
+        snag_session_init(&session);
+        char error[256] = {0};
+        assert(!snag_store_open(&store, argv[2], error, sizeof(error)));
+        assert(!snag_session_open(&store, &session, argv[3], error, sizeof(error)));
+        const char *turn = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        commit_event(&session, "turn_started", turn_started_data(&session, turn));
+        commit_event(&session, "context_rebased", checked_json(json_pack("{s:s,s:s}",
+            "reason", "turn_recovery", "turn_id", turn)));
+        assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+        snag_session_close(&session);
+        snag_store_close(&store);
+        return 0;
+    }
+#if defined(__linux__) && defined(__x86_64__)
+    if (argc == 4 && !strcmp(argv[1], "--resume-reads")) {
+        struct snag_store store;
+        struct snag_session *session = malloc(sizeof(*session));
+        assert(session);
+        snag_store_init(&store);
+        snag_session_init(session);
+        char error[256] = {0};
+        storage_read_watch = true;
+        assert(!snag_store_open(&store, argv[2], error, sizeof(error)));
+        if (snag_session_open(&store, session, argv[3], error, sizeof(error)) < 0) {
+            fprintf(stderr, "resume: %s\n", error);
+            return 1;
+        }
+        snag_session_close(session);
+        snag_store_close(&store);
+        storage_read_watch = false;
+        printf("%llu %llu\n", (unsigned long long)storage_read_calls,
+            (unsigned long long)storage_read_bytes);
+        free(session);
+        return 0;
+    }
+#endif
+    if (argc == 3 && (!strcmp(argv[1], "--storage-records") ||
+        !strcmp(argv[1], "--archive-bytes") || !strcmp(argv[1], "--append-optional")))
+        return fixture_storage_command(argv[1], argv[2]);
     if (argc == 4 && (!strcmp(argv[1], "--read-history") || !strcmp(argv[1], "--read-boundary"))) {
         return fixture_history_read(argv[2], argv[3], !strcmp(argv[1], "--read-boundary"));
     }
@@ -3258,6 +3309,7 @@ main(int argc, char **argv)
     }
     assert(argc == 1);
     test_store_binary();
+    test_store_optimize();
     test_store_binary_receipt();
     test_store_binary_receipts_find();
     test_store_binary_image();

@@ -134,14 +134,13 @@ test_metadata(void)
     /* Individually checksummed entries must still be sorted and fit this prefix. */
     unsigned char *last = metadata.data + SNAG_BINARY_CHECKPOINT_INDEX_HEADER_SIZE +
         2u * SNAG_BINARY_INDEX_ENTRY_SIZE;
-    for (unsigned fault = 0u; fault < 6u; ++fault) {
+    for (unsigned fault = 0u; fault < 5u; ++fault) {
         struct snag_binary_index_entry changed = active[2];
         if (fault == 0u) changed = active[1];
         if (fault == 1u) changed = active[0];
         if (fault == 2u) changed.sequence = boundary.next_seq;
         if (fault == 3u) changed.batch_offset = boundary.previous + 1u;
         if (fault == 4u) changed.turn = 1u;
-        if (fault == 5u) changed.record_offset = SNAG_BINARY_BATCH_MAX / 2u;
         assert(!snag_binary_index_entry_encode(last, &identity, &changed));
         reject_decode(metadata.data, metadata.len, &identity, &boundary, root);
     }

@@ -1117,7 +1117,7 @@ test_store_binary(void)
     }
     /* Unsupported versions/features stay rejected even with a valid checksum,
      * including writer requirements that a read-only parser might overlook. */
-    static const size_t unsupported[] = {8u, 10u, 12u, 16u, 24u, 56u};
+    static const size_t unsupported[] = {8u, 12u, 16u, 24u, 56u};
     for (size_t i = 0; i < sizeof(unsupported) / sizeof(*unsupported); ++i) {
         unsigned char bad[sizeof(header)];
         memcpy(bad, header, sizeof(bad));
@@ -1125,7 +1125,7 @@ test_store_binary(void)
         rehash(bad, sizeof(bad));
         assert(snag_binary_header_decode(bad, sizeof(bad), &decoded, &anchor) < 0);
     }
-    const unsigned int old_minor[] = {0u, 1u, 3u, 65535u};
+    const unsigned int old_minor[] = {0u, 1u, 4u, 65535u};
     for (size_t i = 0u; i < 4u; ++i) {
         unsigned char bad[SNAG_BINARY_HEADER_SIZE];
         memcpy(bad, header, sizeof(bad));
@@ -1179,7 +1179,7 @@ test_store_binary(void)
     }
     /* Authenticated malformed framing: the checksum alone is insufficient. */
     static const size_t malformed[] = {
-        16u, 20u, 24u, 32u, 40u, 72u, /* count/header/sequence/link/reserved */
+        16u, 20u, 24u, 32u, 40u, 72u, /* count/header/sequence/link/packed size */
         112u, 120u, 136u, 138u, 140u, /* record length/sequence/kind/version/flags */
         157u, 165u, 173u, 189u /* footer start/length/sequence/reserved */
     };
@@ -1188,6 +1188,7 @@ test_store_binary(void)
         assert(!snag_buf_append(&bad, encoded.data, encoded.len));
         /* Zero kind/version; unsupported flag bit; flip other fields. */
         if (malformed[i] == 136u || malformed[i] == 138u) bad.data[malformed[i]] = 0u;
+        else if (malformed[i] == 72u) bad.data[72] = 255u; /* Not smaller than the body. */
         else bad.data[malformed[i]] ^= malformed[i] == 140u ? 2u : 1u;
         rehash(bad.data, SNAG_BINARY_BATCH_HEADER_SIZE);
         rehash(bad.data, bad.len);

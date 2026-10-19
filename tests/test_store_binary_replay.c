@@ -4,6 +4,7 @@
 #include "store_binary_replay.h"
 #include "store_binary_context.h"
 #include "store_binary_import.h"
+#include "store_optimize.h"
 #include "store_binary_producer.h"
 #include "fs.h"
 #include "context.h"
@@ -3815,6 +3816,34 @@ start_process_call(struct snag_session *session, size_t index)
         "resolved_workdir", session->cwd));
 }
 
+/* Exercise the real maintenance lock, publisher and ordinary opener together. */
+static void
+optimize_fixture(struct snag_store *store, struct snag_session *state)
+{
+    char id[sizeof(state->id)], error[512] = {0};
+    memcpy(id, state->id, sizeof(id));
+    snag_session_close(state);
+    for (unsigned int pass = 0u; pass < 2u; ++pass) {
+        assert(!snag_store_open_session_directory(store, state, id, error, sizeof(error)));
+        int format = snag_store_open_session_files(state, false, error, sizeof(error));
+        assert(format >= 0);
+        if (!format) {
+            struct snag_binary_import_result converted = {0};
+            assert(!snag_store_convert_binary_directory(state, &converted, NULL,
+                error, sizeof(error)));
+            snag_binary_checkpoint_sources_free(&converted.sources);
+            snag_session_close(state);
+            assert(!snag_store_open_session_directory(store, state, id, error, sizeof(error)));
+            assert(snag_store_open_session_files(state, false, error, sizeof(error)) > 0);
+        }
+        int rc = snag_store_optimize_directory(state, NULL, error, sizeof(error));
+        if (rc) fprintf(stderr, "fixture optimization: %s\n", error);
+        assert(!rc);
+        snag_session_close(state);
+    }
+    assert(!snag_session_open(store, state, id, error, sizeof(error)));
+}
+
 static void
 test_checkpoint_after_streamed_tools(struct snag_store *store, const char *cwd, bool legacy)
 {
@@ -3868,6 +3897,7 @@ test_checkpoint_after_streamed_tools(struct snag_store *store, const char *cwd, 
     }
     char id[sizeof(state.id)];
     memcpy(id, state.id, sizeof(id));
+    if (!legacy) optimize_fixture(store, &state);
     uint64_t next = state.next_seq;
     snag_session_close(&state);
     snag_session_init(&state);
@@ -4569,6 +4599,22 @@ test_voice_adoption(struct snag_store *store, const char *cwd, unsigned int bad)
         json_decref(old);
         snag_binary_checkpoint_sources_free(&result.sources);
         assert(!close(fd));
+    }
+    if (!bad) {
+        uint64_t begin = restored.voice_history.begin.next_seq;
+        optimize_fixture(store, &original);
+        assert(original.voice_history.begin.next_seq == begin);
+        assert(!strcmp(original.voice_history.transfer_id, GOAL_ID));
+        struct snag_binary_anchor through;
+        struct snag_binary_index_tree tree;
+        struct snag_binary_checkpoint_sources sources = {0};
+        assert(!snag_session_binary_checkpoint_capture(&original, &through, &tree, &sources,
+            error, sizeof(error)));
+        struct snag_voice_history_root root;
+        assert(!snag_binary_checkpoint_voice_read(original.log_fd, &through, NULL,
+            original.voice_history.adopted_seq, original.id, &root));
+        assert(root.begin.next_seq == begin);
+        snag_binary_checkpoint_sources_free(&sources);
     }
     snag_session_close(&restored);
     snag_session_close(&original);
