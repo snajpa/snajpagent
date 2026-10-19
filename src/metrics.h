@@ -20,7 +20,6 @@ struct snag_metrics_sample {
     uint64_t process_started_ms;
     uint64_t process_pid;
     uint64_t observed_ms;
-    uint64_t turn_started_ms;
     uint64_t turn_output_tokens;
     uint64_t response_started_ms;
     uint64_t last_response_ms;
@@ -48,7 +47,6 @@ struct snag_metrics_view {
     uint64_t session_output_tokens;
     uint64_t session_reasoning_tokens;
     uint64_t session_total_tokens;
-    uint64_t prefill_microtokens_per_second;
     uint64_t decode_microtokens_per_second;
     uint64_t last_response_ms;
     uint64_t process_uptime_ms;

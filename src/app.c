@@ -120,7 +120,6 @@ refresh_metrics(struct app_state *app, bool force)
         .process_started_ms = app->metrics_started_ms,
         .process_pid = (uint64_t)getpid(),
         .observed_ms = now,
-        .turn_started_ms = app->turn_started_ms,
         .turn_output_tokens = app->turn_output_tokens,
         .response_started_ms = app->response_started_ms,
         .last_response_ms = app->last_response_ms,

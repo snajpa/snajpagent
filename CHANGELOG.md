@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Remove the unmeasurable prefill-speed column and Prometheus gauge. Keep
+  decode speed and token totals, and convert saved monitor layouts on load.
+
+- Keep the last complete `snajpagent top` table visible while changed journals
+  await metadata verification, including after a failed refresh.
+
 - Replace the same-argument snapshot when explicitly reactivating an updated skill.
   Unload all bindings of one skill by name or qualified ID, including bindings
   retained across retry and resume. Shared names across different skill IDs

@@ -49,6 +49,10 @@ typedef struct json_error_t {
     char text[JSON_ERROR_TEXT_LENGTH];
 } json_error_t;
 
+size_t json_dumpb(const json_t *, char *, size_t, size_t);
+#define JSON_COMPACT 0x20
+#define JSON_ENCODE_ANY 0x200
+
 json_t *json_pack(const char *fmt, ...);
 json_t *json_copy(json_t *value);
 int json_array_extend(json_t *array, json_t *other);

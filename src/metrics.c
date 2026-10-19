@@ -108,8 +108,8 @@ snag_metrics_write(int root_fd, const struct snag_metrics_sample *sample, char *
     struct snag_buf text = {.max = SNAG_METRICS_FILE_MAX};
     const struct snag_usage_totals *process = sample ? sample->program_usage : NULL;
     const struct snag_usage_totals *session = sample ? &sample->session->usage_totals : NULL;
-    uint64_t prefill_elapsed = 0u, decode_elapsed = sample ? sample->last_response_ms : 0u;
-    uint64_t prefill_tokens = 0u, decode_tokens = sample ? sample->last_response_output_tokens : 0u;
+    uint64_t decode_elapsed = sample ? sample->last_response_ms : 0u;
+    uint64_t decode_tokens = sample ? sample->last_response_output_tokens : 0u;
     uint64_t process_uptime = 0u;
     int metrics_fd = -1, output = -1, rc = -1;
     char temporary[SNAG_ID_HEX_LEN + 32u];
@@ -120,10 +120,6 @@ snag_metrics_write(int root_fd, const struct snag_metrics_sample *sample, char *
         return snag_fail(error, error_size, EINVAL, "invalid metrics sample");
     if (sample->observed_ms >= sample->process_started_ms)
         process_uptime = sample->observed_ms - sample->process_started_ms;
-    if (sample->response_started_ms > sample->turn_started_ms) {
-        prefill_elapsed = sample->response_started_ms - sample->turn_started_ms;
-        prefill_tokens = sample->session->active_accounting.input_tokens;
-    }
     if (sample->turn_active && sample->response_open && sample->response_started_ms &&
         sample->observed_ms > sample->response_started_ms) {
         decode_elapsed = sample->observed_ms - sample->response_started_ms;
@@ -172,10 +168,6 @@ snag_metrics_write(int root_fd, const struct snag_metrics_sample *sample, char *
         metric_typed_u64(&text, "snajpagent_session_total_tokens_total",
             "Total tokens accumulated by this session.", "counter",
             snag_metrics_usage_total(session)) < 0 ||
-        metric_header(&text, "snajpagent_session_prefill_tokens_per_second",
-            "Estimated input prefill rate.", "gauge") < 0 ||
-        metric_rate(&text, "snajpagent_session_prefill_tokens_per_second",
-            snag_rate_microtokens_per_second(prefill_tokens, prefill_elapsed)) < 0 ||
         metric_header(&text, "snajpagent_session_decode_tokens_per_second",
             "Estimated output decode rate.", "gauge") < 0 ||
         metric_rate(&text, "snajpagent_session_decode_tokens_per_second",
@@ -346,9 +338,6 @@ snag_metrics_read(int root_fd, const char *session_id, struct snag_metrics_view 
         if ((parsed = parse_u64_metric(line, "snajpagent_session_total_tokens_total",
                 &value)) < 0) goto out;
         if (parsed) view->session_total_tokens = value;
-        if ((parsed = parse_rate_metric(line, "snajpagent_session_prefill_tokens_per_second",
-                &value)) < 0) goto out;
-        if (parsed) view->prefill_microtokens_per_second = value;
         if ((parsed = parse_rate_metric(line, "snajpagent_session_decode_tokens_per_second",
                 &value)) < 0) goto out;
         if (parsed) view->decode_microtokens_per_second = value;

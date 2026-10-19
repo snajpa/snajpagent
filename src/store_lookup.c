@@ -1116,7 +1116,7 @@ out:
 }
 
 static int
-list_sessions(struct snag_store *store, const struct snag_session *owned, uint64_t stored_limit,
+list_sessions(struct snag_store *store, const char *owned_id, uint64_t stored_limit,
     unsigned int columns, snag_store_emit_fn emit, void *opaque, json_t *catalog,
     bool (*cancel)(void *), void *cancel_opaque, struct snag_sha256 *pending,
     enum catalog_content content, char *error, size_t error_size)
@@ -1141,7 +1141,7 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
             continue;
         }
         /* Closing a second descriptor of our lock drops the owner's POSIX lock. */
-        bool live = owned && owned->lock_fd >= 0 && !strcmp(owned->id, entry);
+        bool live = owned_id && !strcmp(owned_id, entry);
         if (!live) live = snag_session_is_live(snapshot);
         if (!stored_limit && !live) {
             json_decref(summary.owner);
@@ -1239,17 +1239,18 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned, uint
     unsigned int columns, snag_store_emit_fn emit, void *opaque, char *error,
     size_t error_size)
 {
-    return list_sessions(store, owned, stored_limit, columns, emit, opaque, NULL, NULL,
+    return list_sessions(store, owned && owned->lock_fd >= 0 ? owned->id : NULL,
+        stored_limit, columns, emit, opaque, NULL, NULL,
         NULL, NULL, CATALOG_CELLS, error, error_size);
 }
 
 json_t *
-snag_store_catalog(struct snag_store *store, const struct snag_session *owned,
+snag_store_catalog(struct snag_store *store, const char *owned_id,
     uint64_t stored_limit, bool (*cancel)(void *), void *cancel_opaque, char *error,
     size_t error_size)
 {
     json_t *rows = json_array();
-    if (rows && list_sessions(store, owned, stored_limit, 0u, NULL, NULL, rows, cancel,
+    if (rows && list_sessions(store, owned_id, stored_limit, 0u, NULL, NULL, rows, cancel,
                     cancel_opaque, NULL, CATALOG_CELLS, error, error_size) < 0) {
         json_decref(rows);
         rows = NULL;
@@ -1258,7 +1259,7 @@ snag_store_catalog(struct snag_store *store, const struct snag_session *owned,
 }
 
 json_t *
-snag_store_catalog_preview(struct snag_store *store, const struct snag_session *owned,
+snag_store_catalog_preview(struct snag_store *store, const char *owned_id,
     uint64_t stored_limit, bool (*cancel)(void *), void *opaque, bool *incomplete,
     char *error, size_t error_size)
 {
@@ -1266,7 +1267,7 @@ snag_store_catalog_preview(struct snag_store *store, const struct snag_session *
     snag_sha256_init(&pending);
     *incomplete = false;
     json_t *rows = json_array();
-    if (rows && list_sessions(store, owned, stored_limit, 0u, NULL, NULL, rows, cancel,
+    if (rows && list_sessions(store, owned_id, stored_limit, 0u, NULL, NULL, rows, cancel,
             opaque, &pending, CATALOG_PREVIEW, error, error_size) < 0) {
         json_decref(rows);
         return NULL;

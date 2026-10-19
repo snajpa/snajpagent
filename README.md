@@ -149,7 +149,7 @@ Name sessions with `-N lead` or `/session name lead`; select them with
 ### Monitor sessions
 
 Run `snajpagent top` for a live session table with model, turn count, process and
-session token totals, and estimated prefill/decode rates. Use Up/Down or `j`/`k`
+session token totals, and estimated decode rate. Use Up/Down or `j`/`k`
 to select a session, `r` to refresh, and `q` to leave. Selection follows the
 session when rows reorder, and the table scrolls to keep it visible. The view
 redraws every 0.2 seconds; owner metrics retain their configured sampling interval.

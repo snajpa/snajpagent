@@ -3,6 +3,7 @@
 #define SNAJPAGENT_WIRE_H
 
 #include "base.h"
+#include "snag_jansson.h"
 
 #include <stddef.h>
 
@@ -25,6 +26,10 @@ size_t snag_wire_secret_span(const unsigned char *, size_t, bool partial_begin, 
     const struct snag_wire_secrets *);
 int snag_wire_json_redact_bounded(const unsigned char *data, size_t len, size_t input_max,
     const struct snag_wire_secrets *secrets, struct snag_buf *out, char *error, size_t error_size);
+/* Mutates an exclusively owned tree within a compact JSON byte bound.
+ * On failure discard the partially redacted value. */
+int snag_wire_value_redact(json_t **value, const struct snag_wire_secrets *, size_t max,
+    char *error, size_t error_size);
 int snag_wire_json_redact(const unsigned char *data, size_t len,
     const struct snag_wire_secrets *secrets, struct snag_buf *out, char *error, size_t error_size);
 int snag_wire_header_redact(const unsigned char *line, size_t len,

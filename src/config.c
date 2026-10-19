@@ -842,14 +842,18 @@ top_setting(struct snag_top_settings *settings, const char *key, const char *val
     while (k < sizeof(top_keys) / sizeof(top_keys[0]) && strcmp(key, top_keys[k])) ++k;
     if (k == sizeof(top_keys) / sizeof(top_keys[0])) return -1;
     if (k == 8u) {
-        if (strlen(value) != SNAG_TOP_FIELDS) return -1;
+        size_t count = strlen(value), at = 0u;
+        bool legacy = count == SNAG_TOP_FIELDS + 1u;
+        if (count != SNAG_TOP_FIELDS && !legacy) return -1;
         unsigned int seen = 0u;
-        for (size_t i = 0u; i < SNAG_TOP_FIELDS; ++i) {
+        for (size_t i = 0u; i < count; ++i) {
             unsigned int f = (unsigned int)(value[i] - '0');
-            if (f >= SNAG_TOP_FIELDS || (seen & (1u << f))) return -1;
+            if (f >= count || (seen & (1u << f))) return -1;
             seen |= 1u << f;
+            if (legacy && f == 7u) continue;
+            settings->fields[at++] = (char)('0' + (legacy && f == 8u ? 7u : f));
         }
-        memcpy(settings->fields, value, SNAG_TOP_FIELDS + 1u);
+        settings->fields[at] = '\0';
         return (int)k;
     }
     if (k >= 5u) {
@@ -867,8 +871,9 @@ top_setting(struct snag_top_settings *settings, const char *key, const char *val
     long n = strtol(value, &end, 10);
     if (!*value || *end || errno) return -1;
     if (k == 0u && n >= 200 && n <= 86400000) settings->delay_ms = (unsigned int)n;
-    else if (k == 1u && n >= 0 && n < SNAG_TOP_FIELDS) settings->sort = (unsigned int)n;
-    else if (k == 2u && n > 0 && n < (1 << SNAG_TOP_FIELDS)) settings->visible = (unsigned int)n;
+    else if (k == 1u && n >= 0 && n <= SNAG_TOP_FIELDS) settings->sort = (unsigned int)n;
+    else if (k == 2u && n > 0 && n < (1 << (SNAG_TOP_FIELDS + 1u)))
+        settings->visible = (unsigned int)n;
     else if (k == 3u && n >= 0 && n <= 2) settings->color = (unsigned int)n;
     else if (k == 4u && n >= -1 && n <= INT_MAX) settings->extra_width = (int)n;
     else return -1;
@@ -1411,7 +1416,7 @@ snag_config_top(const char *path, struct snag_top_settings *settings, char *erro
     int loaded = read_config(path, false, &text, NULL, NULL, NULL, error, size);
     if (loaded > 0) return 0;
     if (loaded < 0) goto done;
-    bool selected = false, found = false;
+    bool selected = false, found = false, legacy = false;
     unsigned int seen = 0u, number = 0u;
     for (char *line = (char *)text.data; line && *line;) {
         char *next = strchr(line, '\n');
@@ -1428,7 +1433,9 @@ snag_config_top(const char *path, struct snag_top_settings *settings, char *erro
             char *equal = strchr(clean, '=');
             if (!equal) goto invalid;
             *equal++ = '\0';
-            int k = top_setting(settings, trim(clean), trim(equal));
+            const char *key = trim(clean), *value = trim(equal);
+            if (!strcmp(key, "fields")) legacy = strlen(value) == SNAG_TOP_FIELDS + 1u;
+            int k = top_setting(settings, key, value);
             if (k < 0 || (seen & (1u << k))) goto invalid;
             seen |= 1u << k;
         }
@@ -1436,6 +1443,17 @@ snag_config_top(const char *path, struct snag_top_settings *settings, char *erro
         continue;
 invalid:
         snag_fail(error, size, EINVAL, "invalid [top] configuration at line %u", number);
+        goto done;
+    }
+    if (legacy) {
+        if (seen & (1u << 1u))
+            settings->sort = settings->sort == 8u ? 7u : settings->sort == 7u ? 5u : settings->sort;
+        if (seen & (1u << 2u))
+            settings->visible = (settings->visible & 127u) | ((settings->visible & 256u) >> 1u);
+        if (!settings->visible) settings->visible = (1u << SNAG_TOP_FIELDS) - 1u;
+    }
+    if (settings->sort >= SNAG_TOP_FIELDS || settings->visible >= (1u << SNAG_TOP_FIELDS)) {
+        snag_errorf(error, size, "invalid monitor field settings");
         goto done;
     }
     rc = 0;

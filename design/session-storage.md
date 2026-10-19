@@ -105,7 +105,9 @@ unchanged unreadable histories; changed sources and explicit refresh retry them.
 Quit terminates and joins only that child. Failed backfill or cache publication
 is reported in the monitor; explicit refresh retries the same source generation. Old append-only owners can temporarily
 show their previous verified display cells while current counters come from the
-existing private metrics files. Replaced journals never reuse the previous cells.
+existing private metrics files. Replaced journals never reuse the previous cells for a newly verified snapshot.
+The monitor retains its last complete table until pending verification finishes;
+a failed backfill leaves that table visible with the retry diagnostic.
 A redirected monitor or ordinary listing waits for a complete verified snapshot.
 Ordinary listings query live owners through the read-only, version-compatible
 status exchange. Attachment state is independent of cached display cells and old

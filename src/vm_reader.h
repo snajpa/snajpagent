@@ -104,6 +104,9 @@ void snag_vm_reader_close(struct snag_vm_reader *);
  * The returned generation identifies the exact viewport request. */
 uint64_t snag_vm_reader_request(struct snag_vm_reader *, const struct snag_vm_read_request *);
 void snag_vm_reader_cancel(struct snag_vm_reader *);
+/* Consumes a successful incomplete preview after the caller publishes its rows.
+ * Reuses the result allocation for source verification. */
+uint64_t snag_vm_reader_verify_catalog(struct snag_vm_reader *, struct snag_vm_read_result *);
 snag_wake_fd snag_vm_reader_fd(const struct snag_vm_reader *);
 /* Nonblocking; ownership transfers to the caller. NULL means no completed work. */
 struct snag_vm_read_result *snag_vm_reader_take(struct snag_vm_reader *);

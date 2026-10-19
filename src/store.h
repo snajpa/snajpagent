@@ -375,10 +375,10 @@ int snag_store_list(struct snag_store *store, const struct snag_session *owned,
     size_t error_size);
 /* Same selection/comparator as the CLI. Owned rows contain the full id,
  * activity_ms, status_rank and seven display cells. Empty stores return []. */
-json_t *snag_store_catalog(struct snag_store *, const struct snag_session *owned,
+json_t *snag_store_catalog(struct snag_store *, const char *owned_id,
     uint64_t stored_limit, bool (*cancel)(void *), void *cancel_opaque, char *, size_t);
 /* Display-only cached rows; incomplete requests background source verification. */
-json_t *snag_store_catalog_preview(struct snag_store *, const struct snag_session *,
+json_t *snag_store_catalog_preview(struct snag_store *, const char *,
     uint64_t, bool (*)(void *), void *, bool *, char *, size_t);
 /* Metrics-first monitor snapshot. With pending, never replay journals: identify
  * the boundary needing backfill, allowing last metadata across same-file appends.

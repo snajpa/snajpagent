@@ -30,12 +30,12 @@
 
 enum top_sort {
     TOP_SORT_ID, TOP_SORT_STATE, TOP_SORT_MODEL, TOP_SORT_TURNS, TOP_SORT_ACTIVE,
-    TOP_SORT_TOTAL, TOP_SORT_SESSION, TOP_SORT_PREFILL, TOP_SORT_DECODE
+    TOP_SORT_TOTAL, TOP_SORT_SESSION, TOP_SORT_DECODE
 };
 
 static const char *const field_names[] = {
-    "SESSION", "STATE", "MODEL", "TURNS", "ACTIVE", "PROCESS", "SESSION", "PREFILL/s", "DECODE/s"};
-static const unsigned int field_widths[] = {8u, 8u, 20u, 6u, 8u, 8u, 8u, 9u, 9u};
+    "SESSION", "STATE", "MODEL", "TURNS", "ACTIVE", "PROCESS", "SESSION", "DECODE/s"};
+static const unsigned int field_widths[] = {8u, 8u, 20u, 6u, 8u, 8u, 8u, 9u};
 
 enum top_screen {TOP_TABLE, TOP_HELP, TOP_FIELDS, TOP_DELAY, TOP_WIDTH, TOP_PID, TOP_SIGNAL};
 
@@ -54,7 +54,6 @@ struct top_row {
     uint64_t turns;
     uint64_t process_total;
     uint64_t session_total;
-    uint64_t prefill_rate;
     uint64_t decode_rate;
     uint64_t process_pid;
     uint64_t process_started_ms;
@@ -123,7 +122,7 @@ parse_options(struct top_options *options, int argc, char **argv)
 {
     *options = (struct top_options){.settings = {.sort = TOP_SORT_TOTAL,
         .delay_ms = TOP_DEFAULT_DELAY, .visible = (1u << SNAG_TOP_FIELDS) - 1u,
-        .fields = "012345678"}};
+        .fields = "01234567"}};
     for (int i = 0; i < argc; ++i) {
         const char *argument = argv[i];
         const char *value = NULL;
@@ -230,11 +229,9 @@ compare_rows(const struct top_row *a, const struct top_row *b, unsigned int fiel
     else {
         uint64_t av = field == TOP_SORT_TURNS ? a->turns :
             field == TOP_SORT_SESSION ? a->session_total :
-            field == TOP_SORT_PREFILL ? a->prefill_rate :
             field == TOP_SORT_DECODE ? a->decode_rate : a->process_total;
         uint64_t bv = field == TOP_SORT_TURNS ? b->turns :
             field == TOP_SORT_SESSION ? b->session_total :
-            field == TOP_SORT_PREFILL ? b->prefill_rate :
             field == TOP_SORT_DECODE ? b->decode_rate : b->process_total;
         order = av == bv ? 0 : av > bv ? -1 : 1;
     }
@@ -250,7 +247,6 @@ COMPARE(turns, TOP_SORT_TURNS)
 COMPARE(active, TOP_SORT_ACTIVE)
 COMPARE(total, TOP_SORT_TOTAL)
 COMPARE(session, TOP_SORT_SESSION)
-COMPARE(prefill, TOP_SORT_PREFILL)
 COMPARE(decode, TOP_SORT_DECODE)
 #undef COMPARE
 
@@ -259,7 +255,7 @@ sort_rows(struct top_row *rows, size_t count, const struct top_options *options)
 {
     int (*const compare[])(const void *, const void *) = {compare_id, compare_state,
         compare_model, compare_turns, compare_active, compare_total, compare_session,
-        compare_prefill, compare_decode};
+        compare_decode};
     qsort(rows, count, sizeof(*rows), compare[options->settings.sort]);
     if (options->settings.reverse) {
         for (size_t i = 0u; i < count / 2u; ++i) {
@@ -285,6 +281,12 @@ load_rows(struct top_context *context, char *error, size_t error_size)
         context->cache_only ? context->catalog_pending : NULL, error, error_size);
     if (!catalog) return -1;
     count = json_array_size(catalog);
+    /* A pending journal may have no reusable cache row. Keep the complete table
+     * until verification can replace it, including after a failed refresh. */
+    if (context->cache_only && context->catalog_pending[0] && context->row_count) {
+        json_decref(catalog);
+        return 0;
+    }
     if (count) {
         rows = calloc(count, sizeof(*rows));
         if (!rows) {
@@ -322,7 +324,6 @@ load_rows(struct top_context *context, char *error, size_t error_size)
             rows[i].turns = view.turns;
             rows[i].process_total = view.process_total_tokens;
             rows[i].session_total = view.session_total_tokens;
-            rows[i].prefill_rate = view.prefill_microtokens_per_second;
             rows[i].decode_rate = view.decode_microtokens_per_second;
             rows[i].process_pid = view.process_pid;
             rows[i].process_started_ms = view.process_started_ms;
@@ -413,7 +414,6 @@ field_text(char *text, size_t size, const struct top_row *row, unsigned int fiel
         break;
     case TOP_SORT_TOTAL: snag_format_count(text, size, row->process_total); break;
     case TOP_SORT_SESSION: snag_format_count(text, size, row->session_total); break;
-    case TOP_SORT_PREFILL: rate_text(text, row->prefill_rate); break;
     case TOP_SORT_DECODE: rate_text(text, row->decode_rate); break;
     }
 }
@@ -905,7 +905,7 @@ snag_top_main(int argc, char **argv)
         }
     }
     struct snag_top_settings defaults = {.sort = TOP_SORT_TOTAL, .delay_ms = TOP_DEFAULT_DELAY,
-        .visible = (1u << SNAG_TOP_FIELDS) - 1u, .fields = "012345678"};
+        .visible = (1u << SNAG_TOP_FIELDS) - 1u, .fields = "01234567"};
     if (snag_config_top(context.config_path, &defaults, error, sizeof(error)) < 0)
         goto out;
     if (context.options.specified & 1u) defaults.delay_ms = context.options.settings.delay_ms;

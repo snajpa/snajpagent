@@ -4708,12 +4708,6 @@ collect(struct vm *vm, struct vm_read *read)
         json_decref(vm->sessions);
         vm->sessions = result->catalog;
         result->catalog = NULL;
-        if (result->request.catalog_preview && result->incomplete) {
-            struct snag_vm_read_request request = result->request;
-            request.catalog_preview = false;
-            read->generation = reader_request(vm, read, &request);
-            if (!read->generation) notice(vm, "Cannot refresh session metadata; R retries");
-        }
         for (size_t w = 0u; w < vm->count; ++w) {
             struct vm_window *window = &vm->windows[w];
             if (window->kind != VIEW_SESSIONS || !window->selected_id[0]) continue;
@@ -4727,6 +4721,10 @@ collect(struct vm *vm, struct vm_read *read)
             }
         }
         vm->dirty = true;
+        if (result->request.catalog_preview && result->incomplete) {
+            read->generation = snag_vm_reader_verify_catalog(read->reader, result);
+            result = NULL;
+        }
     }
     snag_vm_read_result_free(result);
     struct vm_window *window = &vm->windows[vm->focus];

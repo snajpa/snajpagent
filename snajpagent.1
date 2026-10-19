@@ -995,7 +995,7 @@ Each owner atomically refreshes a Prometheus text file at
 The directory is private to the account.  Files contain session identity labels,
 model and provider, attachment state, turn counts, process-start totals,
 durable session totals, process id, uptime, response duration, and estimated
-prefill and decode rates.  Process totals cover the current owner process;
+decode rate.  Process totals cover the current owner process;
 session totals survive resume and owner replacement.
 .PP
 The monitor redraws every 0.2 seconds. Use
@@ -1013,7 +1013,9 @@ their own sampling interval and executable until they exit.
 The first interactive frame appears before historical metadata is loaded. Live
 metrics and saved metadata fill the table as verification finishes in the background.
 First use of an old large journal can take longer than later refreshes; navigation
-and quit remain available during that backfill. Press
+and quit remain available during that backfill. Later refreshes retain the
+previous complete table while changed journals have unavailable rows, including
+a failed metadata refresh. Press
 .B r
 to retry unavailable metadata. Redirected output waits for a complete snapshot.
 The monitor uses
@@ -4765,12 +4767,13 @@ uses built-ins; an explicit file must exist.  Configuration must be a regular
 file, not a symlink.  Section names below go in square brackets.
 .SS "top"
 Monitor preferences saved by W. delay_ms is 200..86400000; sort is the field
-index 0..8; visible is a nonzero nine-bit visibility mask; fields is a permutation
-of 012345678. The field order is session ID, state, model/command, turns, active
-turn, process tokens, session tokens, prefill rate, decode rate. color is
+index 0..7; visible is a nonzero eight-bit visibility mask; fields is a permutation
+of 01234567. The field order is session ID, state, model/command, turns, active
+turn, process tokens, session tokens, decode rate. color is
 0 (automatic), 1 (always) or 2 (never). reverse, highlight and commands are
 booleans. extra_width is 0 for defaults, a positive integer for additional cells, or -1 for
 automatic growth. W writes every preference; omitted settings use built-ins.
+Previously saved nine-field layouts are converted when loaded.
 .SS "mcp NAME"
 Each name identifies a separately configured server/account.
 .TP

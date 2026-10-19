@@ -91,7 +91,7 @@ Owner observability is file-backed under `$DOTDIR/metrics`. Each owner writes
 `<session-id>.prom` by syncing a temporary file and atomically replacing the
 published sample. The exposition carries identity labels, attached/detached
 state, process-lifetime and durable-session token counters, process identity,
-and estimated prefill/decode rates. `snajpagent top` combines these samples with
+and estimated decode rate. `snajpagent top` combines these samples with
 the session catalog; it does not start a provider or an HTTP listener. Its
 termination action checks the session writer lock before signaling the metrics
 owner, while stored sessions remain read-only.

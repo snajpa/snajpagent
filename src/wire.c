@@ -115,13 +115,19 @@ key_redaction(const char *key, size_t len)
 /* Mutate only the private parsed diagnostic tree, returning an owned reference.
  * Keys containing a secret fail closed: redacting them could merge members. */
 static json_t *
-redact_value(json_t *value, const struct snag_wire_secrets *secrets, size_t max)
+redact_value(json_t *value, const struct snag_wire_secrets *secrets, size_t max, unsigned int depth)
 {
+    if (depth > 48u) return NULL;
     const char *type = snag_json_string(value, "type");
     if (type && (snag_string_in(type, "reasoning reasoning_text summary_text") ||
                     strncmp(type, "response.reasoning_", 19u) == 0))
         return json_string("<redacted:reasoning>");
     if (json_is_string(value)) {
+        const unsigned char *source = (const unsigned char *)json_string_value(value);
+        size_t length = json_string_length(value), i = 0u;
+        if (!snag_utf8_valid(source, length, true)) return NULL;
+        while (i < length && !snag_wire_secret_match(source + i, length - i, secrets)) ++i;
+        if (i == length) return json_incref(value);
         json_t *redacted = NULL;
         struct snag_buf text = {.max = max};
         if (append_redacted(&text, (const unsigned char *)json_string_value(value),
@@ -141,16 +147,34 @@ redact_value(json_t *value, const struct snag_wire_secrets *secrets, size_t max)
                 return NULL;
             }
             json_t *child = replacement ? json_string(replacement)
-                                        : redact_value(json_object_iter_value(iter), secrets, max);
+                : redact_value(json_object_iter_value(iter), secrets, max, depth + 1u);
             if (!child || json_object_set_new(value, key, child) < 0) return NULL;
         }
     } else if (json_is_array(value)) {
         for (size_t i = 0; i < json_array_size(value); ++i) {
-            json_t *child = redact_value(json_array_get(value, i), secrets, max);
+            json_t *child = redact_value(json_array_get(value, i), secrets, max, depth + 1u);
             if (!child || json_array_set_new(value, i, child) < 0) return NULL;
         }
     }
     return json_incref(value);
+}
+
+int
+snag_wire_value_redact(json_t **value, const struct snag_wire_secrets *secrets, size_t max,
+    char *error, size_t error_size)
+{
+    if (!value || !*value || secrets_valid(secrets) < 0)
+        return snag_errorf(error, error_size, "invalid diagnostic secret set");
+    size_t bytes = json_dumpb(*value, NULL, 0u, JSON_COMPACT | JSON_ENCODE_ANY);
+    int rc = bytes && bytes <= max ? 0 : -1;
+    if (!rc) {
+        json_t *redacted = redact_value(*value, secrets, max, 0u);
+        bytes = redacted ? json_dumpb(redacted, NULL, 0u, JSON_COMPACT | JSON_ENCODE_ANY) : 0u;
+        rc = bytes && bytes <= max ? 0 : -1;
+        json_decref(*value);
+        *value = redacted;
+    }
+    return rc < 0 ? snag_errorf(error, error_size, "cannot redact diagnostic JSON") : 0;
 }
 
 int
@@ -165,7 +189,7 @@ snag_wire_json_redact_bounded(const unsigned char *data, size_t len, size_t inpu
     value = snag_json_load_strict(data, len, input_max, error, error_size);
     if (!value) return -1;
     snag_buf_reset(out);
-    json_t *redacted = redact_value(value, secrets, out->max);
+    json_t *redacted = redact_value(value, secrets, out->max, 0u);
     rc = redacted ? snag_json_diagnostic(redacted, out) : -1;
     json_decref(redacted);
     json_decref(value);

@@ -233,7 +233,7 @@ struct snag_config {
 void snag_config_init(struct snag_config *config);
 /* Read only [terminal] settings, without provider/agent initialization. */
 /* Monitor preferences are loaded separately: top never needs provider credentials. */
-#define SNAG_TOP_FIELDS 9u
+#define SNAG_TOP_FIELDS 8u
 struct snag_top_settings {
     unsigned int delay_ms, sort, visible, color;
     int extra_width; /* Negative grows fixed columns automatically. */

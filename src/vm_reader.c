@@ -1172,31 +1172,19 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         return;
     }
     if (request->kind == SNAG_VM_READ_SESSIONS) {
-        struct snag_session *owned = NULL;
-        if (request->owned_session_id[0]) {
-            /* This identity-only placeholder owns no descriptors or state. */
-            owned = calloc(1u, sizeof(*owned));
-            if (!owned) goto failed;
-            memcpy(owned->id, request->owned_session_id, sizeof(owned->id));
-        }
+        const char *owned = request->owned_session_id[0] ? request->owned_session_id : NULL;
         json_t *catalog = request->catalog_preview ?
             snag_store_catalog_preview(reader->store, owned, request->stored_limit,
                 read_canceled, reader, &result->incomplete, result->error, sizeof(result->error)) :
             snag_store_catalog(reader->store, owned, request->stored_limit,
                 read_canceled, reader, result->error, sizeof(result->error));
-        free(owned);
-        char *encoded = catalog ? json_dumps(catalog, JSON_COMPACT) : NULL;
-        json_decref(catalog);
-        if (!encoded) goto failed;
-        struct snag_buf filtered = {.max = SNAG_MEMORY_LIMIT / 4u};
-        int rc = snag_wire_json_redact_bounded((const unsigned char *)encoded, strlen(encoded),
-            filtered.max, &reader->secrets, &filtered, result->error, sizeof(result->error));
-        snag_secret_bytes_free(encoded);
-        json_error_t parse;
-        if (!rc)
-            result->catalog = json_loadb((const char *)filtered.data, filtered.len, 0u, &parse);
-        snag_buf_free(&filtered);
-        if (!result->catalog) goto failed;
+        if (!catalog) goto failed;
+        if (snag_wire_value_redact(&catalog, &reader->secrets, SNAG_MEMORY_LIMIT / 4u,
+                result->error, sizeof(result->error)) < 0) {
+            json_decref(catalog);
+            goto failed;
+        }
+        result->catalog = catalog;
         return;
     }
     if (view_open(reader, request, result->error, sizeof(result->error)) < 0) goto failed;
@@ -1403,6 +1391,32 @@ snag_vm_reader_cancel(struct snag_vm_reader *reader)
     snag_vm_read_result_free(completed);
 }
 
+static uint64_t
+queue_result(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
+{
+    (void)pthread_mutex_lock(&reader->lock);
+    uint64_t generation = atomic_fetch_add(&reader->generation, 1u) + 1u;
+    result->generation = generation;
+    struct snag_vm_read_result *pending = reader->pending, *completed = reader->completed;
+    reader->pending = result;
+    reader->completed = NULL;
+    (void)pthread_cond_signal(&reader->condition);
+    (void)pthread_mutex_unlock(&reader->lock);
+    snag_vm_read_result_free(pending);
+    snag_vm_read_result_free(completed);
+    return generation;
+}
+
+uint64_t
+snag_vm_reader_verify_catalog(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
+{
+    json_decref(result->catalog);
+    result->catalog = NULL;
+    result->incomplete = false;
+    result->request.catalog_preview = false;
+    return queue_result(reader, result);
+}
+
 uint64_t
 snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_request *request)
 {
@@ -1475,17 +1489,7 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
         snag_vm_read_result_free(result);
         return 0u;
     }
-    (void)pthread_mutex_lock(&reader->lock);
-    uint64_t generation = atomic_fetch_add(&reader->generation, 1u) + 1u;
-    result->generation = generation;
-    struct snag_vm_read_result *pending = reader->pending, *completed = reader->completed;
-    reader->pending = result;
-    reader->completed = NULL;
-    (void)pthread_cond_signal(&reader->condition);
-    (void)pthread_mutex_unlock(&reader->lock);
-    snag_vm_read_result_free(pending);
-    snag_vm_read_result_free(completed);
-    return generation;
+    return queue_result(reader, result);
 }
 
 snag_wake_fd
