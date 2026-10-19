@@ -7,6 +7,7 @@
 #include "store_binary_context.h"
 #include "store_binary_import.h"
 #include "store_internal.h"
+#include "store_optimize.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -29,6 +30,7 @@ struct conversion_pool {
     uint64_t counts[4];
     bool exhausted;
     bool enumeration_failed;
+    bool optimize;
 };
 
 static atomic_bool conversion_stopped;
@@ -134,7 +136,8 @@ conversion_next(struct conversion_pool *pool, char id[SNAG_ID_HEX_LEN + 1u])
 }
 
 static enum conversion_outcome
-conversion_session(struct snag_store *store, const char *id, char *error, size_t size)
+conversion_session(struct snag_store *store, const char *id, bool optimize,
+    char *error, size_t size)
 {
     struct snag_session *source = malloc(sizeof(*source));
     if (!source) {
@@ -178,7 +181,7 @@ conversion_session(struct snag_store *store, const char *id, char *error, size_t
         (void)snag_errorf(error, size, "cancelled");
         goto done;
     }
-    if (format) {
+    if (format && !optimize) {
         snag_file_info info;
         if (snag_fstat(source->log_fd, &info) < 0) goto done;
         /* Immutable admission keeps tail bytes; extent equality below rejects
@@ -190,14 +193,25 @@ conversion_session(struct snag_store *store, const char *id, char *error, size_t
             goto done;
         }
         outcome = CURRENT;
-    } else if (!snag_store_convert_binary_directory(source, &result, &control, error, size)) {
+    } else if (!format &&
+        !snag_store_convert_binary_directory(source, &result, &control, error, size)) {
         outcome = CONVERTED;
         if (result.legacy.incomplete_tail_bytes) {
             (void)snag_errorf(error, size, "unsealed source tail retained");
         }
-    } else if (errno == ECANCELED) {
+    } else if (!format && errno == ECANCELED) {
         outcome = SKIPPED;
         (void)snag_errorf(error, size, "cancelled");
+    }
+    if (optimize && (format > 0 || outcome == CONVERTED)) {
+        error[0] = '\0';
+        if (!format) {
+            (void)close(source->log_fd);
+            source->log_fd = snag_open_private_append_at(source->dir_fd, "journal.bin", false);
+        }
+        if (source->log_fd >= 0 &&
+            !snag_store_optimize_directory(source, &control, error, size)) outcome = CONVERTED;
+        else outcome = conversion_cancelled(NULL) ? SKIPPED : FAILED;
     }
 done:
     if (outcome == FAILED && !error[0]) {
@@ -216,12 +230,16 @@ conversion_worker(void *opaque)
     char id[SNAG_ID_HEX_LEN + 1u];
     while (conversion_next(pool, id)) {
         char error[512] = {0};
-        enum conversion_outcome outcome = conversion_session(pool->store, id, error, sizeof(error));
+        enum conversion_outcome outcome = conversion_session(pool->store, id, pool->optimize,
+            error, sizeof(error));
         const char *names[4] = {"converted", "already-current", "skipped", "failed"};
         (void)pthread_mutex_lock(&pool->lock);
         ++pool->counts[outcome];
-        (void)printf("%s %s%s%s\n", id, names[outcome], error[0] ? ": " : "", error);
-        (void)fflush(stdout);
+        FILE *stream = pool->optimize && (outcome == SKIPPED || outcome == FAILED) ?
+            stderr : stdout;
+        const char *name = pool->optimize && outcome == CONVERTED ? "optimized" : names[outcome];
+        (void)fprintf(stream, "%s %s%s%s\n", id, name, error[0] ? ": " : "", error);
+        (void)fflush(stream);
         (void)pthread_mutex_unlock(&pool->lock);
     }
     return NULL;
@@ -235,16 +253,19 @@ conversion_usage(FILE *stream)
         "Default jobs: online processors (one if unavailable), bounded by session count.\n");
 }
 
-int
-snag_convert_main(int argc, char **argv)
+static int
+conversion_main(int argc, char **argv, bool optimize)
 {
     const char *directory = NULL;
-    uint64_t requested = conversion_processors();
+    uint64_t requested = optimize ? 1u : conversion_processors();
     char error[512] = {0};
     for (int i = 0; i < argc; ++i) {
         const char *argument = argv[i];
         if (!strcmp(argument, "--help") || !strcmp(argument, "-h")) {
-            conversion_usage(stdout);
+            if (optimize) (void)printf("Usage: snajpagent optimize [--dotdir DIR]\n"
+                "Losslessly upgrade and compress stopped sessions, one at a time.\n"
+                "Locked sessions are skipped and identified on stderr.\n");
+            else conversion_usage(stdout);
             return 0;
         }
         if (!strcmp(argument, "--dotdir") && i + 1 < argc) {
@@ -255,9 +276,10 @@ snag_convert_main(int argc, char **argv)
             const char *jobs = NULL;
             if (!strcmp(argument, "--jobs") && i + 1 < argc) jobs = argv[++i];
             else if (!strncmp(argument, "--jobs=", 7u)) jobs = argument + 7u;
-            if (!jobs || snag_parse_count(jobs, &requested) < 0 || !requested) {
-                (void)fprintf(stderr, "convert: expected --dotdir DIR or positive --jobs N\n");
-                conversion_usage(stderr);
+            if (optimize || !jobs || snag_parse_count(jobs, &requested) < 0 || !requested) {
+                (void)fprintf(stderr, "%s: expected --dotdir DIR%s\n",
+                    optimize ? "optimize" : "convert", optimize ? "" : " or positive --jobs N");
+                if (!optimize) conversion_usage(stderr);
                 return 2;
             }
         }
@@ -265,7 +287,7 @@ snag_convert_main(int argc, char **argv)
     char *dotdir = snag_app_dotdir(directory, error, sizeof(error));
     struct snag_store store;
     snag_store_init(&store);
-    struct conversion_pool pool = {.store = &store};
+    struct conversion_pool pool = {.store = &store, .optimize = optimize};
     size_t count = 0u;
     int rc = 3;
     if (!dotdir || snag_store_open(&store, dotdir, error, sizeof(error)) < 0 ||
@@ -299,7 +321,7 @@ snag_convert_main(int argc, char **argv)
         interrupt = signal(SIGINT, conversion_signal);
         terminate = signal(SIGTERM, conversion_signal);
     }
-    (void)printf("Conversion workers: %zu\n", workers);
+    if (!optimize) (void)printf("Conversion workers: %zu\n", workers);
     for (size_t i = 1u; i < workers; ++i) {
         code = pthread_create(&threads[started], NULL, conversion_worker, &pool);
         if (code) {
@@ -313,7 +335,8 @@ snag_convert_main(int argc, char **argv)
     for (size_t i = 0u; i < started; ++i) (void)pthread_join(threads[i], NULL);
     if (interrupt != SIG_ERR) (void)signal(SIGINT, interrupt);
     if (terminate != SIG_ERR) (void)signal(SIGTERM, terminate);
-    (void)printf("Converted: %llu; already-current: %llu; skipped: %llu; failed: %llu%s\n",
+    (void)printf("%s: %llu; already-current: %llu; skipped: %llu; failed: %llu%s\n",
+        optimize ? "Optimized" : "Converted",
         (unsigned long long)pool.counts[CONVERTED], (unsigned long long)pool.counts[CURRENT],
         (unsigned long long)pool.counts[SKIPPED], (unsigned long long)pool.counts[FAILED],
         conversion_cancelled(NULL) ? "; interrupted" : "");
@@ -322,9 +345,22 @@ snag_convert_main(int argc, char **argv)
     free(threads);
     (void)pthread_mutex_destroy(&pool.lock);
 done:
-    if (rc == 3) (void)fprintf(stderr, "convert: %s\n", error[0] ? error : strerror(errno));
+    if (rc == 3) (void)fprintf(stderr, "%s: %s\n", optimize ? "optimize" : "convert",
+        error[0] ? error : strerror(errno));
     if (pool.directory) (void)snag_directory_close(pool.directory);
     snag_store_close(&store);
     free(dotdir);
     return rc;
+}
+
+int
+snag_convert_main(int argc, char **argv)
+{
+    return conversion_main(argc, argv, false);
+}
+
+int
+snag_optimize_main(int argc, char **argv)
+{
+    return conversion_main(argc, argv, true);
 }

@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Add `snajpagent optimize [--dotdir DIR]` for serial, lossless offline session
+  upgrades and Zstandard block compression. Skip running sessions on stderr;
+  resume optimized history directly and append raw blocks during ordinary runs.
+  Preserve exact legacy source bytes in verified `.jsonl.zst` archives and
+  recover interrupted journal/index/checkpoint publication under the writer lock.
+
 - Add `/model none` and `-m none` for local controls and IRC without model
   activity. Model-bound input is discarded, automatic model work waits, and the
   selection survives resume, including with no configured provider.

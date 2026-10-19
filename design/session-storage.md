@@ -271,6 +271,67 @@ delimiter, using a fixed read buffer. Missing bytes beneath a supplied immutable
 boundary are read errors. Full reads decode the envelope, then verify the batch
 hash and fields. These checks also apply to backward and indexed reads. The bounded physical end-discovery primitive supplies a starting anchor; fast
 checkpoint admission and application integration remain pending.
+### Offline optimization and format 0.3
+
+`snajpagent optimize` serially upgrades legacy JSONL and repacks native sessions.
+It holds the original nonblocking exclusive writer lock through verification,
+publication and cleanup. Locked sessions are identified on stderr and skipped.
+Normal execution retains raw 0.2 creation and raw appends; it accepts both 0.2
+and optimized 0.3 headers. Older executables reject 0.3 before append.
+
+The 0.3 file header differs in its minor version and corresponding digest. The
+decoded batch representation and record payloads stay unchanged, except that
+header offset72 now contains a little-endian compressed-body length. Zero means
+raw. A positive value identifies exactly one Zstandard frame containing the
+record area, and must be smaller than the decoded body. Header and footer remain
+outside compression; the fixed zero-free wire envelope surrounds that physical
+image. Header/footer length fields still describe the decoded batch. Physical
+end is derived from the checked compressed length plus framing and wire overhead.
+The header checksum and canonical SHA-256 seal authenticate the decoded header,
+record bytes and footer, including the selected compressed length. Decoding
+checks exact frame extent and exact decompressed size before exposing records.
+
+Offline repacking targets the existing 1 MiB decoded aggregate limit and uses
+Zstandard level3, retaining raw blocks when compression does not shrink them.
+The existing single-record event limit permits a larger individual block.
+Backward recovery, indexed history and ordinary replay share the block reader;
+each read decompresses at most one independently addressable block. A journal
+may freely mix compressed blocks and later raw commit batches. Index record
+offsets address decoded blocks; their bounds never substitute decoded offsets
+for physical compressed extents. The index identity hash keeps its existing
+0.2 canonical identity encoding, independently of the journal's compression mode.
+
+Every original record header and payload survives byte-for-byte, including
+unknown optional metadata and historical checkpoint receipts. Sequence IDs and
+timestamps retain their meaning; current index entries and checkpoint images
+are rebuilt for the new physical anchors. Historical receipt coordinates refer
+to historical images: image digest matching prevents their adoption as current
+seek state. Publication appends a fresh receipt-pinned current checkpoint.
+Record-area SHA-256 equality plus full core/provider reconstruction checks precede
+cutover. Native payload references already use logical sequence/slice coordinates;
+legacy import normalizes its older voice/tool-result physical cursors first.
+
+The private `.optimize` stage holds the new bundle, hard links to the old journal
+and caches, and a `ready` marker. After staged files and links are checked,
+new caches publish first and the canonical journal pathname is renamed last.
+The original lock inode stays in place. On the next locked open, inode identity
+of `journal.bin` selects either the old or new complete cache set. Recovery is
+repeatable until the selected bundle is installed; only then is `ready` removed
+and staging storage reclaimed. An unready stage is disposable because selection
+has either not begun or already completed in the kernel-visible namespace. A mismatched journal identity
+fails closed. Interrupted callers never report uncertain publication as success.
+
+After native selection, retained `.legacy-source/events.jsonl` is streamed into
+an ordinary Zstandard archive. Decompression is compared byte-for-byte against
+the complete original, including any unsealed tail. Archive publication and
+directory checks precede original unlink. A retry verifies an existing
+archive before deleting a surviving source. Neither that backup nor the native
+journal requires full extraction for resume. Assets and unrelated files stay put.
+
+Optimization uses the existing asynchronous writeback policy: file and directory
+checks do not issue persistence barriers. Hard-link selection handles process
+interruption, while power loss can lose or reorder recent stage/publication writes.
+
 
 ### Draft 0.2 decoded framing
 

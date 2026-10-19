@@ -240,7 +240,7 @@ struct import_writer {
     struct snag_sha256 semantic;
     struct snag_buf *prepared_log;
     struct snag_buf index;
-    bool indexed, stream_index;
+    bool indexed, stream_index, compress;
     int index_fd;
     const struct snag_context_control *control;
     struct snag_binary_identity identity;
@@ -301,9 +301,12 @@ flush_batch(struct import_writer *writer)
         offset += writer->records[i].size;
     }
     struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
     struct snag_binary_anchor next;
     int rc = snag_binary_batch_encode(&bytes, &writer->anchor, writer->records,
         (uint32_t)writer->count, writer->turns, &next);
+    if (rc == 0 && writer->compress)
+        rc = snag_binary_batch_pack(&wire, &bytes, &writer->anchor, &next);
     if (rc == 0 && writer->indexed)
         rc = snag_binary_index_tree_append_batch(&writer->index, &writer->tree, &writer->identity,
             &writer->anchor, &next, bytes.data, bytes.len);
@@ -311,8 +314,8 @@ flush_batch(struct import_writer *writer)
         rc = snag_write_full(writer->index_fd, writer->index.data, writer->index.len);
         if (!rc) snag_buf_reset(&writer->index);
     }
-    struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
-    if (rc == 0) rc = snag_binary_wire_encode(&wire, bytes.data, bytes.len);
+    if (rc == 0 && !writer->compress)
+        rc = snag_binary_wire_encode(&wire, bytes.data, bytes.len);
     if (rc == 0) rc = snag_write_full(writer->fd, wire.data, wire.len);
     int code = errno;
     snag_buf_free(&wire);
@@ -749,6 +752,151 @@ done:
         snag_session_close(verified);
         snag_session_close(legacy);
         free(sessions);
+        snag_binary_checkpoint_sources_free(&sources);
+        snag_binary_producer_free(&writer.producer);
+        free(writer.records);
+        snag_buf_free(&writer.payload);
+        snag_buf_free(&writer.index);
+        errno = saved;
+    }
+    return rc;
+}
+
+static int
+record_digest(int fd, uint64_t end, unsigned char out[32],
+    const struct snag_context_control *control)
+{
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor anchor;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_sha256 hash;
+    snag_sha256_init(&hash);
+    ssize_t got = snag_pread(fd, header, sizeof(header), 0);
+    if (got != sizeof(header)) return got < 0 ? -1 : snag_errno(EIO);
+    if (snag_binary_header_decode(header, sizeof(header), &identity, &anchor)) return -1;
+    int rc = -1;
+    while (anchor.end < end) {
+        if (control && control->cancelled && control->cancelled(control->opaque)) {
+            errno = ECANCELED;
+            goto done;
+        }
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor next;
+        int read = snag_binary_batch_read(fd, end, &anchor, &scratch, &batch, &next);
+        if (read) { if (read > 0) errno = EBADMSG; goto done; }
+        snag_sha256_update(&hash, batch.data + SNAG_BINARY_BATCH_HEADER_SIZE,
+            batch.size - SNAG_BINARY_BATCH_HEADER_SIZE - SNAG_BINARY_BATCH_FOOTER_SIZE);
+        anchor = next;
+    }
+    snag_sha256_final(&hash, out);
+    rc = 0;
+done:
+    snag_buf_free(&scratch);
+    return rc;
+}
+
+int
+snag_store_stage_optimized_session(struct snag_session *source, struct snag_session *target,
+    int index_fd, const struct snag_context_control *control, char *error, size_t error_size)
+{
+    struct snag_session *states = malloc(3u * sizeof(*states));
+    if (!states) return -1;
+    struct snag_session *old = &states[0], *restored = &states[1], *view = &states[2];
+    snag_session_init(old);
+    snag_session_init(restored);
+    snag_session_init(view);
+    memcpy(view->id, source->id, sizeof(view->id));
+    view->log_fd = target->log_fd;
+    view->lock_fd = target->lock_fd;
+    struct import_writer writer = {.fd = target->log_fd, .indexed = true,
+        .stream_index = true, .compress = true, .index_fd = index_fd,
+        .index = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX + SNAG_BINARY_INDEX_HEADER_SIZE},
+        .payload = {.max = SNAG_MAX_EVENT_LINE}, .control = control};
+    struct snag_binary_checkpoint_sources sources = {0};
+    struct snag_binary_recovery original, recovery;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    snag_file_info before, after;
+    unsigned char header[SNAG_BINARY_HEADER_SIZE], expected[32], actual[32];
+    struct snag_binary_anchor cursor, initial;
+    int rc = -1;
+    if (snag_fstat(source->log_fd, &before) < 0 ||
+        snag_pread(source->log_fd, header, sizeof(header), 0) != sizeof(header) ||
+        snag_binary_header_decode(header, sizeof(header), &writer.identity, &cursor) ||
+        snag_store_reconcile_binary_context(source, old, &original, NULL,
+            control, error, error_size) < 0) goto done;
+    if (original.incomplete_tail_bytes || original.verified.end != (uint64_t)before.st_size) {
+        snag_fail(error, error_size, EBADMSG, "native source has an unverified tail");
+        goto done;
+    }
+    snag_binary_optimized_header_encode(header, &writer.identity);
+    if (snag_binary_header_decode(header, sizeof(header), &writer.identity, &initial) ||
+        snag_write_full(writer.fd, header, sizeof(header)) < 0) goto done;
+    writer.anchor = initial;
+    unsigned char index_header[SNAG_BINARY_INDEX_HEADER_SIZE];
+    snag_binary_index_header_encode(index_header, &writer.identity);
+    if (snag_write_full(index_fd, index_header, sizeof(index_header)) < 0) goto done;
+    while (cursor.end < original.verified.end) {
+        if (control && control->cancelled && control->cancelled(control->opaque)) {
+            errno = ECANCELED;
+            goto done;
+        }
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor next;
+        if (snag_binary_batch_read(source->log_fd, original.verified.end,
+                &cursor, &scratch, &batch, &next)) goto done;
+        size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
+        struct snag_binary_record record;
+        uint64_t sequence;
+        int read;
+        while (!(read = snag_binary_record_next(&batch, &offset, &record, &sequence))) {
+            if (sequence != writer.anchor.next_seq + writer.count ||
+                append_record(&writer, record) < 0) goto done;
+            if (record.kind == SNAG_BINARY_TURN_STARTED) ++writer.turns;
+        }
+        if (read < 0 || next.turns != writer.turns) goto done;
+        cursor = next;
+    }
+    if (flush_batch(&writer) < 0 || snag_sync_file(writer.fd) < 0 ||
+        snag_sync_file(index_fd) < 0 ||
+        record_digest(source->log_fd, original.verified.end, expected, control) < 0 ||
+        record_digest(writer.fd, writer.anchor.end, actual, control) < 0) goto done;
+    if (memcmp(expected, actual, sizeof(actual))) {
+        snag_fail(error, error_size, EBADMSG, "optimized record bytes differ from source");
+        goto done;
+    }
+    if (snag_store_reconcile_binary_context(view, restored, &recovery, &sources,
+            control, error, error_size) < 0 || compare_core(old, restored) < 0) goto done;
+    struct snag_binary_checkpoint_index access = {.identity = writer.identity, .boundary = initial};
+    if (snag_binary_producer_restore(&writer.producer, writer.fd, &recovery.verified,
+            &access, &sources, restored, control ? control->cancelled : NULL,
+            control ? control->opaque : NULL) < 0) goto done;
+    restored->log_fd = target->log_fd;
+    restored->lock_fd = target->lock_fd;
+    if (snag_session_bind_binary(restored, &writer.identity, &recovery.verified, &writer.tree,
+            &writer.producer, &sources, NULL, error, error_size) < 0) goto done;
+    restored->dir_fd = target->dir_fd;
+    restored->dir_path = target->dir_path;
+    *target = *restored;
+    snag_session_init(restored);
+    if (snag_session_binary_index_setup(target, index_fd, error, error_size) < 0 ||
+        bootstrap_native_checkpoint(target, index_fd, control, error, error_size) < 0 ||
+        snag_fstat(source->log_fd, &after) < 0) goto done;
+    if (!snag_file_unchanged(&before, &after)) {
+        snag_fail(error, error_size, ESTALE, "optimization source changed during verification");
+        goto done;
+    }
+    rc = 0;
+done:
+    {
+        int saved = errno;
+        view->log_fd = view->lock_fd = -1;
+        restored->log_fd = restored->lock_fd = -1;
+        snag_session_close(old);
+        snag_session_close(restored);
+        snag_session_close(view);
+        free(states);
+        snag_buf_free(&scratch);
         snag_binary_checkpoint_sources_free(&sources);
         snag_binary_producer_free(&writer.producer);
         free(writer.records);

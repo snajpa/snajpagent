@@ -68,6 +68,12 @@ int snag_store_convert_binary_directory(struct snag_session *source,
     struct snag_binary_import_result *result, const struct snag_context_control *control,
     char *error, size_t error_size);
 
+/* Repack stopped native records without changing any record bytes or sequence.
+ * The separate empty target keeps its descriptors and acquires verified state,
+ * provider/provenance and a new index/checkpoint on success. */
+int snag_store_stage_optimized_session(struct snag_session *source, struct snag_session *target,
+    int index_fd, const struct snag_context_control *, char *error, size_t error_size);
+
 /* Seed a new native writer from a strictly verified in-memory prepared journal.
  * prepared stays unchanged, including its callbacks and pending bytes. target
  * holds a separate empty private journal and its exclusive lock; it has no state

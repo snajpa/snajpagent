@@ -10,6 +10,7 @@
 #include "store_binary_import.h"
 #include "store_binary_legacy.h"
 #include "store_binary_replay.h"
+#include "store_optimize.h"
 #include "store_record.h"
 #include <errno.h>
 #include <limits.h>
@@ -316,6 +317,7 @@ snag_store_open_session_files(
     struct snag_session *session, bool create, char *error, size_t error_size)
 {
     if (lock_session(session->dir_fd, &session->lock_fd, error, error_size) < 0) return -1;
+    if (snag_store_recover_optimization(session, error, error_size) < 0) return -1;
     bool native = !create;
     session->log_fd = snag_open_private_append_at(
         session->dir_fd, native ? "journal.bin" : "events.jsonl", create);

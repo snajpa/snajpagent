@@ -111,7 +111,8 @@ VM_TEST_BIN += tests/test_vm_public
 VM_TEST_BIN += tests/test_vm_transcript tests/test_vm_selection tests/test_vm_navigation
 VM_TEST_BIN += tests/test_session_draft tests/test_session_direct
 endif
-BINARY_RUNTIME_SRC = src/store_binary.c src/store_binary_wire.c src/store_binary_event.c \
+BINARY_RUNTIME_SRC = src/store_optimize.c src/store_binary.c src/store_binary_wire.c \
+    src/store_binary_event.c \
     src/store_binary_legacy.c src/store_binary_producer.c src/store_binary_index.c \
     src/store_binary_index_tree.c src/store_binary_checkpoint_index.c \
     src/store_binary_io.c src/store_binary_publish.c src/store_binary_sources.c \

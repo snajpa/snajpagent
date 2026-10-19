@@ -60,6 +60,9 @@ snajpagent \- terminal coding agent with built-in IRC
 .RI [ --dotdir " PATH]"
 .RI [ --jobs " N]"
 .br
+.B snajpagent optimize
+.RI [ --dotdir " PATH]"
+.br
 .B snajpagent top
 .RI [ --config " PATH"]
 .RI [ --dotdir " PATH"]
@@ -6666,6 +6669,60 @@ skips; 1 for session, enumeration or worker-start failures; 2 for command syntax
 3 for application-directory setup errors; and 130 for a handled interruption.
 Interruption stops new worker assignments and cancels in-flight legacy record
 visits and provider reconstruction. Already published sessions stay native.
+
+.SS Optimize stored sessions
+.B snajpagent optimize
+upgrades and compresses saved sessions, one session at a time. It accepts
+.B \-\-dotdir DIR
+for another application directory and needs no provider or interactive terminal.
+.nf
+snajpagent optimize
+snajpagent optimize --dotdir /path/to/.snajpagent
+.fi
+.PP
+The existing writer lock protects each session throughout the operation. Running
+or otherwise locked sessions stay untouched; their identifiers and skip reasons
+appear on standard error. Other session failures also go to standard error while
+processing continues. Progress and final counts appear on standard output.
+.PP
+Legacy JSONL journals first enter native storage through the verified converter.
+Optimization also repacks current native journals, preserving canonical record
+bytes, sequence identities and timestamps. Unknown optional metadata and historical
+checkpoint receipts remain in the journal. Derived indexes and current checkpoint
+state are rebuilt against the new physical locations. Assets and other session
+files keep their paths.
+.PP
+Record blocks target 1 MiB before compression. Each compressible block uses an
+independent Zstandard frame; incompressible blocks remain raw. A single larger
+record keeps the existing event-size limit. Resume and indexed history reads
+decode the needed blocks directly. Ordinary runs append uncompressed blocks,
+including after resuming an optimized session. Run optimize again to compress
+those later appends. Small sessions and already compressed media may save little.
+.PP
+The retained pre-conversion JSONL source becomes
+.IR .legacy-source/events.jsonl.zst .
+This ordinary Zstandard archive preserves the original bytes, including any
+unsealed tail. The source file is removed only after byte-for-byte decompression
+verification and atomic archive publication. Back up the entire session directory.
+.PP
+Optimization temporarily needs space for a replacement journal, index and
+checkpoint alongside the original. A private
+.I .optimize
+directory holds the recoverable cutover. Rerun optimize or resume the session after
+interruption: the next exclusive opener restores the complete bundle selected by
+the journal pathname before opening it. Preserve these provisional files when
+investigating a reported recovery failure. An incomplete or corrupt native tail
+causes a failure and stays intact. A failure after publication can leave a valid
+optimized session selected while publication or cleanup remains uncertain.
+Optimization follows the asynchronous writeback policy described below. Atomic
+selection supports recovery from process interruption; power loss can discard or
+reorder recent writes, including the replacement and its recovery links.
+.PP
+Optimized native format 0.3 requires an executable that supports it. Older native
+0.2 readers reject its header; ordinary legacy and native 0.2 sessions remain
+readable by the current executable. Exit statuses match convert: 0 for completion
+without failures, including locked skips; 1 for session or enumeration failures;
+2 for syntax; 3 for application-directory setup; and 130 for handled interruption.
 
 .SS Session durability
 Resume continues unfinished model/tool turns from their durable state, without

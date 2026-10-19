@@ -10,6 +10,7 @@
 #include "snajpagent.h"
 #include "skills.h"
 #include "store_convert.h"
+#include "store_optimize.h"
 #include "top.h"
 #include "vm.h"
 #ifdef _WIN32
@@ -34,6 +35,8 @@ run(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "convert")) {
         return snag_convert_main(argc - 2, argv + 2);
     }
+    if (argc > 1 && !strcmp(argv[1], "optimize"))
+        return snag_optimize_main(argc - 2, argv + 2);
     if (argc > 1 && !strcmp(argv[1], "top")) return snag_top_main(argc - 2, argv + 2);
     snag_office_program(argv[0]);
     if (argc > 1 && !strcmp(argv[1], "--internal-session-owner"))
