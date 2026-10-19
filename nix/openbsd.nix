@@ -575,6 +575,8 @@ in {
           'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
           "YAML_CFLAGS=-I${libyaml}/include"
           "YAML_LIBS=${libyaml}/lib/libyaml.a"
+          "ZSTD_CFLAGS=-I${zstd}/include"
+          "ZSTD_LIBS=${zstd}/lib/libzstd.a"
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"

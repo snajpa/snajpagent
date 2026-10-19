@@ -303,6 +303,8 @@ in {
         'LDFLAGS=-static -municode ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections${pkgs.lib.optionalString legacy ",--major-os-version,5,--minor-os-version,${if arch == "x86_64" then "2" else "0"},--major-subsystem-version,5,--minor-subsystem-version,${if arch == "x86_64" then "2" else "0"}"}'
         "YAML_CFLAGS=-I${libyaml}/include -DYAML_DECLARE_STATIC"
         "YAML_LIBS=${libyaml}/lib/libyaml.a"
+        "ZSTD_CFLAGS=-I${zstd}/include"
+        "ZSTD_LIBS=${zstd}/lib/libzstd.a"
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
         "LDLIBS=$($PKG_CONFIG --static --libs jansson) -lsnagregex -lunistring -liconv -ladvapi32 -lntdll -lws2_32 -lwinpthread${pkgs.lib.optionalString (pty != null) " -lsnagpty -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind -luser32 -lshell32"}"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"

@@ -12,6 +12,14 @@ Python dependency. Install the system development package (`libyaml-dev` or
 the `yaml-0.1` pkg-config entry. Production recipes link the pinned static
 library; Windows static consumers define `YAML_DECLARE_STATIC`.
 
+Every build profile also links Zstandard (`libzstd`, BSD-3-Clause or GPL-2.0) for
+offline session block compression and direct reads of optimized history. Ordinary
+appends remain uncompressed. Native builds use the `libzstd` pkg-config entry;
+install `libzstd-dev`/`libzstd-devel` or supply target `ZSTD_CFLAGS` and `ZSTD_LIBS`.
+Production recipes explicitly link the pinned static library already present in
+the network closure. Compression uses the stable Zstandard frame and streaming
+APIs; no compressor executable or vendored codec is included in first-party code.
+
 ## Optional Vim workspace
 
 `WITH_VM=1` builds the workspace reader, grid and Unicode helpers. Custom builds

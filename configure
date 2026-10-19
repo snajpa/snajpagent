@@ -212,6 +212,19 @@ if ! $CC ${CPPFLAGS:-} $yaml_cflags -o "$tmpd/yaml" "$tmpd/yaml.c" \
 	die 'libyaml headers and library are required; install libyaml-dev/yaml-devel or set YAML_CFLAGS and YAML_LIBS for the target'
 fi
 
+# Session optimization uses Zstandard on every build profile.
+zstd_cflags=${ZSTD_CFLAGS:-}
+zstd_libs=${ZSTD_LIBS:--lzstd}
+if pc_exists libzstd; then
+	zstd_cflags=${ZSTD_CFLAGS:-$("$PKG_CONFIG" --cflags libzstd)}
+	zstd_libs=${ZSTD_LIBS:-$("$PKG_CONFIG" --libs libzstd)}
+fi
+printf '#include <zstd.h>\nint main(void) { return ZSTD_versionNumber() == 0; }\n' > "$tmpd/zstd.c"
+if ! $CC ${CPPFLAGS:-} $zstd_cflags -o "$tmpd/zstd" "$tmpd/zstd.c" \
+	${LDFLAGS:-} $zstd_libs >/dev/null 2>&1; then
+	die 'Zstandard headers and library are required; install libzstd-dev or set ZSTD_CFLAGS and ZSTD_LIBS for the target'
+fi
+
 # --- linked audio/video (FFmpeg) ----------------------------------------
 WITH_AV=0
 av_note='not found'

@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <zstd.h>
 
 static const unsigned char journal_magic[8] = "SNAGJNL";
 static const unsigned char batch_magic[8] = "SNAGBAT";
@@ -152,6 +153,15 @@ snag_binary_header_encode(unsigned char out[SNAG_BINARY_HEADER_SIZE],
     digest(out, 64u, out + 64);
 }
 
+void
+snag_binary_optimized_header_encode(unsigned char out[SNAG_BINARY_HEADER_SIZE],
+    const struct snag_binary_identity *identity)
+{
+    snag_binary_header_encode(out, identity);
+    put_le(out + 10u, 3u, 2u);
+    digest(out, 64u, out + 64u);
+}
+
 int
 snag_binary_header_decode(const void *data, size_t size,
     struct snag_binary_identity *identity, struct snag_binary_anchor *anchor)
@@ -160,7 +170,8 @@ snag_binary_header_decode(const void *data, size_t size,
     unsigned char hash[32];
     if (size < SNAG_BINARY_HEADER_SIZE) return 1;
     if (memcmp(bytes, journal_magic, sizeof(journal_magic)) ||
-        get_le(bytes + 8, 2u) != 0u || get_le(bytes + 10, 2u) != 2u ||
+        get_le(bytes + 8, 2u) != 0u ||
+        (get_le(bytes + 10, 2u) != 2u && get_le(bytes + 10, 2u) != 3u) ||
         get_le(bytes + 12, 4u) != SNAG_BINARY_HEADER_SIZE ||
         get_le(bytes + 16, 8u) || get_le(bytes + 24, 8u) ||
         get_le(bytes + 56, 8u)) return invalid();
@@ -561,6 +572,17 @@ record_read(const unsigned char *data, size_t remaining,
     return 0;
 }
 
+static int
+batch_wire_size(const unsigned char *header, size_t *size)
+{
+    uint64_t length = get_le(header + 8u, 8u);
+    uint64_t packed = get_le(header + 72u, 8u);
+    size_t overhead = SNAG_BINARY_BATCH_HEADER_SIZE + SNAG_BINARY_BATCH_FOOTER_SIZE;
+    if (length < overhead || length > SNAG_BINARY_BATCH_MAX ||
+        (packed && packed >= length - overhead)) return invalid();
+    return snag_binary_wire_size(packed ? (size_t)packed + overhead : (size_t)length, size);
+}
+
 int
 snag_binary_batch_decode(const void *data, size_t size,
     const struct snag_binary_anchor *anchor, struct snag_binary_batch *batch,
@@ -586,10 +608,9 @@ snag_binary_batch_decode(const void *data, size_t size,
         length > (uint64_t)INT64_MAX - anchor->end ||
         get_le(bytes + 24, 8u) != anchor->next_seq ||
         get_le(bytes + 32, 8u) != anchor->previous ||
-        memcmp(bytes + 40, anchor->digest, sizeof(anchor->digest)) ||
-        get_le(bytes + 72, 8u)) return invalid();
+        memcmp(bytes + 40, anchor->digest, sizeof(anchor->digest))) return invalid();
     size_t wire_size;
-    if (snag_binary_wire_size((size_t)length, &wire_size) < 0 ||
+    if (batch_wire_size(bytes, &wire_size) < 0 ||
         wire_size > (uint64_t)INT64_MAX - anchor->end) {
         return invalid();
     }
@@ -625,6 +646,59 @@ snag_binary_batch_decode(const void *data, size_t size,
     };
     *next = committed;
     return 0;
+}
+
+int
+snag_binary_batch_pack(struct snag_buf *wire, struct snag_buf *decoded,
+    const struct snag_binary_anchor *anchor, struct snag_binary_anchor *next)
+{
+    if (!wire || !decoded || !anchor || !next || wire == decoded || wire->len) return invalid();
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor after;
+    if (snag_binary_batch_decode(decoded->data, decoded->len, anchor, &batch, &after) ||
+        batch.size != decoded->len || get_le(decoded->data + 72u, 8u)) return invalid();
+    size_t body = decoded->len - SNAG_BINARY_BATCH_HEADER_SIZE - SNAG_BINARY_BATCH_FOOTER_SIZE;
+    struct snag_buf packed = {.max = ZSTD_compressBound(body) +
+        SNAG_BINARY_BATCH_HEADER_SIZE + SNAG_BINARY_BATCH_FOOTER_SIZE};
+    if (snag_buf_reserve(&packed, packed.max) < 0) return -1;
+    size_t size = ZSTD_compress(packed.data + SNAG_BINARY_BATCH_HEADER_SIZE,
+        packed.cap - SNAG_BINARY_BATCH_HEADER_SIZE - SNAG_BINARY_BATCH_FOOTER_SIZE,
+        decoded->data + SNAG_BINARY_BATCH_HEADER_SIZE, body, 3);
+    int rc = -1;
+    if (ZSTD_isError(size)) {
+        invalid();
+        goto done;
+    }
+    if (size >= body) {
+        rc = snag_binary_wire_encode(wire, decoded->data, decoded->len);
+        if (!rc) *next = after;
+        goto done;
+    }
+    unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE];
+    unsigned char footer[SNAG_BINARY_BATCH_FOOTER_SIZE];
+    memcpy(header, decoded->data, sizeof(header));
+    put_le(header + 72u, size, 8u);
+    digest(header, sizeof(header) - 32u, header + sizeof(header) - 32u);
+    memcpy(footer, decoded->data + decoded->len - sizeof(footer), sizeof(footer));
+    struct snag_sha256 hash;
+    snag_sha256_init(&hash);
+    snag_sha256_update(&hash, header, sizeof(header));
+    snag_sha256_update(&hash, decoded->data + sizeof(header), body);
+    snag_sha256_update(&hash, footer, sizeof(footer) - 32u);
+    snag_sha256_final(&hash, footer + sizeof(footer) - 32u);
+    memcpy(packed.data, header, sizeof(header));
+    memcpy(packed.data + sizeof(header) + size, footer, sizeof(footer));
+    packed.len = sizeof(header) + size + sizeof(footer);
+    if (snag_binary_wire_encode(wire, packed.data, packed.len) < 0) goto done;
+    memcpy(decoded->data, header, sizeof(header));
+    memcpy(decoded->data + decoded->len - sizeof(footer), footer, sizeof(footer));
+    after.end = anchor->end + wire->len;
+    memcpy(after.digest, footer + sizeof(footer) - 32u, sizeof(after.digest));
+    *next = after;
+    rc = 0;
+done:
+    snag_buf_free(&packed);
+    return rc;
 }
 
 static int
@@ -778,7 +852,7 @@ snag_binary_batch_read(int fd, uint64_t boundary,
     }
     /* Only a checked header may determine allocation and physical extent. */
     size_t needed;
-    if (snag_binary_wire_size((size_t)get_le(header + 8, 8u), &needed) < 0) return -1;
+    if (batch_wire_size(header, &needed) < 0) return -1;
     if (needed > boundary - anchor->end) {
         return tail_is_open(fd, anchor->end, boundary);
     }
@@ -790,6 +864,29 @@ snag_binary_batch_read(int fd, uint64_t boundary,
     }
     snag_buf_reset(scratch);
     if (snag_binary_wire_decode(scratch, wire.data, needed) < 0) goto done;
+    size_t packed = (size_t)get_le(header + 72u, 8u);
+    if (packed) {
+        size_t length = (size_t)get_le(header + 8u, 8u);
+        size_t body = length - SNAG_BINARY_BATCH_HEADER_SIZE - SNAG_BINARY_BATCH_FOOTER_SIZE;
+        if (ZSTD_findFrameCompressedSize(scratch->data + sizeof(header), packed) != packed) {
+            invalid();
+            goto done;
+        }
+        if (snag_buf_reserve(&wire, length) < 0) goto done;
+        size_t size = ZSTD_decompress(wire.data + sizeof(header), body,
+            scratch->data + sizeof(header), packed);
+        if (ZSTD_isError(size) || size != body) {
+            invalid();
+            goto done;
+        }
+        memcpy(wire.data, header, sizeof(header));
+        memcpy(wire.data + length - SNAG_BINARY_BATCH_FOOTER_SIZE,
+            scratch->data + sizeof(header) + packed, SNAG_BINARY_BATCH_FOOTER_SIZE);
+        wire.len = length;
+        struct snag_buf swap = *scratch;
+        *scratch = wire;
+        wire = swap;
+    }
     rc = snag_binary_batch_decode(scratch->data, scratch->len, anchor, batch, next);
 done:
     snag_buf_free(&wire);
@@ -855,7 +952,7 @@ read_linked_batch(int fd, uint64_t boundary, uint64_t offset, const unsigned cha
     uint64_t length = 0u;
     size_t wire_size;
     if (batch_header_anchor(header, offset, &previous, &length) < 0 ||
-        snag_binary_wire_size((size_t)length, &wire_size) < 0 ||
+        batch_wire_size(header, &wire_size) < 0 ||
         wire_size > boundary - offset) {
         return invalid();
     }

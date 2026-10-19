@@ -61,7 +61,9 @@ entry_within(const struct snag_binary_index_entry *entry,
         return false;
     }
     size_t minimum;
-    return snag_binary_wire_size((size_t)entry->record_offset + SNAG_BINARY_RECORD_HEADER_SIZE +
+    /* record_offset addresses the decoded block, not its compressed extent.
+     * The authenticated block reader proves the actual record location. */
+    return snag_binary_wire_size(SNAG_BINARY_BATCH_HEADER_SIZE + 1u +
         SNAG_BINARY_BATCH_FOOTER_SIZE, &minimum) == 0 &&
         minimum <= boundary->end - entry->batch_offset;
 }

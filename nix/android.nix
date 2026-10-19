@@ -200,6 +200,8 @@ in {
           'LDFLAGS=-pie ${ldflags} ${lib.optionalString (!debug) "-flto -Wl,--gc-sections"}'
           "YAML_CFLAGS=-I${libyaml}/include"
           "YAML_LIBS=${libyaml}/lib/libyaml.a"
+          "ZSTD_CFLAGS=-I${zstd}/include"
+          "ZSTD_LIBS=${zstd}/lib/libzstd.a"
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=$(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"

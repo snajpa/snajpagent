@@ -165,7 +165,7 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ musl.buildPackages.pkg-config ];
-    buildInputs = [ staticFixed.libyaml staticFixed.jansson curl av pdf staticFixed.libpng archive
+    buildInputs = [ staticFixed.libyaml staticFixed.jansson staticFixed.zstd curl av pdf staticFixed.libpng archive
       staticFixed.libxml2 alsa pulse voice.rtc voice.juice voice.opus voice.srtp voice.speex
       staticFixed.usrsctp tls ];
     enableParallelBuilding = true;
@@ -201,6 +201,8 @@ in {
         'LDFLAGS=${if musl.stdenv.hostPlatform.isx86_32 then "-static -no-pie" else "-static-pie"} ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections${pkgs.lib.optionalString clockFallback ",--wrap=clock_gettime"}${pkgs.lib.optionalString musl.stdenv.hostPlatform.isAarch32 " -Wl,-Bstatic,--no-dynamic-linker,-z,text"}${pkgs.lib.optionalString musl.stdenv.hostPlatform.isRiscV " -Wl,--exclude-libs,ALL"}'
         "YAML_CFLAGS=$($PKG_CONFIG --cflags yaml-0.1)"
         "YAML_LIBS=$($PKG_CONFIG --static --libs yaml-0.1)"
+        "ZSTD_CFLAGS=$($PKG_CONFIG --cflags libzstd)"
+        "ZSTD_LIBS=$($PKG_CONFIG --static --libs libzstd)"
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
         "LDLIBS=$($PKG_CONFIG --static --libs jansson)${pkgs.lib.optionalString atomicFallback " -latomic"}"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"

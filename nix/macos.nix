@@ -358,6 +358,8 @@ in {
           'LDFLAGS=${ldflags}${lib.optionalString legacyLoader " -Wl,-lto_library,${llvm.llvm.lib}/lib/libLTO.so"} ${lib.optionalString (!debug) "-flto -Wl,-object_path_lto,build/app-lto.o -Wl,-dead_strip -Wl,-dead_strip_dylibs"} -Wl,-pie'
           "YAML_CFLAGS=-I${libyaml}/include"
           "YAML_LIBS=${libyaml}/lib/libyaml.a"
+          "ZSTD_CFLAGS=-I${zstd}/include"
+          "ZSTD_LIBS=${zstd}/lib/libzstd.a"
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=$(pkg-config --static --libs jansson)"
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"

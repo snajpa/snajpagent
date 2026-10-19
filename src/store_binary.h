@@ -194,6 +194,13 @@ int snag_binary_ref_resolve(const struct snag_binary_ref *reference,
 
 void snag_binary_header_encode(unsigned char out[SNAG_BINARY_HEADER_SIZE],
     const struct snag_binary_identity *identity);
+/* Explicit offline rewrite selects format 0.3. Ordinary appends stay raw. */
+void snag_binary_optimized_header_encode(unsigned char out[SNAG_BINARY_HEADER_SIZE],
+    const struct snag_binary_identity *identity);
+/* Compress one decoded batch's record area if smaller, then frame it. Updates
+ * decoded framing and next only on success. Its records remain byte-identical. */
+int snag_binary_batch_pack(struct snag_buf *wire, struct snag_buf *decoded,
+    const struct snag_binary_anchor *anchor, struct snag_binary_anchor *next);
 /* Decode returns 0 for complete verified framing, 1 for an incomplete prefix,
  * or -1 for invalid bytes. A failure leaves all output arguments unchanged.
  * Batch decode adopts no semantic state: typed payload codecs must additionally
