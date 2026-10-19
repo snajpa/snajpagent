@@ -421,7 +421,9 @@ tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
 `snajpagent vm` saves pane workspaces containing sessions and conversations.
 Click a session pane for INSERT mode; Escape returns to NORMAL, where `:` opens
-workspace commands. `:new [NAME]` creates a session; `:session ID` resumes one.
+workspace commands. The session picker's first entry, **New session**, creates
+a session when you press Enter. `:new [NAME]` also creates one; `:session ID`
+resumes one.
 `:workspace detach` saves the layout while agents continue and prints its resume
 command. Restoring a workspace leaves stopped owners stopped. `:q` and `:q!`
 close the current pane and preserve drafts; closing the last pane detaches.

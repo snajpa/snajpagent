@@ -2185,7 +2185,7 @@ row_count(struct vm *vm, const struct vm_window *window)
 {
     if (document_view(window)) return snag_vm_document_rows(window->document);
     if (window->kind == VIEW_HELP) return sizeof(help_rows) / sizeof(help_rows[0]);
-    size_t count = 0u;
+    size_t count = window->kind == VIEW_SESSIONS ? 1u : 0u;
     json_t *rows = view_rows(vm, window);
     for (size_t i = 0u; i < json_array_size(rows); ++i)
         if (matches(window, json_array_get(rows, i))) ++count;
@@ -2195,8 +2195,9 @@ row_count(struct vm *vm, const struct vm_window *window)
 static json_t *
 selected_row(struct vm *vm, const struct vm_window *window)
 {
+    if (window->kind == VIEW_SESSIONS && !window->selected) return NULL;
     json_t *rows = view_rows(vm, window);
-    size_t visible = 0u;
+    size_t visible = window->kind == VIEW_SESSIONS ? 1u : 0u;
     for (size_t i = 0u; i < json_array_size(rows); ++i) {
         json_t *row = json_array_get(rows, i);
         if (matches(window, row) && visible++ == window->selected) return row;
@@ -3560,8 +3561,10 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
             else if (window->kind == VIEW_REPORTS)
                 open_report(vm, focused_connection(vm), row);
             else if (id && window->kind == VIEW_WORKSPACES) (void)restore_workspace(vm, id);
-            else if (id && window->kind == VIEW_SESSIONS)
-                session_request(vm, id);
+            else if (window->kind == VIEW_SESSIONS) {
+                if (!window->selected) launch_owner(vm, NULL, NULL);
+                else if (id) session_request(vm, id);
+            }
         }
     }
     return 0;
@@ -4317,12 +4320,16 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
         }
     }
     json_t *rows = view_rows(vm, window);
-    size_t visible = 0u;
+    size_t visible = window->kind == VIEW_SESSIONS ? 1u : 0u;
     size_t available = window->kind == VIEW_HELP ? count : json_array_size(rows);
-    if (window->kind == VIEW_SESSIONS && !count && height && vm->page.generation &&
-        !vm->page.window) {
+    if (window->kind == VIEW_SESSIONS && !window->top && height &&
+        snag_vm_grid_text(&vm->grid, rectangle->row, rectangle->column,
+            rectangle->columns, "New session", sizeof("New session") - 1u,
+            !window->selected ? SNAG_VM_REVERSE : 0u) < 0) return -1;
+    if (window->kind == VIEW_SESSIONS && count == 1u && height > 1u &&
+        vm->page.generation && !vm->page.window) {
         const char *message = "Preparing session list…";
-        if (snag_vm_grid_text(&vm->grid, rectangle->row, rectangle->column,
+        if (snag_vm_grid_text(&vm->grid, rectangle->row + 1u, rectangle->column,
                 rectangle->columns, message, strlen(message), SNAG_VM_DIM) < 0) return -1;
     }
     for (size_t i = 0u; !document_view(window) && i < available; ++i) {
@@ -4711,7 +4718,7 @@ collect(struct vm *vm, struct vm_read *read)
         for (size_t w = 0u; w < vm->count; ++w) {
             struct vm_window *window = &vm->windows[w];
             if (window->kind != VIEW_SESSIONS || !window->selected_id[0]) continue;
-            size_t visible = 0u;
+            size_t visible = 1u;
             for (size_t i = 0u; i < json_array_size(vm->sessions); ++i) {
                 json_t *row = json_array_get(vm->sessions, i);
                 if (!matches(window, row)) continue;

@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add **New session** as the first workspace session-picker entry. Press Enter
+  to create a session; the entry stays available while filtering or loading.
+
 - Remove the unmeasurable prefill-speed column and Prometheus gauge. Keep
   decode speed and token totals, and convert saved monitor layouts on load.
 

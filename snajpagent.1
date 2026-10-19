@@ -2407,11 +2407,13 @@ normal shutdown. :sessions quit and :sessions quit! apply to all controlled
 sessions and exit; the latter preserves workspace drafts for later restoration.
 These commands do not send SIGKILL.
 .PP
-The session picker displays cached metadata immediately and verifies changed
-journals in the background. Names, previews and activity order can update as
-verification finishes. A cold, empty picker shows "Preparing session list…"
-until rows are available. R refreshes the list. Cached rows are display hints;
-opening a session verifies its source normally.
+The session picker's first entry, "New session", creates a session when Enter
+is pressed. This entry remains available when filtering or while the list loads.
+Existing sessions follow it. The picker displays cached metadata immediately and
+verifies changed journals in the background. Names, previews and activity order
+can update as verification finishes. A cold picker shows "Preparing session list…"
+below the new-session entry until session rows are available. R refreshes the
+list. Cached rows are display hints; opening a session verifies its source normally.
 .PP
 .B :q, :q! and :close
 close the focused pane and preserve its drafts. The last view of a session

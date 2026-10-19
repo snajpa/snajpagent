@@ -520,10 +520,14 @@ The main decisions are:
   queries and reports. Several buffers share one session owner/IRC connection.
 - Named workspace snapshots retain the layout and buffer state. `vm -l` lists
   these workspaces; `vm --resume` restores one without submitting saved drafts.
+- The session picker starts with a **New session** action that uses the existing
+  owner-launch path on Enter. It remains available under filters and needs no
+  synthetic catalogue record. Existing session selections survive refreshes by ID.
 - The session picker displays cached rows before verifying changed journals in
   the background. Its initial pass reads metadata and metrics without replaying
-  journals or contacting owner sockets. A cold, empty picker shows preparation
-  text. Session attachment and history opening retain source verification.
+  journals or contacting owner sockets. A cold picker shows preparation text
+  below the new-session entry. Session attachment and history opening retain
+  source verification.
 - The workspace renders semantic history. It does not reconstruct history by
   interpreting the current terminal byte stream.
 - A new private semantic attachment shares controller ownership with the
