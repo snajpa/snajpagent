@@ -177,7 +177,7 @@ class ReportSelectionTests(unittest.TestCase):
         self.assertEqual(rollout(state['buffers'][0])['draft'], '/status\n')
         self.assertEqual(self.inputs(), [])
         self.assertEqual(self.owner.journal.read_bytes(), before)
-        child.finish('q!')
+        child.finish('qa!')
 
 
 if __name__ == '__main__':

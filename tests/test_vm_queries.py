@@ -64,7 +64,7 @@ class QueryWorkspaceTests(QueryFixture):
         self.wait_wire(self.peer, b'PRIVMSG query-peer :immediate private reply')
         self.assertNotIn('immediate private reply', json.dumps(self.seen))
         self.normal()
-        child.finish('q')
+        child.finish('qa')
 
     def test_tab_order_matches_standalone(self):
         child = self.child
@@ -101,7 +101,7 @@ class QueryWorkspaceTests(QueryFixture):
         self.assertFalse(any(e['data'].get('text') == 'private draft'
                              for e in self.events() if e['type'] == 'irc_event_v2'))
         self.normal()
-        child.finish('q')
+        child.finish('qa')
 
     def test_query_selects_origin_split_and_preserves_three_drafts(self):
         child = self.child
@@ -158,7 +158,7 @@ class QueryWorkspaceTests(QueryFixture):
         child.repaint_until(b'[query-peer]')
         child.command('bn')
         child.repaint_until(b"viewing model's chat")
-        child.finish('q')
+        child.finish('qa')
 
     def test_two_windows_share_one_query_editor_and_undo(self):
         self.query('query-peer')
@@ -283,7 +283,7 @@ class QueryWorkspaceTests(QueryFixture):
         self.assertEqual(sum(e['type'] == 'input_received' for e in self.events()), inputs)
         self.assertNotIn('private reply', json.dumps(self.seen))
         self.normal()
-        child.finish('q')
+        child.finish('qa')
 
 
 if __name__ == '__main__':

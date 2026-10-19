@@ -69,23 +69,44 @@ class CrossSessionTests(ChannelFixture):
         self.child.finish('close')
 
     def test_workspace_force_quit_stops_all_sessions_and_keeps_layout_drafts(self):
-        self.child.finish('q!')
+        self.child.finish('qa!')
         self.wait(lambda: all(link.fileno() < 0 for link in self.server.links.values()))
         saved = self.state()
         self.assertEqual(len(saved['windows']), 2)
         self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
 
+    def quit_one_session_pane(self, command):
+        self.child.write(b'ikeep-source-rollout')
+        self.normal()
+        self.child.command(command)
+        self.wait_snapshot(lambda rows: rows and len(self.state()['windows']) == 1)
+        self.assertIsNone(self.child.process.poll())
+        self.assertTrue(all(link.fileno() >= 0 for link in self.server.links.values()))
+        self.assertTrue(self.owner(self.target)['control'])
+        self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
+        self.assertEqual(self.rollout(self.source)['draft'], 'keep-source-rollout')
+        self.child.command('attach ' + self.source)
+        self.child.attached()
+        self.child.repaint_until(b'keep-source-rollout')
+        self.child.finish('workspace detach')
+
+    def test_quit_preserves_other_session_pane(self):
+        self.quit_one_session_pane('q')
+
+    def test_force_quit_preserves_other_session_pane(self):
+        self.quit_one_session_pane('q!')
+
     def test_workspace_force_quit_refuses_an_observed_session_before_stopping_any(self):
         self.child.command('session detach')
         self.wait_snapshot(lambda rows: rows and not self.owner(self.source)['control'])
-        self.child.command('q!')
+        self.child.command('qa!')
         self.child.repaint_until(b'is not controlled')
         self.assertIsNone(self.child.process.poll())
         self.assertTrue(all(link.fileno() >= 0 for link in self.server.links.values()))
         self.assertTrue(self.owner(self.target)['control'])
         self.child.command('attach ' + self.source)
         self.child.repaint_until(b'[channel-session]')
-        self.child.finish('q!')
+        self.child.finish('qa!')
         self.wait(lambda: all(link.fileno() < 0 for link in self.server.links.values()))
 
     def test_workspace_force_quit_saves_before_stopping_sessions(self):
@@ -94,14 +115,14 @@ class CrossSessionTests(ChannelFixture):
         path.rename(original)
         path.mkdir()
         try:
-            self.child.command('q!')
+            self.child.command('qa!')
             self.child.repaint_until(b'cannot save workspace')
             self.assertIsNone(self.child.process.poll())
             self.assertTrue(all(link.fileno() >= 0 for link in self.server.links.values()))
         finally:
             path.rmdir()
             original.rename(path)
-        self.child.finish('q!')
+        self.child.finish('qa!')
         self.wait(lambda: all(link.fileno() < 0 for link in self.server.links.values()))
 
     def test_session_detach_keeps_workspace_and_other_session_attached(self):

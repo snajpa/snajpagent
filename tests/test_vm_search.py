@@ -203,7 +203,7 @@ class ReportSearchTests(unittest.TestCase):
         child.repaint_until(b'No matches')
         self.assertEqual(self.inputs(), [])
         self.assertEqual(self.owner.journal.read_bytes(), before)
-        child.finish('q')
+        child.finish('qa')
         self.owner.status('detached')
 
 

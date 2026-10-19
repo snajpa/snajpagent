@@ -1975,6 +1975,31 @@ test_catalog_reuses_checkpoint(struct snag_store *store, const char *cwd, bool r
     assert(found);
     json_decref(rows);
     assert_session_lock_retained(&session, "after cached checkpoint formatting");
+    assert(snag_session_commit(&session, "session_named", json_pack("{s:s}",
+        "name", "picker-new-name"), NULL, error, sizeof(error)) == 0);
+#if defined(__linux__) && defined(__x86_64__)
+    catalog_marker_reads = 0u;
+    catalog_read_watch = true;
+#endif
+    bool incomplete = false;
+    rows = snag_store_catalog_preview(store, &session, UINT64_MAX, NULL, NULL,
+        &incomplete, error, sizeof(error));
+#if defined(__linux__) && defined(__x86_64__)
+    catalog_read_watch = false;
+    assert(!catalog_marker_reads);
+#endif
+    assert(rows && incomplete);
+    found = false;
+    for (size_t i = 0u; i < json_array_size(rows); ++i) {
+        const json_t *row = json_array_get(rows, i);
+        if (strcmp(snag_json_string(row, "id"), session.id)) continue;
+        const json_t *cells = json_object_get(row, "cells");
+        assert(strcmp(json_string_value(json_array_get(cells, 1u)), "picker-new-name"));
+        found = true;
+    }
+    assert(found);
+    json_decref(rows);
+    assert_session_lock_retained(&session, "after cached picker preview");
     snag_session_close(&session);
 }
 

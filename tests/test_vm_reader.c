@@ -1964,6 +1964,25 @@ main(void)
     assert(dump && !strstr(dump, "test-secret-value"));
     free(dump);
     snag_vm_read_result_free(result);
+    /* The picker displays cached metadata across appends without contacting
+     * the owner; the ordinary read then supplies the current name. */
+    assert(snag_session_commit(&source, "session_named", json_pack("{s:s}",
+        "name", "updated-picker-name"), NULL, error, sizeof(error)) == 0);
+    catalog.catalog_preview = true;
+    generation = snag_vm_reader_request(reader, &catalog);
+    result = await_page(reader, generation);
+    assert(!result->error_number && result->incomplete &&
+        json_array_size(result->catalog) == 1u);
+    assert(strcmp(json_string_value(json_array_get(json_object_get(
+        json_array_get(result->catalog, 0u), "cells"), 1u)), "updated-picker-name"));
+    snag_vm_read_result_free(result);
+    catalog.catalog_preview = false;
+    generation = snag_vm_reader_request(reader, &catalog);
+    result = await_page(reader, generation);
+    assert(!result->error_number && !result->incomplete);
+    assert(!strcmp(json_string_value(json_array_get(json_object_get(
+        json_array_get(result->catalog, 0u), "cells"), 1u)), "updated-picker-name"));
+    snag_vm_read_result_free(result);
     for (unsigned int i = 0u; i < 20u; ++i) {
         assert(snag_vm_reader_request(reader, &catalog));
         generation = snag_vm_reader_request(reader, &request);

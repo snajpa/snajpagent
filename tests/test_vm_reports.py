@@ -132,7 +132,7 @@ class ReportTests(unittest.TestCase):
         child.repaint_until(first['id'][:8].encode())
         self.assertEqual(self.inputs(), [])
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
-        child.finish('q')
+        child.finish('qa')
         self.owner.status('detached')
 
     def test_saved_report_reopens_after_owner_shutdown(self):
@@ -176,7 +176,7 @@ class ReportTests(unittest.TestCase):
             resumed.write(b'gg')
             resumed.repaint_until(b'/help')
             self.owner.status('stored')
-            resumed.finish('q')
+            resumed.finish('qa')
         self.assertEqual(self.inputs(), [])
 
     def test_new_typing_survives_report_and_report_list_redacts(self):
@@ -254,7 +254,7 @@ class ReportTests(unittest.TestCase):
         child.repaint_until(b'No retained command report')
         child.command('report')
         child.repaint_until(b'/status')
-        child.finish('q')
+        child.finish('qa')
         self.owner.status('detached')
 
 

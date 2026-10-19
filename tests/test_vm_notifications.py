@@ -221,7 +221,7 @@ class WorkspaceNotificationTests(unittest.TestCase):
         child.repaint_until(b'REPORT ' + self.owner.sid[:8].encode() + b' ' +
                             reports[0]['id'][:8].encode())
         child.repaint_until(b'accepted; applying')
-        child.finish('q')
+        child.finish('qa')
         resumed = self.start('--resume', 'notifications', expect=b'REPORT', columns=120)
         resumed.repaint_until(reports[0]['id'][:8].encode())
         self.assertEqual(self.reports(2), reports)

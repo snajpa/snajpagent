@@ -677,7 +677,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_untouched_picker_does_not_create_workspace(self):
         child = self.start()
-        child.finish('q')
+        child.finish('qa')
         self.assertEqual(self.snapshots(), {})
         self.assertEqual(list((self.root / 'state' / 'sessions').iterdir()), [])
         self.assertNotIn(b'You can resume', child.output)

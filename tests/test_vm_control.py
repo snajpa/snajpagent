@@ -107,7 +107,49 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.inputs(), [])
 
     def test_workspace_quit_and_write_preserve_sessions_and_layout(self):
-        self.workspace_save_and_leave('quit-workspace', 'q')
+        self.workspace_save_and_leave('quit-workspace', 'qa')
+
+    def close_split_with_quit(self, command):
+        child = self.start('-N', 'quit-pane')
+        child.command('attach ' + self.owner.sid)
+        child.attached()
+        child.command('vsp')
+        child.write(b'ikeep this draft')
+        self.wait_synced('keep this draft')
+        self.escape(child)
+        identity = self.owner.identity()
+        child.command(command)
+        self.wait_snapshot(lambda rows:
+                           len(next(iter(rows.values()))['state']['windows']) == 1)
+        self.assertIsNone(child.process.poll())
+        self.owner.status('attached')
+        child.repaint_until(b'keep this draft')
+        child.finish(command)
+        self.owner.status('detached')
+        self.assertEqual(self.owner.identity(), identity)
+        self.assertEqual(self.owner_draft()['text'], 'keep this draft')
+        self.assertEqual(self.inputs(), [])
+
+    def test_quit_closes_only_focused_pane_and_preserves_draft(self):
+        self.close_split_with_quit('q')
+
+    def test_force_quit_closes_only_focused_pane_and_preserves_draft(self):
+        self.close_split_with_quit('q!')
+
+    def test_session_picker_does_not_wait_for_an_unresponsive_owner(self):
+        # Prime metadata, then make it stale while retaining its append-only source.
+        self.owner.status('detached')
+        self.owner_draft('draft while owner is paused')
+        os.kill(self.owner.owner, signal.SIGSTOP)
+        try:
+            started = time.monotonic()
+            child = self.start('-N', 'quick-picker')
+            child.repaint_until(self.owner.sid[:8].encode(), timeout=.75)
+            self.assertLess(time.monotonic() - started, .9)
+            child.finish('qa')
+        finally:
+            os.kill(self.owner.owner, signal.SIGCONT)
+        self.owner.status('detached')
 
     def test_workspace_write_exit_preserves_sessions_and_layout(self):
         self.workspace_save_and_leave('write-exit-workspace', 'x')
@@ -1473,7 +1515,7 @@ class ControlTests(unittest.TestCase):
         child.command('attach missing-session')
         child.command('session quit')
         child.repaint_until(b'Unsent draft')
-        child.finish('q!')
+        child.finish('qa!')
         self.owner.status('stored')
 
     def test_rejected_command_keeps_text_and_recover_never_resubmits(self):

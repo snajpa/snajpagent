@@ -807,7 +807,7 @@ input()
         self.owner.wait_event('control_finished')
         self.return_to_workspace(resumed)
         self.show_report(resumed, '/config')
-        resumed.finish('q')
+        resumed.finish('qa')
         self.assertEqual((self.root / 'editor-runs').read_text(), 'started\n')
         self.owner.status('detached')
 

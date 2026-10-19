@@ -209,14 +209,14 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         self.assertEqual(len([e for e in self.events(journal) if e['type'] == 'input_received']), 1)
         resumed = self.start('--resume', 'layout', expect=b'\x1b[?1049h')
         resumed.attached()
-        resumed.finish('q!')
+        resumed.finish('qa!')
         self.status(journal.parent.name, 'stored')
 
     def test_explicit_resume_and_saved_workspace_never_restart_stopped_owner(self):
         journal = self.seed()
         child = self.start('-N', 'saved', '--session', journal.parent.name, expect=b'\x1b[?1049h')
         self.ready(child)
-        child.finish('q!')
+        child.finish('qa!')
         self.status(journal.parent.name, 'stored')
         count = len([e for e in self.events(journal) if e['type'] == 'input_received'])
         restored = self.start('--resume', 'saved', expect=b'\x1b[?1049h')
@@ -226,7 +226,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         restored.command('session')
         self.ready(restored)
         self.assertEqual(len([e for e in self.events(journal) if e['type'] == 'input_received']), count)
-        restored.finish('q!')
+        restored.finish('qa!')
 
     def test_picker_enter_resumes_and_live_selection_keeps_same_owner(self):
         journal = self.seed()
@@ -241,7 +241,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         again = self.start('--session', journal.parent.name, expect=b'\x1b[?1049h')
         self.ready(again)
         self.assertEqual(self.owner_pids(), pids)
-        again.finish('q!')
+        again.finish('qa!')
 
     def test_startup_error_is_reported_without_replacing_old_owner(self):
         child = self.start('-N', 'failure')
@@ -277,7 +277,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         self.status(journal.parent.name, 'detached')
         child.command('session ' + journal.parent.name)
         self.ready(child)
-        child.finish('q!')
+        child.finish('qa!')
 
     def test_exec_failure_reports_then_allows_explicit_retry(self):
         copy = self.root / 'exec-retry-binary'
@@ -303,7 +303,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         child.command('new retried')
         journal = self.ready(child)
         self.assertFalse(any(e['type'] == 'input_received' for e in self.events(journal)))
-        child.finish('q!')
+        child.finish('qa!')
         self.status(journal.parent.name, 'stored')
 
     def test_frontend_loss_during_bootstrap_preserves_launch_and_private_pty(self):
@@ -326,7 +326,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         self.assertEqual(len(self.journals()), 1)
         restored.write(b'\r')
         self.ready(restored)
-        restored.finish('q!')
+        restored.finish('qa!')
 
     def test_repeated_resume_in_splits_joins_one_pending_launch(self):
         journal = self.seed()
@@ -369,7 +369,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         listener.close()
         child.command('session ' + journal.parent.name)
         self.ready(child)
-        child.finish('q!')
+        child.finish('qa!')
         self.status(journal.parent.name, 'stored')
 
     def test_live_busy_owner_is_never_replaced(self):
@@ -382,7 +382,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         self.assertEqual(self.owner_pids(), pids)
         self.status(journal.parent.name, 'attached')
         second.finish('close')
-        first.finish('q!')
+        first.finish('qa!')
 
     def test_tiny_terminal_can_start_unnamed_owner(self):
         child = self.start('-N', 'tiny')
@@ -394,7 +394,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         self.assertEqual(len(self.journals()), 1)
         child.resize(12, 100)
         journal = self.ready(child)
-        child.finish('q!')
+        child.finish('qa!')
         self.status(journal.parent.name, 'stored')
 
     def test_multiple_explicit_new_requests_create_independent_owners(self):
