@@ -5355,11 +5355,21 @@ def test_live_nick_listing():
                     raise AssertionError(("server did not acknowledge the nickname change",
                                           bytes(client.buf), bytes(server.buf)))
                 client.send_wait(b"/rollout\r/nick\r", f"model nick: {nick}".encode(), start=start)
-                result = subprocess.run([BINARY, "--dotdir", DOTDIR, "-l"], cwd=WORKSPACE,
-                                        capture_output=True, text=True, timeout=MIN_WAIT_S)
-                assert result.returncode == 0, result.stderr
-                row = next(line.split("\t") for line in result.stdout.splitlines()[1:]
-                           if line.startswith(identity[:8]))
+                deadline = time.monotonic() + MIN_WAIT_S
+                while time.monotonic() < deadline:
+                    result = subprocess.run([BINARY, "--dotdir", DOTDIR, "-l"], cwd=WORKSPACE,
+                                            capture_output=True, text=True, timeout=MIN_WAIT_S)
+                    assert result.returncode == 0, result.stderr
+                    row = next((line.split("\t") for line in result.stdout.splitlines()[1:]
+                                if line.startswith(identity[:8])), None)
+                    if row is not None:
+                        break
+                    # Discovery omits a journal that changes while it is read.
+                    client.read_once(0.02)
+                    server.read_once(0.02)
+                else:
+                    raise AssertionError(("live session missing from listings", identity,
+                                          result.stdout, result.stderr))
                 assert row[6] == f"c/{nick}@{endpoint}", row
             client.exit_now()
         server.exit_now()
