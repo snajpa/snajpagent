@@ -54,6 +54,7 @@ count_memcpy(void *destination, const void *source, size_t bytes)
 
 #define calloc count_calloc
 #define strdup count_strdup
+#undef memcpy
 #define memcpy count_memcpy
 #include "../src/session_view.c"
 #undef calloc
