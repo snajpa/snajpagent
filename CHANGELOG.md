@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Replace the same-argument snapshot when explicitly reactivating an updated skill.
+  Unload all bindings of one skill by name or qualified ID, including bindings
+  retained across retry and resume. Shared names across different skill IDs
+  continue to require a qualified ID.
+
 - Add `snajpagent optimize [--dotdir DIR]` for serial, lossless offline session
   upgrades and Zstandard block compression. Skip running sessions on stderr;
   resume optimized history directly and append raw blocks during ordinary runs.

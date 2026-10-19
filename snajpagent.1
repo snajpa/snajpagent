@@ -4636,11 +4636,15 @@ Interactive skill commands display readable summaries. Show displays the selecte
 source; management commands report the completed action and package path.
 The model skills tool supports list, show, activate, deactivate and refresh.
 Activate loads guidance; deactivate requires an ID or unambiguous name and retires
-that binding from subsequent model requests, with a green unload confirmation.
+all bindings of that skill from subsequent model requests, with a green unload confirmation.
 Deactivating an inactive selection reports zero removals. List exposes
 concise metadata; show loads instructions and resource locations. Activation pins
 attributed instructions with literal arguments. Changed instructions since discovery
 require refresh. Repeating an identical active selection reuses its binding.
+After refresh, explicitly activating updated instructions replaces the snapshot
+for the same skill and arguments. Bindings with different arguments remain separate.
+Refresh alone preserves loaded snapshots. A name shared by different skill IDs
+is ambiguous; use a qualified ID to unload the intended skill.
 The current-state prompt carries expanded instructions once; activation receipts
 retain metadata without repeating the instruction body.
 Scripts run only through ordinary declared tools with their normal lifecycle.

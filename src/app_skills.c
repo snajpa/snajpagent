@@ -50,12 +50,16 @@ snag_app_skills_refresh(struct app_state *app, char *error, size_t size)
 }
 
 static json_t *
-active_bindings(const struct snag_session *session)
+active_bindings(const struct snag_session *session, const json_t *replacement)
 {
     json_t *active = json_array();
     if (!active) return NULL;
     for (size_t i = 0; i < json_array_size(session->active_skills); ++i) {
         json_t *entry = json_array_get(session->active_skills, i);
+        if (replacement &&
+            !strcmp(snag_json_string(entry, "id"), snag_json_string(replacement, "id")) &&
+            !strcmp(snag_json_string(entry, "arguments"),
+                snag_json_string(replacement, "arguments"))) continue;
         if (snag_skill_binding_active(session, entry) && json_array_append(active, entry) < 0) {
             json_decref(active);
             return NULL;
@@ -132,18 +136,24 @@ activate(struct app_state *app, const char *id, const char *arguments, bool expl
     if (!skill) return NULL;
     /* Revalidate instructions, then reuse the binding before collecting resources
      * or capability diagnostics that are already part of its pinned snapshot. */
+    json_t *reusable = NULL;
+    size_t matches = 0;
     for (size_t i = 0; i < json_array_size(app->session.active_skills); ++i) {
         json_t *previous = json_array_get(app->session.active_skills, i);
         if (snag_skill_binding_active(&app->session, previous) &&
             !strcmp(snag_json_string(previous, "id"), snag_json_string(skill, "id")) &&
-            !strcmp(snag_json_string(previous, "digest"), snag_json_string(skill, "digest")) &&
             !strcmp(snag_json_string(previous, "arguments"),
                 snag_json_string(skill, "arguments"))) {
-            json_decref(skill);
-            return json_incref(previous);
+            if (++matches > 1u) break;
+            if (!strcmp(snag_json_string(previous, "digest"), snag_json_string(skill, "digest")))
+                reusable = previous;
         }
     }
-    json_t *active = active_bindings(&app->session);
+    if (matches == 1u && reusable) {
+        json_decref(skill);
+        return json_incref(reusable);
+    }
+    json_t *active = active_bindings(&app->session, skill);
     const char *visit = snag_json_string(app->session.work_context, "id");
     const char *goal = !visit && app->session.goal_status == SNAG_GOAL_ACTIVE &&
         !app->session.active_read_only ? app->session.goal_id : "";
@@ -218,7 +228,7 @@ snag_app_skills_begin(struct app_state *app, const char *prompt, bool continuing
     }
     if (snag_app_skills_refresh(app, error, size) < 0) return -1;
     if (!app->session.active_read_only) {
-        json_t *active = active_bindings(&app->session);
+        json_t *active = active_bindings(&app->session, NULL);
         if (!active) return -1;
         int rc = save_bindings(app, active, error, size);
         json_decref(active);
@@ -280,6 +290,7 @@ static int
 unload(struct app_state *app, const char *id, size_t *removed, char *error, size_t size)
 {
     json_t *active = json_array();
+    const char *matched_id = NULL;
     if (!active) return -1;
     for (size_t i = 0; i < json_array_size(app->session.active_skills); ++i) {
         json_t *entry = json_array_get(app->session.active_skills, i);
@@ -289,13 +300,16 @@ unload(struct app_state *app, const char *id, size_t *removed, char *error, size
                 json_decref(active);
                 return -1;
             }
+        } else if (id) {
+            const char *entry_id = snag_json_string(entry, "id");
+            if (matched_id && strcmp(matched_id, entry_id)) {
+                json_decref(active);
+                return snag_errorf(error, size, "skill name is ambiguous; use a qualified ID");
+            }
+            matched_id = entry_id;
         }
     }
     *removed = json_array_size(app->session.active_skills) - json_array_size(active);
-    if (id && *removed > 1u) {
-        json_decref(active);
-        return snag_errorf(error, size, "skill name is ambiguous; use a qualified ID");
-    }
     int rc = save_bindings(app, active, error, size);
     json_decref(active);
     if (rc < 0) return rc;

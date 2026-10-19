@@ -69,12 +69,17 @@ instructions require refresh. Resource trees remain lazy. Explicit validation
 checks resource references and the complete manifest; managed imports verify and
 copy packages atomically. Unrelated resource changes do not invalidate an already
 pinned instruction snapshot. Retry and resume retain that exact snapshot even if
-its source is removed.
+its source is removed. Refresh keeps loaded snapshots pinned. Explicit activation
+of updated instructions replaces the same skill ID and arguments; different
+arguments retain separate bindings.
 
 The native `skills` tool provides list, show, activate, deactivate and refresh.
 Activate loads a binding; deactivate requires an ID or unambiguous name and removes
-it from subsequent request guidance. Both emit lifecycle bullets after saving the
-binding state. A missing active selection returns zero removals. An unchanged
+all bindings of that identity from subsequent request guidance. Multiple snapshots
+of one ID remain unambiguous, including snapshots retained by older clients.
+A name matching different IDs requires a qualified ID. Both actions emit lifecycle
+bullets after saving the binding state. A missing active selection returns zero
+removals. An unchanged
 catalog is reused within a turn instead of rescanning on every tool call. Arguments
 are literal substitutions, including `$ARGUMENTS`, numbered arguments and the
 portable skill-directory marker. `$name` and `/skills use ID -- REQUEST` support
