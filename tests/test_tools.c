@@ -337,7 +337,7 @@ call_args_yield(
 {
     return checked_json(json_pack("{s:s,s:s,s:o,s:I,s:n,s:o}", "command", command, "workdir",
         workdir, "timeout_ms", timeout_ms < 0 ? json_null() : json_integer(timeout_ms), "yield_ms",
-        (json_int_t)(yield_ms), "max_output_tokens", "stdin",
+        (json_int_t)(yield_ms), "max_output_bytes", "stdin",
         stdin_text ? json_string(stdin_text) : json_null()));
 }
 
@@ -398,7 +398,7 @@ run_command_full(const char *command, int timeout_ms, const char *secret, const 
     struct snag_response_item call = snag_response_graph_item(&graph, 0u);
     if (selected_limit >= 0)
         assert(json_object_set_new(
-                   call.arguments, "max_output_tokens", json_integer(selected_limit)) == 0);
+                   call.arguments, "max_output_bytes", json_integer(selected_limit)) == 0);
     json_t *result = run_call(&graph, &config, cwd, secret, pump, pump_opaque);
     assert(json_integer_value(json_object_get(result, "max_output_tokens")) ==
            (selected_limit >= 0 && (uint32_t)selected_limit < ceiling ? (uint32_t)selected_limit
@@ -446,12 +446,12 @@ run_managed_exec(const char *command, int timeout_ms, int yield_ms)
 
 static json_t *
 run_write_stdin_call(
-    const char *handle, const char *data, bool eof, int yield_ms, int max_output_tokens)
+    const char *handle, const char *data, bool eof, int yield_ms, int max_output_bytes)
 {
     json_t *args = checked_json(json_pack("{s:s,s:s,s:o,s:b,s:I,s:o}", "handle", handle, "data",
         data, "eof", eof ? json_true() : json_false(), "terminate", 0, "yield_ms",
-        (json_int_t)(yield_ms), "max_output_tokens",
-        max_output_tokens < 0 ? json_null() : json_integer(max_output_tokens)));
+        (json_int_t)(yield_ms), "max_output_bytes",
+        max_output_bytes < 0 ? json_null() : json_integer(max_output_bytes)));
     return run_tool_with_args("write_stdin", args);
 }
 
@@ -598,9 +598,9 @@ test_command_output_limit_is_optional_and_positive(void)
     struct snag_response_item call = snag_response_graph_item(&graph, 0u);
     for (unsigned int i = 0u; i < 2u; ++i) {
         if (!i)
-            assert(json_object_del(call.arguments, "max_output_tokens") == 0);
+            assert(json_object_del(call.arguments, "max_output_bytes") == 0);
         else
-            assert(json_object_set_new(call.arguments, "max_output_tokens", json_integer(0)) == 0);
+            assert(json_object_set_new(call.arguments, "max_output_bytes", json_integer(0)) == 0);
         result = NULL;
         assert(snag_tools_run(&call, &config, &credential, cwd, NULL, NULL, -1, &result, error,
                    sizeof(error)) == 0);
@@ -609,7 +609,8 @@ test_command_output_limit_is_optional_and_positive(void)
         result = snag_tool_result_terminal(false, "invalid arguments");
         assert(result != NULL);
         config.tool_output_bytes = 123u;
-        assert(snag_tools_attach_output_limit(&call, &config, result) == 0);
+        assert(snag_tools_attach_output_limit(&call, config.tool_output_bytes,
+            (struct snag_token_calibration){0}, result) == 0);
         assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
         json_decref(result);
     }
@@ -638,11 +639,11 @@ test_approximate_output_limits(void)
         json_decref(result);
     }
     const char *invalid[] = {
-        "{\"max_output_approx_tokens\":0}", "{\"max_output_approx_tokens\":1000000001}",
+        "{\"max_output_approx_tokens\":0}", "{\"max_output_approx_tokens\":4000000001}",
 "{\"max_output_approx_tokens\":\"100\"}",
         "{\"max_output_bytes\":null,\"max_output_approx_tokens\":null}",
         "{\"max_output_approx_tokens\":1,\"max_output_bytes\":4}",
-        "{\"max_output_tokens\":4,\"max_output_approx_tokens\":1}"};
+        "{\"max_output_bytes\":4,\"max_output_approx_tokens\":1}"};
     for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
         json_t *args = json_loads(invalid[i], 0, NULL);
         assert(args && !json_object_set_new(args, "command", json_string("printf never-run")));
@@ -667,6 +668,57 @@ test_approximate_output_limits(void)
     json_decref(result);
     json_decref(close_command(handle));
     json_decref(started);
+}
+
+static void
+test_calibrated_output_limits(void)
+{
+    const char *keys[] = {"max_output_tokens", "max_output_approx_tokens", "max_output_bytes"};
+    struct snag_token_calibration density = {3000u, 2000u, 1u};
+    struct snag_output_limit limit;
+    char error[256] = {0}, cwd[4096];
+    assert(getcwd(cwd, sizeof(cwd)));
+    assert(snag_token_bytes(0u, density) == 0u);
+    assert(snag_token_bytes(3u, density) == 4u);
+    assert(snag_token_bytes(UINT64_MAX, density) == UINT64_MAX);
+    assert(snag_token_bytes(UINT64_MAX, (struct snag_token_calibration){0}) == UINT64_MAX);
+    assert(snag_token_bytes(1u, (struct snag_token_calibration){1u, 10u, 1u}) == 1u);
+    for (size_t i = 0u; i < 3u; ++i) {
+        struct snag_config config;
+        snag_config_init(&config);
+        struct snag_execution_config execution;
+        assert(!snag_config_resolve_execution(&config, "p", "m", &execution, error, sizeof(error)));
+        snag_execution_calibrate(&execution, density);
+        struct snag_response_graph graph;
+        make_call(&graph, "printf calibrated", cwd, 1000, NULL);
+        struct snag_response_item call = snag_response_graph_item(&graph, 0u);
+        assert(!json_object_del(call.arguments, "max_output_bytes"));
+        assert(!json_object_set_new(call.arguments, keys[i], json_integer(101)));
+        assert(snag_tools_output_limit(call.arguments, 1000u, density, &limit,
+            error, sizeof(error)));
+        assert(limit.bytes == (i == 2u ? 101u : 151u));
+        assert(snag_tools_output_limit(call.arguments, 100u, density, &limit,
+            error, sizeof(error)));
+        assert(limit.bytes == 100u && limit.requested_bytes == (i == 2u ? 101u : 151u));
+        struct snag_credential credential;
+        snag_credential_clear(&credential);
+        json_t *result = NULL;
+        assert(!snag_tools_start_execution(&call, &config, &execution, config.shell,
+            &credential, cwd, &result, error, sizeof(error)));
+        assert(!result);
+        uint64_t deadline = snag_monotonic_ms() + 5000u;
+        while (!snag_tools_ready(call.call_id) && snag_monotonic_ms() < deadline)
+            assert(!snag_tools_service(10, -1, error, sizeof(error)));
+        assert(snag_tools_ready(call.call_id));
+        assert(!snag_tools_collect(call.call_id, NULL, &result, error, sizeof(error)));
+        assert(result && !snag_tool_result_valid(result));
+        assert(json_int_member(result, "max_output_tokens") == (i == 2u ? 101 : 151));
+        assert(strstr(snag_json_string(result, "model_text"), "calibrated"));
+        snag_tools_collected(call.call_id);
+        json_decref(result);
+        snag_response_graph_free(&graph);
+        snag_config_free(&config);
+    }
 }
 
 static void
@@ -737,7 +789,7 @@ test_wait_limit_and_pending_termination(void)
     /* Repeated waits reset the budget and preserve the same process. */
     args = json_pack("{s:s,s:s,s:b,s:b,s:i}", "handle", handle, "data", "", "eof", 0, "terminate",
         0, "yield_ms", 100);
-    assert(snag_json_set_new(args, "max_output_tokens", json_null()) == 0);
+    assert(snag_json_set_new(args, "max_output_bytes", json_null()) == 0);
     result = run_tool_with_wait("write_stdin", args, NULL, NULL, 100u);
     const char *reason = snag_json_string(result, "reason");
     assert(reason && !strcmp(reason, "wait_timeout"));
@@ -745,7 +797,7 @@ test_wait_limit_and_pending_termination(void)
     json_decref(result);
     args = json_pack("{s:s,s:s,s:b,s:b,s:i}", "handle", handle, "data", "", "eof", 0, "terminate",
         1, "yield_ms", 0);
-    assert(snag_json_set_new(args, "max_output_tokens", json_null()) == 0);
+    assert(snag_json_set_new(args, "max_output_bytes", json_null()) == 0);
     uint64_t began = snag_monotonic_ms();
     result = run_tool_with_wait("write_stdin", args, NULL, NULL, 100u);
     assert(snag_monotonic_ms() - began < 1500u);
@@ -1020,7 +1072,7 @@ test_steering_with_blocked_stdin(void)
     json_decref(rejected);
     json_t *closed = run_tool_with_args(
         "write_stdin", checked_json(json_pack("{s:s,s:s,s:b,s:b,s:i,s:n}", "handle", handle, "data",
-                           "", "eof", 0, "terminate", 1, "yield_ms", 0, "max_output_tokens")));
+                           "", "eof", 0, "terminate", 1, "yield_ms", 0, "max_output_bytes")));
     assert(strcmp(snag_json_string(closed, "status"), "running"));
     assert(json_int_member(json_object_get(closed, "output_ref"), "stdin_pending") == 0);
     json_decref(closed);
@@ -1158,9 +1210,9 @@ test_command_argument_feedback(void)
     config.max_timeout_ms = 2000u;
     config.max_wait_ms = 700000u;
     const char *fields[] = {
-        "yield_time_ms", "cmd", "timeout_ms", "yield_ms", "max_output_tokens", "pty", "workdir"};
+        "yield_time_ms", "cmd", "timeout_ms", "yield_ms", "max_output_bytes", "pty", "workdir"};
     const char *expected[] = {
-        "yield_ms", "command", "2000", "700000", "max_output_tokens", "pty", "workdir"};
+        "yield_ms", "command", "2000", "700000", "max_output_bytes", "pty", "workdir"};
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
         make_call(&graph, "printf never-run", cwd, 1000, NULL);
         struct snag_response_item call = snag_response_graph_item(&graph, 0u);
@@ -1253,6 +1305,7 @@ main(int argc, char **argv)
     test_managed_output_ceiling();
     test_command_output_limit_is_optional_and_positive();
     test_approximate_output_limits();
+    test_calibrated_output_limits();
     test_stdin_uses_blocking_child_fd();
     test_managed_process_hands_off_on_steering();
     test_wait_limit_and_pending_termination();

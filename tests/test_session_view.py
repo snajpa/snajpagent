@@ -943,6 +943,166 @@ class ContextMeterTests(unittest.TestCase):
 
         self.provider.runtime_handler = respond
 
+    def test_calibrated_output_units_reach_exec_and_retained_pages(self):
+        text = self.owner.config.read_text().replace(
+            'exact_token_count = true', 'exact_token_count = false')
+        text = text.replace('max_input_tokens = 100000', 'max_input_tokens = 1000000')
+        self.owner.config.write_text(text + 'tool_output_approx_tokens = 4000\n')
+        self.configure()
+        self.command('/model cache', 'cache updated:')
+        path = self.owner.root / 'state' / 'models.json'
+        cache = json.loads(path.read_text())
+        cache['providers'][0]['models'][0]['id'] = 'host-model'
+        path.write_text(json.dumps(cache))
+        self.command('/model list', 'host-model')
+        self.release.set()
+
+        def respond(handler, request, sequence):
+            started = [e['data'] for e in self.owner.events()
+                       if e['type'] == 'response_started'][-1]
+            # Exact half-byte density makes both conversion directions independent
+            # of changing request-envelope sizes and integer rounding.
+            tokens = started['model_input_bytes'] * 2
+            if sequence == 1:
+                body = self.provider.function_body(sequence, 'emit', 'exec_command', {
+                    'command': "printf '%05000d' 0", 'yield_ms': 10000,
+                    'max_output_tokens': 1000})
+            elif sequence in (2, 3):
+                result = [e['data']['result'] for e in self.owner.events()
+                          if e['type'] == 'tool_finished'][0]
+                key = 'max_output_approx_tokens' if sequence == 2 else 'max_output_bytes'
+                body = self.provider.function_body(sequence, 'page' + str(sequence),
+                    'read_tool_output', {'handle': result['output_ref']['handle'],
+                                         'stream': 'stdout', key: 1000 if sequence == 2 else 1024})
+            else:
+                body = self.provider.response_body(sequence, 'units complete')
+            body = body.replace('"input_tokens":1', f'"input_tokens":{tokens}').replace(
+                '"total_tokens":2', f'"total_tokens":{tokens + 1}')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        self.owner.detach()
+        peer = self.owner.view(bind=True)
+        peer.submit('exercise calibrated output units')
+        self.owner.wait_event('turn_completed')
+        results = [e['data']['result'] for e in self.owner.events()
+                   if e['type'] == 'tool_finished']
+        self.assertEqual([r['status'] for r in results], ['succeeded'] * 3)
+        # The historical result metadata stores bytes, independently of input units.
+        self.assertEqual([r['max_output_tokens'] for r in results], [500, 500, 1024])
+        self.assertEqual(results[0]['stdout']['original_bytes'], 5000)
+        calibration = json.loads(path.read_text())['providers'][0]['models'][0][
+            'token_calibration']
+        self.assertEqual(calibration['samples'], 4)
+        # Independent integer decay can leave a one-token rounding difference.
+        self.assertIn(calibration['tokens'] - 2 * calibration['bytes'], (0, 1))
+
+    def test_calibrated_density_survives_compaction_and_resume(self):
+        self.owner.config.write_text(self.owner.config.read_text().replace(
+            'exact_token_count = true', 'exact_token_count = false'))
+        self.configure()
+        self.command('/model cache', 'cache updated:')
+        path = self.owner.root / 'state' / 'models.json'
+        cache = json.loads(path.read_text())
+        cache['providers'][0]['models'][0]['id'] = 'host-model'
+        path.write_text(json.dumps(cache))
+        self.command('/model list', 'host-model')
+        self.release.set()
+
+        def respond(handler, request, sequence):
+            started = [e['data'] for e in self.owner.events()
+                       if e['type'] == 'response_started'][-1]
+            if sequence == 2:
+                self.ready.set()
+                self.first.wait(10)
+            tokens = started['model_input_bytes'] // 2
+            body = self.provider.response_body(sequence, 'calibration answer')
+            body = body.replace('"input_tokens":1', f'"input_tokens":{tokens}').replace(
+                '"total_tokens":2', f'"total_tokens":{tokens + 1}')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        self.owner.detach()
+        peer = self.owner.view(bind=True)
+        peer.submit('establish density ' + 'x' * 4000)
+        first_turn = self.owner.wait_event('turn_completed')
+        calibration = json.loads(path.read_text())['providers'][0]['models'][0][
+            'token_calibration']
+        self.assertEqual(calibration['samples'], 1)
+        self.assertAlmostEqual(calibration['bytes'] / calibration['tokens'], 2, places=2)
+        base = [e['data'] for e in self.owner.events() if e['type'] == 'response_completed'][0]
+        base = base['usage']['input_tokens'] + base['usage']['output_tokens']
+        suffix = 'new Unicode and code ' + '漢字🙂{};' * 600
+        peer.submit(suffix)
+        self.assertTrue(self.ready.wait(5))
+        expected_floor = (base + len(suffix.encode()) // 2) * 100 // 100000
+        prompt = self.wait_meter(peer, lambda value: value.startswith('~') and
+                                 int(value[1:]) >= expected_floor)
+        self.assertTrue(prompt['active'])
+        self.first.set()
+        self.owner.wait_event('turn_completed', first_turn['seq'])
+        calibration = json.loads(path.read_text())['providers'][0]['models'][0][
+            'token_calibration']
+        self.assertEqual(calibration['samples'], 2)
+        peer.send(type='detach', generation=peer.generation)
+        peer.until('detached')
+        self.owner.initial = self.owner.start(['--resume', self.owner.sid])
+        self.owner.initial.until(b'METER ')
+        peer = self.owner.view()
+        self.command('/status', 'measured samples')
+
+        def compact(handler, request):
+            self.provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
+                {'type': 'message', 'role': 'user', 'content': 'summary ' + 's' * 120000},
+                {'type': 'compaction', 'encrypted_content': 'A' * 200000}]}).encode(),
+                content_type='application/json')
+
+        self.provider.runtime_compact_handler = compact
+        self.command('/compact', 'Compacted')
+        self.wait_meter(peer, lambda value: value.startswith('~') and 60 <= int(value[1:]) < 100)
+        self.assertEqual(len(self.provider.requests), 2)
+        self.owner.finish(self.owner.initial, b'/exit')
+        resumed = self.owner.start(['--resume', self.owner.sid])
+        resumed.until(b'METER ~')
+        view = self.owner.view()
+        self.wait_meter(view, lambda value: value.startswith('~') and 60 <= int(value[1:]) < 100)
+        self.assertEqual(len(self.provider.requests), 2)
+
+        # The capsule makes the next complete byte/token pair incomparable.
+        # Exact reported usage still overrides the calibrated preview.
+        def opaque_response(handler, request, sequence):
+            body = self.provider.response_body(sequence, 'opaque answer').replace(
+                '"input_tokens":1', '"input_tokens":1000').replace(
+                '"total_tokens":2', '"total_tokens":1001')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = opaque_response
+        previous_seq = self.owner.events()[-1]['seq']
+        os.write(resumed.master, b'continue after opaque compaction\r')
+        self.owner.wait_event('turn_completed', previous_seq)
+        self.wait_meter(view, lambda value: value == '2')
+        self.assertEqual(json.loads(path.read_text())['providers'][0]['models'][0][
+            'token_calibration'], calibration)
+        self.assertEqual(len(self.provider.requests), 3)
+
+        # Even a measured input/output prefix cannot isolate replayed tokens:
+        # hidden reasoning need not reappear in the provider's next input.
+        def hidden_response(handler, request, sequence):
+            body = self.provider.response_body(sequence, 'hidden reasoning answer').replace(
+                '"input_tokens":1', '"input_tokens":90000').replace(
+                '"output_tokens":1', '"output_tokens":60,"output_tokens_details":{"reasoning_tokens":59}').replace(
+                '"total_tokens":2', '"total_tokens":90060')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = hidden_response
+        previous_seq = self.owner.events()[-1]['seq']
+        os.write(resumed.master, b'continue with a measured opaque prefix\r')
+        self.owner.wait_event('turn_completed', previous_seq)
+        self.assertEqual(json.loads(path.read_text())['providers'][0]['models'][0][
+            'token_calibration'], calibration)
+        self.assertEqual(len(self.provider.requests), 4)
+        self.owner.finish(resumed, b'/exit')
+
     def test_meter_grows_before_completion_in_classic_and_workspace_prompt(self):
         self.stream()
         peer = self.owner.view()
@@ -1505,7 +1665,9 @@ class ContextMeterTests(unittest.TestCase):
             self.owner.initial.until('›'.encode(), 10)
         peer = self.owner.view()
         preview = self.wait_meter(peer, lambda value: value.startswith('~'))['values'][5]
-        if exact and not changed and reported_input is None and outcome == 'completed':
+        # Credential rotation invalidates exact anchors, but the same model's
+        # text density remains useful for an explicitly approximate preview.
+        if exact and reported_input is None and outcome == 'completed':
             self.assertGreaterEqual(int(preview[1:]), 60,
                                     'preview lost the completed exact input count')
             self.assertLess(int(preview[1:]), 65)
@@ -1520,6 +1682,8 @@ class ContextMeterTests(unittest.TestCase):
         self.assertEqual(len([e for e in events if e['type'] == 'turn_interrupted']),
                          int(outcome == 'cancelled'))
         self.classic_meter(preview)
+        if not exact and reported_input is None:
+            self.command('/status', 'uncalibrated')
         self.owner.finish(self.owner.initial, b'/exit')
 
     def test_exact_preview_fallback_retains_input_without_provider_usage(self):

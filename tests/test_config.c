@@ -230,10 +230,11 @@ test_output_units(const char *path)
             assert(n > 0 && (size_t)n < sizeof(text));
             write_bytes(path, text, (size_t)n);
             load_config(&config, path, NULL);
-            assert(config.tool_output_bytes == 7000u && config.display_output_bytes == 123u);
+            assert(config.tool_output_bytes == (model ? 28000u : 7000u) &&
+                config.display_output_bytes == 123u);
             assert(!snag_config_resolve_execution(
                 &config, "p", "other", &execution, error, sizeof(error)));
-            assert(execution.tool_output_bytes == 7000u);
+            assert(execution.tool_output_bytes == (model ? 28000u : 7000u));
             assert(!snag_config_resolve_execution(
                 &config, "p", "m", &execution, error, sizeof(error)));
             assert(execution.tool_output_bytes == 9000u);
@@ -274,6 +275,14 @@ test_approximate_output_tokens(const char *path)
     assert(config.tool_output_bytes == 12000u);
     assert(!snag_config_resolve_execution(&config, "p", "m", &execution, error, sizeof(error)));
     assert(execution.tool_output_bytes == 4000u);
+    struct snag_token_calibration density = {3000u, 2000u, 1u};
+    snag_execution_calibrate(&execution, density);
+    assert(execution.tool_output_bytes == 1500u);
+    assert(execution.tool_output_approx_tokens == 1000u);
+    assert(config.tool_output_bytes == 12000u); /* no mutation of shared defaults */
+    assert(!snag_config_resolve_execution(&config, "p", "other", &execution, error, sizeof(error)));
+    snag_execution_calibrate(&execution, density);
+    assert(execution.tool_output_bytes == 4500u);
     assert(config.model_limits[0].max_output_tokens == 16000u);
     snag_config_free(&config);
 
@@ -284,7 +293,7 @@ test_approximate_output_tokens(const char *path)
     snag_config_free(&config);
 
     const char *invalid[] = {"[tool]\ntool_output_approx_tokens=0\n",
-        "[tool]\ntool_output_approx_tokens=1000000001\n",
+        "[tool]\ntool_output_approx_tokens=4000000001\n",
         "[tool]\ntool_output_approx_tokens=1\ntool_output_bytes=4\n",
         "[tool]\ntool_output_bytes=4\ntool_output_approx_tokens=1\n",
         "[tool]\nmax_output_tokens=4\ntool_output_approx_tokens=1\n",
@@ -352,7 +361,7 @@ test_model_execution(const char *path)
     assert(execution.default_yield_ms == 10u && execution.max_wait_ms == 100u);
     assert(execution.max_parallel_commands == 1u);
     assert(execution.default_timeout_ms == 20u && execution.max_timeout_ms == 200u);
-    assert(execution.tool_output_bytes == 300u && execution.output_cache_bytes == 400u);
+    assert(execution.tool_output_bytes == 1200u && execution.output_cache_bytes == 400u);
     snag_config_free(&config);
 
     for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
@@ -1205,7 +1214,7 @@ main(void)
     assert(config.default_yield_ms == 0u);
     assert(config.default_timeout_ms == 4000u);
     assert(config.max_timeout_ms == 5000u);
-    assert(config.tool_output_bytes == 7654u);
+    assert(config.tool_output_bytes == 30616u);
     assert(config.display_output_bytes == 123456u);
     assert(config.secret_count == 2u);
     assert(strcmp(config.secrets[0].value, "TOKEN_ONE") == 0);
