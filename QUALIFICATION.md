@@ -2,6 +2,21 @@
 
 # Qualification ledger
 
+## Pinned commands and monitor controls
+
+Linux native-owner tests exercise full PTY input/output, bounded redacted tails,
+explicit resume hooks, durable stop aliases, live attachment without duplicate
+execution, compaction visibility, read-only refusal and private-output-file
+validation. Native checkpoint tests reconstruct saved command definitions.
+The monitor PTY suite covers sorting, reverse order, field movement and visibility,
+help, kill selection, delay, width, highlighting, color, command detail and saved
+configuration precedence. These tests use local providers and real child processes.
+
+Matching ordinary-command probes preserve copy counts and bytes while reducing
+allocations. Store replay and checkpoint probes retain their prior allocation and
+copy totals. These scoped comparisons do not establish whole-application latency
+or platform-wide performance guarantees.
+
 This file records test coverage and outstanding platform and provider checks.
 Static inspection, local loopback tests, target-platform execution and live-provider
 runs each cover different behavior. Report the actual scope of each result.

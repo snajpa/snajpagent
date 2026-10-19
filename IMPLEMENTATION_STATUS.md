@@ -2,6 +2,17 @@
 
 # Implementation status
 
+Current source supports session-owned pinned PTY commands with model start,
+list, inspection, input and stop controls. `/r` gives a compact ordinary-call-first
+report; explicit stop disables saved resume hooks before signaling children.
+Definitions survive compaction and replay. Enabled hooks run once for a newly
+resumed owner; live attachment keeps the existing child.
+
+`snajpagent top` supports field sorting and management, reverse order, help,
+verified-owner kill selection, delay and width editing, highlighting, color and
+resume-command detail. `W` saves defaults to the selected config; explicit CLI
+options override saved values.
+
 Hosted rooms accept 1,024 remote client sockets plus two local identities. Paired
 agent/operator clients consume two slots. Rejection sends a bounded IRC ERROR;
 clients surface the reason once per outage and distinguish handshake and retry
