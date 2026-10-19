@@ -1035,6 +1035,9 @@ class ContextMeterTests(unittest.TestCase):
         peer = self.owner.view(bind=True)
         peer.submit('establish density ' + 'x' * 4000)
         first_turn = self.owner.wait_event('turn_completed')
+        # Drain the completed state before a multi-frame write on small sockets.
+        peer.until('state', lambda message: not message['state']['prompt']['active'] and
+                   message['state']['prompt']['values'][5] not in ('0', '~0'))
         calibration = json.loads(path.read_text())['providers'][0]['models'][0][
             'token_calibration']
         self.assertEqual(calibration['samples'], 1)
