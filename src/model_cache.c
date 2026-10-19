@@ -73,6 +73,28 @@ snag_model_limits_valid(const json_t *limits)
     return read_limits(limits, &capacity);
 }
 
+static struct snag_token_calibration
+read_calibration(const json_t *value)
+{
+    struct snag_token_calibration sample = {0};
+    if (value) {
+        (void)snag_json_integer_u64(value, "bytes", &sample.bytes);
+        (void)snag_json_integer_u64(value, "tokens", &sample.tokens);
+        (void)snag_json_integer_u64(value, "samples", &sample.samples);
+    }
+    return sample;
+}
+
+static bool
+calibration_valid(const json_t *value)
+{
+    if (!value) return true;
+    struct snag_token_calibration sample = read_calibration(value);
+    return json_is_object(value) &&
+           snag_json_exact_keys((json_t *)value, "bytes tokens samples") &&
+           sample.bytes && sample.tokens && sample.samples;
+}
+
 static bool
 accounting_valid(const json_t *model)
 {
@@ -86,7 +108,8 @@ accounting_valid(const json_t *model)
            snag_json_integer_u64(model, "observed_input_tokens", &tokens) == 0 &&
            snag_json_integer_u64(model, "observed_input_bytes", &bytes) == 0 &&
            hard <= SNAG_CONFIG_TOKEN_LIMIT_MAX && tokens <= SNAG_CONFIG_TOKEN_LIMIT_MAX &&
-           bytes <= SNAG_MODEL_CACHE_INPUT_MAX && !!tokens == !!bytes;
+           bytes <= SNAG_MODEL_CACHE_INPUT_MAX && !!tokens == !!bytes &&
+           calibration_valid(json_object_get(model, "token_calibration"));
 }
 
 static bool
@@ -96,10 +119,11 @@ model_valid(const json_t *model, bool cached)
     json_t *efforts;
 
     if (!json_is_object(model) ||
-        !snag_json_exact_keys((json_t *)model,
+        !snag_json_arg_keys(model,
             cached ? "count_capability default_effort efforts id limits "
                      "observed_hard_input_tokens observed_input_tokens observed_input_bytes"
-                   : "default_effort efforts id limits") ||
+                   : "default_effort efforts id limits",
+            cached ? "token_calibration" : "", NULL, 0u) ||
         !snag_json_bounded_string(json_object_get(model, "id"), SNAG_CONFIG_MODEL_MAX - 1u) ||
         !snag_model_limits_valid(json_object_get(model, "limits")))
         return false;
@@ -386,6 +410,8 @@ static int
 prepare_accounting(json_t *model, const json_t *old)
 {
     if (json_object_set_new(model, "count_capability", json_string("unknown")) < 0) return -1;
+    json_t *calibration = old ? json_object_get(old, "token_calibration") : NULL;
+    if (calibration && json_object_set(model, "token_calibration", calibration) < 0) return -1;
     /* Schema-1 placeholders: old samples are readable but never learned or used. */
     if (json_object_set_new(model, "observed_input_tokens", json_integer(0)) < 0 ||
         json_object_set_new(model, "observed_input_bytes", json_integer(0)) < 0)
@@ -459,9 +485,23 @@ bound_model(struct snag_model_cache *cache, const struct snag_provider_config *p
     return (json_t *)snag_model_cache_find(cache, provider->name, model);
 }
 
+struct snag_token_calibration
+snag_model_calibration(const struct snag_model_cache *cache,
+    const struct snag_provider_config *provider, const char *protocol, const char *model)
+{
+    const json_t *source = provider_entry(cache->providers, provider->name);
+    if (!source || strcmp(snag_json_string(source, "base_url"), provider->base_url) ||
+        strcmp(snag_json_string(source, "protocol"), protocol))
+        return (struct snag_token_calibration){0};
+    const json_t *item = snag_model_cache_find(cache, provider->name,
+        snag_config_model_upstream(provider, model));
+    return read_calibration(json_object_get(item, "token_calibration"));
+}
+
 static int
 record_observation(
-    json_t *item, enum snag_count_capability capability, uint64_t hard_input_tokens, bool apply)
+    json_t *item, enum snag_count_capability capability, uint64_t hard_input_tokens,
+    uint64_t bytes, uint64_t tokens, bool apply)
 {
     const char *next = capability == SNAG_COUNT_SUPPORTED ? "supported" : "unsupported";
     bool count_changed = capability != SNAG_COUNT_UNKNOWN &&
@@ -470,8 +510,17 @@ record_observation(
 
     (void)snag_json_integer_u64(item, "observed_hard_input_tokens", &value);
     bool limit_changed = hard_input_tokens && (!value || hard_input_tokens < value);
-    if (!count_changed && !limit_changed) return 0;
+    if (!count_changed && !limit_changed && !bytes) return 0;
     if (!apply) return 1;
+    if (bytes) {
+        struct snag_token_calibration sample =
+            read_calibration(json_object_get(item, "token_calibration"));
+        snag_token_calibration_add(&sample, bytes, tokens);
+        if (json_object_set_new(item, "token_calibration", json_pack("{s:I,s:I,s:I}",
+                "bytes", (json_int_t)sample.bytes, "tokens", (json_int_t)sample.tokens,
+                "samples", (json_int_t)sample.samples)) < 0)
+            return -1;
+    }
     if (count_changed && json_object_set_new(item, "count_capability", json_string(next)) < 0) {
         return -1;
     }
@@ -481,38 +530,50 @@ record_observation(
     return 1;
 }
 
-int
-snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache,
+static int
+cache_record(struct snag_store *store, struct snag_model_cache *cache,
     const struct snag_provider_config *provider, const char *protocol, const char *model,
-    enum snag_count_capability capability, uint64_t hard_input_tokens, char *error,
-    size_t error_size)
+    enum snag_count_capability capability, uint64_t hard_input_tokens,
+    uint64_t bytes, uint64_t tokens, char *error, size_t error_size)
 {
     if (!store || !cache || !provider || !protocol || !model || !*model ||
         capability > SNAG_COUNT_UNSUPPORTED || hard_input_tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX ||
-        (capability == SNAG_COUNT_UNKNOWN && !hard_input_tokens))
+        (capability == SNAG_COUNT_UNKNOWN && !hard_input_tokens && !bytes) ||
+        !!bytes != !!tokens || bytes > INT64_MAX / 2u || tokens > INT64_MAX / 2u)
         return snag_errno(EINVAL);
     model = snag_config_model_upstream(provider, model);
     json_t *item = bound_model(cache, provider, protocol, model);
     if (!item) return 1;
-    if (!record_observation(item, capability, hard_input_tokens, false)) return 0;
+    if (!record_observation(item, capability, hard_input_tokens, bytes, tokens, false)) return 0;
 
-    /* Accounting cannot import a catalog refreshed by another running session. */
-    struct snag_model_cache staged = *cache;
-    struct snag_model_cache disk = {0};
+    /* Accounting cannot import a catalog refreshed by another running session.
+     * Copy only the changed path; retained snapshots and immutable model
+     * metadata stay shared instead of cloning the whole discovered catalog. */
+    const json_t *entry = provider_entry(cache->providers, provider->name);
+    json_t *models = json_object_get(entry, "models");
+    size_t provider_index = 0u, model_index = 0u;
+    while (json_array_get(cache->providers, provider_index) != entry) ++provider_index;
+    while (json_array_get(models, model_index) != item) ++model_index;
+    struct snag_model_cache staged = *cache, disk = {0};
+    json_t *next_entry = json_copy((json_t *)entry), *next_models = json_copy(models);
+    json_t *next_item = json_copy(item);
     int lock_fd = -1;
     int rc = -1;
 
-    staged.providers = json_deep_copy(cache->providers);
-    if (!staged.providers) goto memory_error;
-    item = bound_model(&staged, provider, protocol, model);
-    if (record_observation(item, capability, hard_input_tokens, true) < 0) goto memory_error;
+    staged.providers = json_copy(cache->providers);
+    if (!staged.providers || !next_entry || !next_models || !next_item ||
+        json_array_set(next_models, model_index, next_item) < 0 ||
+        json_object_set(next_entry, "models", next_models) < 0 ||
+        json_array_set(staged.providers, provider_index, next_entry) < 0 ||
+        record_observation(next_item, capability, hard_input_tokens, bytes, tokens, true) < 0)
+        goto memory_error;
     lock_fd = lock_cache(store, error, error_size);
     if (lock_fd < 0) goto out;
     int loaded = snag_model_cache_load(store, &disk, error, error_size);
     if (loaded < 0) goto out;
     item = loaded == 0 ? bound_model(&disk, provider, protocol, model) : NULL;
     if (item) {
-        int changed = record_observation(item, capability, hard_input_tokens, true);
+        int changed = record_observation(item, capability, hard_input_tokens, bytes, tokens, true);
         if (changed < 0) goto memory_error;
         if (changed &&
             write_cache(store, disk.providers, disk.updated_at_ms, &disk, error, error_size) < 0)
@@ -528,10 +589,32 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
 memory_error:
     (void)snag_fail(error, error_size, ENOMEM, "cannot update model cache observation");
 out:
+    json_decref(next_item);
+    json_decref(next_models);
+    json_decref(next_entry);
     snag_model_cache_free(&staged);
     snag_model_cache_free(&disk);
     if (lock_fd >= 0) (void)close(lock_fd);
     return rc;
+}
+
+int
+snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache,
+    const struct snag_provider_config *provider, const char *protocol, const char *model,
+    enum snag_count_capability capability, uint64_t hard_input_tokens, char *error,
+    size_t error_size)
+{
+    return cache_record(store, cache, provider, protocol, model, capability,
+        hard_input_tokens, 0u, 0u, error, error_size);
+}
+
+int
+snag_model_cache_learn(struct snag_store *store, struct snag_model_cache *cache,
+    const struct snag_provider_config *provider, const char *protocol, const char *model,
+    uint64_t bytes, uint64_t tokens, char *error, size_t error_size)
+{
+    return cache_record(store, cache, provider, protocol, model, SNAG_COUNT_UNKNOWN,
+        0u, bytes, tokens, error, error_size);
 }
 
 const json_t *

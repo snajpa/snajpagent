@@ -428,24 +428,44 @@ the input-only count payload. Generation and count projections use separate
 top-level objects, so preparing one cannot add routing fields to the other.
 
 Exact preflight is avoided when a compatible completed-response usage anchor
-already accounts for normal transcript growth. When neither is available, a
-matching discovered model may use one representative observation: the exact
-token count paired with the largest canonical model-input byte count seen.
-The estimate derived from that pair adds fixed framing reserve and conservative
-headroom and is labeled `statistical_upper_estimate`, never exact. The
-one-token-per-canonical-byte `qualified_upper_bound` remains the no-sample
-fallback. Neither estimate can by itself terminalize a first provider attempt
-merely because no older complete turn can be compacted.
+already accounts for normal transcript growth. Otherwise the count remains
+unknown unless the endpoint supplies it. Legacy `observed_input_bytes` and
+`observed_input_tokens` are unused placeholders, not representative samples or
+qualified admission bounds. Typed rejections may lower the observed hard input
+ceiling, never advertised limits. Error prose does not train accounting.
 
-Only an exact count response, exact completed-response usage for that request,
-or a typed rejection with an integral requested-input count can update the
-pair. A typed rejection may also lower `observed_hard_input_tokens`. Learned
-facts are separate from advertised `limits`, never copied from configuration,
-never created for an uncached manually typed model, and never inferred from
-error prose. `/status` keeps configured, advertised, observed-ceiling, exact
-usage-anchor, statistical, and byte-bound meanings distinct.
+### Text calibration
 
-The current pre-1.0 `observed_input_bytes` sample measures the accounting
-envelope containing actual Responses input items. The former semantic-tree
-sample field is not accepted; regenerate that disposable cache rather than
-reuse an incomparable ratio. No old-format reader is provided.
+The optional `token_calibration` model member contains positive integer `bytes`,
+`tokens` and `samples`. Its byte measure is the plaintext accounting envelope;
+legacy `observed_input_bytes`/`observed_input_tokens` remain uninterpreted. Exact
+completed input usage, or the request's exact preflight, trains a complete
+plaintext request. Missing or zero measurements, images and requests containing
+encrypted continuation do not train. An earlier input/output usage total cannot
+isolate new visible input beside opaque state because hidden reasoning may not be
+replayed. Persisted plaintext calibration remains available for those estimates;
+output and hidden-reasoning usage never train visible density.
+
+Each accepted sample halves the old byte/token totals before adding the new pair.
+Byte weighting limits the influence of tiny deltas while retaining recent content;
+fractional bytes/token stay usable, with saturating conversion. Calibration serves
+the display and local estimated-token output budgets. Exact counts, usage anchors,
+capacity admission and compaction triggers retain their independent contracts.
+Display estimates keep the `~` label. Text budgets round down to bytes (at least
+one for a positive request); counts round up to tokens. Neither conversion wraps.
+
+Configuration retains token-unit tool budgets until the selected model is known.
+Turn admission resolves that ceiling through the current density and persists the
+existing stable byte snapshot. Later token-named call arguments use the current
+selected-model density and remain capped by that snapshot. Explicit byte settings
+never change units, and provider-native token limits never use this conversion.
+The released result-metadata field `max_output_tokens` is historically byte-valued;
+its storage meaning stays unchanged to preserve verified native import/replay.
+This does not define the units of similarly named tool arguments.
+
+Calibration shares existing endpoint/protocol/upstream-model cache binding and
+locked writer merge; stale writers cannot overwrite other sessions' samples or
+restore removed/rebound models. Catalog refresh preserves same-source calibration.
+Uncached models learn locally without manufacturing discovered metadata. The
+status report exposes density/sample count or the uncalibrated four-byte fallback.
+No extra provider call, tokenizer or canonical session format is introduced. Native compaction invalidates the count anchor, not learned density.

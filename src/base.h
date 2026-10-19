@@ -43,6 +43,14 @@ int snag_parse_count(const char *text, uint64_t *count);
 #define SNAG_MAX_EVENT_LINE (16u * 1024u * 1024u)
 #define SNAG_MEMORY_LIMIT (192u * 1024u * 1024u)
 
+/* Approximate text units only; provider-native limits remain exact tokens. */
+struct snag_token_calibration {
+    uint64_t bytes, tokens, samples;
+};
+uint64_t snag_token_estimate(uint64_t bytes, struct snag_token_calibration calibration);
+uint64_t snag_token_bytes(uint64_t tokens, struct snag_token_calibration calibration);
+void snag_token_calibration_add(struct snag_token_calibration *, uint64_t bytes, uint64_t tokens);
+
 struct snag_buf {
     unsigned char *data;
     size_t len;

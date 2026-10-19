@@ -17,6 +17,12 @@ struct snag_model_cache {
     bool loaded_file_valid;
 };
 
+struct snag_token_calibration snag_model_calibration(const struct snag_model_cache *cache,
+    const struct snag_provider_config *provider, const char *protocol, const char *model);
+int snag_model_cache_learn(struct snag_store *store, struct snag_model_cache *cache,
+    const struct snag_provider_config *provider, const char *protocol, const char *model,
+    uint64_t bytes, uint64_t tokens, char *error, size_t error_size);
+
 enum snag_count_capability { SNAG_COUNT_UNKNOWN, SNAG_COUNT_SUPPORTED, SNAG_COUNT_UNSUPPORTED };
 
 enum snag_capacity_source {

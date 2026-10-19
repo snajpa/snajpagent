@@ -812,3 +812,39 @@ snag_format_count(char *out, size_t size, uint64_t value)
     (void)snprintf(out, size, "%llu.%01llu%s", (unsigned long long)scaled,
         (unsigned long long)tenths, units[unit]);
 }
+
+uint64_t
+snag_token_estimate(uint64_t bytes, struct snag_token_calibration calibration)
+{
+    if (!calibration.bytes || !calibration.tokens)
+        return bytes / 4u + (bytes % 4u != 0u);
+    /* Floating point avoids overflowing the product, including on 32-bit hosts.
+     * Exact provider counts never pass through this local estimate. */
+    long double value = (long double)bytes * calibration.tokens / calibration.bytes;
+    if (value >= (long double)UINT64_MAX) return UINT64_MAX;
+    uint64_t tokens = (uint64_t)value;
+    return tokens + (tokens < value);
+}
+
+void
+snag_token_calibration_add(struct snag_token_calibration *calibration,
+    uint64_t bytes, uint64_t tokens)
+{
+    if (!bytes || !tokens || bytes > INT64_MAX / 2u || tokens > INT64_MAX / 2u) return;
+    /* Byte weighting keeps tiny deltas from dominating a full prompt sample;
+     * decay lets changing conversation content replace stale density. */
+    calibration->bytes = calibration->bytes / 2u + bytes;
+    calibration->tokens = calibration->tokens / 2u + tokens;
+    if (calibration->samples < INT64_MAX) ++calibration->samples;
+}
+
+uint64_t
+snag_token_bytes(uint64_t tokens, struct snag_token_calibration calibration)
+{
+    long double value = !calibration.bytes || !calibration.tokens
+                            ? (long double)tokens * 4u
+                            : (long double)tokens * calibration.bytes / calibration.tokens;
+    if (value >= (long double)UINT64_MAX) return UINT64_MAX;
+    /* Round budgets down, but allow a nonzero request to make progress. */
+    return value < 1u && tokens ? 1u : (uint64_t)value;
+}
