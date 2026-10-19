@@ -8282,7 +8282,7 @@ def run_tool_cases(binary, root, provider, environment):
     def interact(handle, text="", eof=False, yield_ms=10000, status="succeeded", **options):
         return invoke("write_stdin", {
             "handle": handle, "data": text, "eof": eof, "yield_ms": yield_ms,
-            "max_output_tokens": None, "terminate": False, **options}, status)
+            "terminate": False, **options}, status)
 
     def output_page(handle, stream="stdout", offset=0, limit=1024, status="succeeded"):
         result = invoke("read_tool_output", {
@@ -8501,7 +8501,7 @@ def run_tool_cases(binary, root, provider, environment):
             assert result["reason"] == "timeout_handoff"
             assert "process continues in the background" in result["model_text"]
             time.sleep(0.25)
-            done = interact(result["handle"], max_output_tokens=222)
+            done = interact(result["handle"], max_output_bytes=222)
             assert done["max_output_tokens"] == 222
             assert done["stdout"]["retained"] == "survived"
 
