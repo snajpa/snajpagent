@@ -306,7 +306,10 @@ class MCPTests(unittest.TestCase):
         self.config = self.root / 'config'
         self.policy = ''
         self.write_config()
-        self.env = dict(os.environ, SNAJPAGENT_IRC_UI_KEY='irc-ui-secret', PAGER='')
+        home = self.root / 'home'
+        home.mkdir()
+        self.env = dict(os.environ, HOME=str(home),
+                        SNAJPAGENT_IRC_UI_KEY='irc-ui-secret', PAGER='')
         for key in ('OPENAI_API_KEY', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'):
             self.env.pop(key, None)
         self.env['NO_PROXY'] = '*'
@@ -333,7 +336,10 @@ class MCPTests(unittest.TestCase):
 
     def test_catalog_exact(self):
         result = self.run_cli('tools', 'fixture')
-        self.assertIn(b'"x-mcp-header": "Destination"', result.stdout)
+        self.assertIn(b'fixture tools (', result.stdout)
+        self.assertIn(b'send.message', result.stdout)
+        self.assertNotIn(b'"inputSchema":', result.stdout)
+        self.assertNotIn(b'"annotations":', result.stdout)
         request, headers = self.server.requests[0]
         self.assertEqual(headers['Mcp-Method'], 'tools/list')
         self.assertEqual(headers['MCP-Protocol-Version'], '2026-07-28')
@@ -606,7 +612,11 @@ class MCPTests(unittest.TestCase):
         term.output.clear()
         term.write(f'/mcp pending {digest}\r'.encode())
         term.until(b'channel-42')
-        self.assertIn(b'first', term.output)
+        term.until(b'first\\u000a  body')
+        self.assertIn(b'Pending MCP call:', term.output)
+        self.assertIn(b'Tool declaration: object (', term.output)
+        self.assertIn(b'Arguments: object (', term.output)
+        self.assertNotIn(b'"arguments": {', term.output)
         term.output.clear()
         term.write(f'/mcp approve {digest}\r'.encode())
         term.until(b'Approved exactly one')
@@ -671,8 +681,8 @@ class MCPTests(unittest.TestCase):
     def test_pagination_includes_every_tool(self):
         self.server.pages = True
         result = self.run_cli('tools', 'fixture')
-        self.assertIn(b'"name": "first"', result.stdout)
-        self.assertIn(b'"name": "send.message"', result.stdout)
+        self.assertIn(b"  first ", result.stdout)
+        self.assertIn(b"  send.message ", result.stdout)
         self.assertEqual(len(self.server.requests), 2)
 
     def test_pagination_cycle_is_rejected(self):

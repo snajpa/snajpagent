@@ -279,6 +279,31 @@ test_long_canonical_string(void)
     free(text);
 }
 
+static void
+test_human_inspection_preserves_values_and_appends(void)
+{
+    json_t *value = json_pack("{s:[s,i,b,n],s:f}", "line\nbreak", " exact\ntext ",
+        42, 1, "real", 1.25);
+    assert(value);
+    struct snag_buf text = {.max = 4096u};
+    assert(snag_buf_append(&text, "Arguments: ", 11u) == 0);
+    assert(snag_json_inspect(value, &text) == 0);
+    assert(snag_buf_terminate(&text) == 0);
+    assert(!strcmp((char *)text.data,
+        "Arguments: object (2)\n"
+        "  \"line\\u000abreak\": array (4)\n"
+        "    [0]: \" exact\\u000atext \"\n"
+        "    [1]: 42\n"
+        "    [2]: true\n"
+        "    [3]: null\n"
+        "  \"real\": 1.25\n"));
+    snag_buf_free(&text);
+    text.max = 8u;
+    assert(snag_json_inspect(value, &text) < 0);
+    snag_buf_free(&text);
+    json_decref(value);
+}
+
 int
 main(void)
 {
@@ -343,6 +368,7 @@ main(void)
     test_strict_rejects_ambiguous_or_invalid_input();
     test_nesting_limit();
     test_canonical_remains_durable_only();
+    test_human_inspection_preserves_values_and_appends();
     puts("test_json: ok");
     return 0;
 }

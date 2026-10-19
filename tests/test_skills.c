@@ -137,9 +137,45 @@ lazy_resource_cost(void)
     assert(!unlink(resource) && !unlink(path) && !rmdir(directory));
 }
 
+static void
+test_reports_borrow_metadata_and_omit_unrequested_payloads(void)
+{
+    json_t *result = json_pack("{s:[{s:s,s:s,s:s}],s:i,s:i}", "entries",
+        "name", "sample", "id", "sample@1234", "description", "A sample task",
+        "total", 1, "remaining", 0);
+    assert(result);
+    void *(*allocate)(size_t);
+    void (*release)(void *);
+    json_get_alloc_funcs(&allocate, &release);
+    json_set_alloc_funcs(counted_malloc, release);
+    allocations = allocated_bytes = 0u;
+    struct snag_buf report = {.max = 4096u};
+    assert(snag_skills_report(&report, "list", result) == 0);
+    assert(snag_buf_terminate(&report) == 0);
+    assert(!allocations && !allocated_bytes);
+    json_set_alloc_funcs(allocate, release);
+    assert(!strcmp((char *)report.data,
+        "Available skills (1 of 1):\n  sample (sample@1234) — A sample task"));
+    size_t capacity = report.cap;
+    json_t *entry = json_array_get(json_object_get(result, "entries"), 0u);
+    char *payload = malloc(1024u * 1024u);
+    assert(payload);
+    memset(payload, 'x', 1024u * 1024u);
+    assert(json_object_set_new(entry, "metadata",
+        json_stringn(payload, 1024u * 1024u)) == 0);
+    free(payload);
+    snag_buf_reset(&report);
+    assert(snag_skills_report(&report, "list", result) == 0);
+    assert(snag_buf_terminate(&report) == 0 && report.cap == capacity);
+    assert(!strstr((char *)report.data, "metadata"));
+    snag_buf_free(&report);
+    json_decref(result);
+}
+
 int
 main(int argc, char **argv)
 {
+    test_reports_borrow_metadata_and_omit_unrequested_payloads();
     if (argc == 2 && !strcmp(argv[1], "--lazy-resource-cost")) {
         lazy_resource_cost();
         return 0;

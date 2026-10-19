@@ -43,6 +43,29 @@ class SkillsCase(unittest.TestCase):
 
 class Skills(SkillsCase):
 
+    def test_default_cli_reports_are_readable_and_json_is_explicit(self):
+        package = self.skill(self.dotdir / "skills", body="VISIBLE-SOURCE-BODY")
+        commands = [("list",), ("show", "sample"), ("paths",), ("validate", package),
+            ("create", self.workspace / "created"), ("install", package),
+            ("update", "sample"), ("remove", "sample")]
+        titles = ["Available skills (1 of 1):", "Skill: sample", "Skill paths:",
+            "Valid skill: sample", "Created skill: created", "Installed skill: sample",
+            "Updated skill: sample", "Removed skill: sample"]
+        for arguments, title in zip(commands, titles):
+            with self.subTest(command=arguments[0]):
+                result = subprocess.run([BINARY, "skills", "--dotdir", str(self.dotdir),
+                    "--cwd", str(self.workspace), *map(str, arguments)], env=self.environment,
+                    capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(result.stdout.startswith(title), result.stdout)
+                self.assertNotIn('"entries":', result.stdout)
+                self.assertNotIn('"digest":', result.stdout)
+                if arguments[0] == "show":
+                    self.assertIn("VISIBLE-SOURCE-BODY", result.stdout)
+                else:
+                    self.assertNotIn("VISIBLE-SOURCE-BODY", result.stdout)
+        self.assertIn("entries", self.run_cli("list"))
+
     def test_yaml_validation_and_isolation(self):
         roots = self.dotdir / "skills"
         package = self.skill(roots, description="|\n  Unicode café and bundled resources")
@@ -361,11 +384,127 @@ class RuntimeSkills(SkillsCase):
             self.assertNotIn("unloaded-package", summary)
             self.assertNotIn("PRIVATE-PINNED-GUIDANCE", summary)
             self.assertNotIn('"entries"', summary)
-            terminal.submit_wait("/skills clear sample", '"active": []')
+            screen = terminal.submit_wait("/skills clear sample", "• Skill unloaded: sample")
+            self.assertEqual(screen.count("• Skill unloaded: sample"), 1)
+            self.assertNotIn('"action": "clear"', screen)
+            terminal.submit_wait("/skills clear sample", "• No skills unloaded.")
             terminal.submit("/skills")
             terminal.wait_until(lambda text: text.count("No skills loaded.") == 1,
                 "empty loaded-skills summary after explicit clear")
             self.assertEqual(len(provider.requests), 1)
+
+    def test_skill_unload_by_id_and_all_has_colored_bullets(self):
+        from tmux_terminal import TmuxTerminal
+        provider = self.configured_provider()
+        self.skill(self.dotdir / "skills", body="SAMPLE-GUIDANCE")
+        self.skill(self.dotdir / "skills", "sibling", body="SIBLING-GUIDANCE")
+        entry = next(item for item in self.run_cli("list")["entries"]
+            if item["name"] == "sample")
+        requests = []
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            provider.reply(handler, provider.response_body(sequence,
+                f"GUIDANCE_DONE_{len(requests)}").encode(), close_header=True)
+
+        provider.runtime_handler = respond
+        for view in ("chat", "rollout"):
+            with self.subTest(view=view), TmuxTerminal(self.root / view, BINARY,
+                    self.workspace, self.dotdir, self.dotdir / "config.ini", 160, 48,
+                    args=("--no-listen", "--no-client", "--color=always", "--view", "rollout"),
+                    environment=self.environment) as terminal:
+                terminal.wait("session id")
+                terminal.submit_wait("Use $sample and $sibling.",
+                    f"GUIDANCE_DONE_{len(requests) + 1}")
+                terminal.submit("/" + view)
+                notice = "• Skill unloaded: " + entry["id"]
+                terminal.submit("/skills clear " + entry["id"])
+                if view == "chat":
+                    terminal.submit("/rollout")
+                screen = terminal.wait(notice, join_wrapped=True)
+                self.assertEqual(screen.count(notice), 1)
+                self.assertRegex(terminal.capture_styled(), r"\x1b\[[0-9;]*32m•")
+                screen = terminal.submit_wait("/skills", "Loaded skills (1):", join_wrapped=True)
+                summary = screen.rsplit("Loaded skills (1):", 1)[1]
+                self.assertIn("sibling", summary)
+                self.assertNotIn(entry["id"], summary)
+                screen = terminal.submit_wait("/skills clear", "• Skills unloaded.")
+                self.assertEqual(screen.count("• Skills unloaded."), 1)
+                terminal.submit_wait("/skills clear", "• No skills unloaded.")
+                terminal.submit("/rollout")
+                terminal.submit_wait("Continue without guidance.",
+                    f"GUIDANCE_DONE_{len(requests) + 1}")
+                guidance = [message for message in requests[-1]["input"]
+                    if message.get("role") in ("system", "developer")]
+                self.assertNotIn("SAMPLE-GUIDANCE", json.dumps(guidance))
+                self.assertNotIn("SIBLING-GUIDANCE", json.dumps(guidance))
+
+    def test_interactive_skill_inspection_and_management_are_readable(self):
+        from tmux_terminal import TmuxTerminal
+        provider = self.configured_provider()
+        package = self.skill(self.dotdir / "skills", body="VISIBLE-SOURCE-BODY")
+        for view in ("chat", "rollout"):
+            with self.subTest(view=view), TmuxTerminal(self.root / ("inspect-" + view), BINARY,
+                    self.workspace, self.dotdir, self.dotdir / "config.ini", 160, 48,
+                    args=("--no-listen", "--no-client", "--view", view),
+                    environment=self.environment) as terminal:
+                terminal.wait("session id")
+                for command, expected in [
+                    ("/skills list", "Available skills (1 of 1):"),
+                    ("/skills show sample", "VISIBLE-SOURCE-BODY"),
+                    ("/skills refresh", "Available skills (1 of 1):"),
+                    ("/skills paths", "Skill paths:"),
+                    (f"/skills validate {package}", "Valid skill: sample"),
+                    (f"/skills install {package}", "Installed skill: sample"),
+                    ("/skills update sample", "Updated skill: sample"),
+                    ("/skills remove sample", "Removed skill: sample"),
+                ]:
+                    screen = terminal.submit_wait(command, expected)
+                    self.assertNotIn('"entries":', screen)
+                    self.assertNotIn('"digest":', screen)
+                    self.assertNotIn('"generations_retained":', screen)
+        self.assertEqual(provider.requests, [])
+
+    def test_model_can_load_unload_and_reload_skill_guidance(self):
+        provider = self.configured_provider()
+        self.skill(self.dotdir / "skills", body="LIFECYCLE-GUIDANCE")
+        entry = self.run_cli("list")["entries"][0]
+        for selector in ("sample", entry["id"]):
+            requests = []
+
+            def respond(handler, request, sequence):
+                requests.append(request)
+                actions = [
+                    {"action": "activate", "id": "sample"},
+                    {"action": "deactivate"},
+                    {"action": "deactivate", "id": selector},
+                    {"action": "deactivate", "id": selector},
+                    {"action": "activate", "id": "sample"},
+                ]
+                if len(requests) <= len(actions):
+                    body = provider.function_body(sequence, f"skill-{len(requests)}", "skills",
+                        actions[len(requests) - 1])
+                else:
+                    body = provider.response_body(sequence, "lifecycle complete")
+                provider.reply(handler, body.encode(), close_header=True)
+
+            provider.runtime_handler = respond
+            result = self.execute("Manage skill guidance with tools.")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(requests), 6, result.stderr)
+            schema = next(tool for tool in requests[0]["tools"] if tool.get("name") == "skills")
+            self.assertIn("deactivate", schema["parameters"]["properties"]["action"]["enum"])
+            for index, expected in [(1, True), (2, True), (3, False), (4, False), (5, True)]:
+                guidance = [message for message in requests[index]["input"]
+                    if message.get("role") in ("system", "developer")]
+                self.assertEqual("LIFECYCLE-GUIDANCE" in json.dumps(guidance), expected)
+            for index, removed in [(3, 1), (4, 0)]:
+                outputs = [item["output"] for item in requests[index]["input"]
+                    if item.get("type") == "function_call_output"]
+                self.assertEqual(json.loads(outputs[-1])["removed"], removed)
+            self.assertEqual(result.stderr.count("• Skill loaded: sample"), 2)
+            self.assertEqual(result.stderr.count("• Skill unloaded: " + selector), 1)
+            self.assertEqual(result.stderr.count("• No skills unloaded."), 1)
 
     def test_price_alongside_available_skill_preserves_activation(self):
         provider = self.configured_provider()
