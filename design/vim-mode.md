@@ -1136,6 +1136,9 @@ Deterministic partial-write fixtures exercise interleaved protocol replies,
 unsent cancellation and socket closure when a recipient changes mid-frame.
 Application startup now binds this directory before restoring IRC history.
 Typed admission/replay preserves pending and active private reply obligations.
+Restored availability determines whether a reply is still required. Unavailable
+queries and replaced channel memberships retain their undelivered status without
+prompting another reply; current unrelated targets keep their own requirements.
 Operator queries stay out of provider input; agent NOTICE/history and proven
 nick changes add context at the next natural request without waking a turn.
 Request-time directory and connection snapshots pin model query sends, including

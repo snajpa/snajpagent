@@ -198,6 +198,49 @@ conversation_replied(json_t *conversations, const struct snag_irc_event *event,
     return 0;
 }
 
+/* The directory and admitted events have already passed the event decoder.
+ * Borrow their routing fields; pending checks need no full event copies. */
+static bool
+conversation_reply_available(const json_t *entry, const json_t *directory,
+    const struct snag_irc_destinations *destinations)
+{
+    const json_t *event = json_object_get(entry, "event");
+    const json_t *route = json_object_get(event, "routing");
+    const char *connection_id = snag_json_string(route, "connection_id");
+    const char *kind = snag_json_string(route, "conversation_kind");
+    if (!connection_id || !kind) return false;
+    bool channel = !strcmp(kind, "channel");
+    const char *id = snag_json_string(channel ? json_object_get(event, "reply_to") : route,
+        "conversation_id");
+    if (!id) return false;
+    const json_t *connection = json_object_get(directory, connection_id);
+    const json_t *item = json_object_get(json_object_get(connection, "conversations"), id);
+    const json_t *data = json_object_get(item, "data");
+    const json_t *current = json_object_get(data, "routing");
+    json_int_t generation = json_integer_value(json_object_get(route, "generation"));
+    if (!generation ||
+        generation != json_integer_value(json_object_get(connection, "generation")) ||
+        generation != json_integer_value(json_object_get(current, "generation")) ||
+        strcmp(snag_json_string(current, "identity"), "agent")) {
+        return false;
+    }
+    if (!json_is_true(json_object_get(json_object_get(connection, "connected"), "agent")) ||
+        strcmp(snag_json_string(current, "conversation_kind"), kind) ||
+        (channel ? !json_is_true(json_object_get(current, "joined")) ||
+                       !json_equal(json_object_get(current, "membership"),
+                           json_object_get(json_object_get(event, "reply_to"), "membership"))
+                 : !strcmp(snag_json_string(data, "kind"), "quit"))) {
+        return false;
+    }
+    for (size_t i = 0u; i < destinations->count; ++i) {
+        if (destinations->items[i].generation == (uint64_t)generation &&
+            !strcmp(destinations->items[i].connection, connection_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool
 snag_app_irc_replies_pending(const struct app_state *app)
 {
@@ -207,7 +250,11 @@ snag_app_irc_replies_pending(const struct app_state *app)
     json_object_foreach(app->irc_turn_conversations, key, entry)
     {
         (void)key;
-        if (!json_is_true(json_object_get(entry, "replied"))) return true;
+        if (!json_is_true(json_object_get(entry, "replied")) &&
+            conversation_reply_available(entry, app->session.irc_conversations,
+                &app->irc_destinations)) {
+            return true;
+        }
     }
     return false;
 }
@@ -922,8 +969,6 @@ reply_context(const struct app_state *app, struct snag_buf *text)
                                            app->irc_turn_replies.count) < 0)
         return -1;
     bool first = true;
-    struct snag_irc_scopes scopes;
-    snag_irc_capture_scopes(&app->irc_request_destinations, &scopes);
     const char *key;
     json_t *entry;
     json_object_foreach(app->irc_turn_conversations, key, entry)
@@ -934,34 +979,15 @@ reply_context(const struct app_state *app, struct snag_buf *text)
         if (snag_irc_event_payload_read(json_object_get(entry, "event"), &original) < 0) return -1;
         bool channel = original.route.kind == SNAG_IRC_CHANNEL;
         const char *id = channel ? original.reply_conversation : original.route.conversation;
-        const json_t *connection =
-            json_object_get(app->irc_request_conversations, original.route.connection);
-        const json_t *item = json_object_get(json_object_get(connection, "conversations"), id);
-        bool available = false;
-        if (item) {
-            struct snag_irc_event current;
-            uint64_t generation = 0u;
-            if (snag_irc_event_payload_read(json_object_get(item, "data"), &current) < 0 ||
-                snag_json_integer_u64(connection, "generation", &generation) < 0)
-                return -1;
-            available =
-                current.route.identity == SNAG_IRC_AGENT &&
-                current.route.kind == original.route.kind &&
-                current.route.generation == original.route.generation &&
-                generation == original.route.generation &&
-                snag_app_irc_conversation_available(
-                    &scopes, app->irc_request_conversations, &current) &&
-                (channel ? current.route.joined &&
-                               !strcmp(current.route.membership, original.reply_membership)
-                         : current.kind != SNAG_IRC_QUIT);
-        }
+        bool available = conversation_reply_available(entry, app->irc_request_conversations,
+            &app->irc_request_destinations);
         if (first &&
             snag_buf_printf(text,
-                "Outstanding IRC replies for this turn: use irc_send to each available target. "
-                "Targets retain the connection and membership at receipt time. "
-                "If unavailable, explain the missing reply path; do not substitute another "
-                "conversation or a newer membership. A NOTICE can close an informational "
-                "private query; channel replies require PRIVMSG.\n") < 0)
+                "Outstanding IRC replies for this turn: %s"
+                "Use irc_send for available targets only. Unavailable targets require no reply "
+                "and are not delivered. Never redirect an old reply to another conversation or "
+                "membership. NOTICE can close a private query; channels require PRIVMSG.\n",
+                snag_app_irc_replies_pending(app) ? "" : "none. ") < 0)
             return -1;
         first = false;
         struct snag_buf line = {.max = SNAG_MAX_IRC_SNAPSHOT};

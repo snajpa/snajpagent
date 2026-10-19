@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Stop requiring replies to unavailable IRC conversations after reconnect,
+  peer departure or channel membership replacement. Preserve the original
+  undelivered target and exact private/channel routing boundaries on resume.
+
 - Display concise human-readable skill command reports by default; preserve
   explicit CLI `--json` and model tool results. Summarize MCP tools and pending
   calls while keeping exact approval arguments inspectable.

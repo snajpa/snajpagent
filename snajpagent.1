@@ -850,9 +850,12 @@ those belonging to the current pending input or active turn.
 External channel requests retain the agent's channel ID, connection generation
 and membership at receipt time. Each request lists its outstanding reply targets.
 A successful message to that exact membership satisfies the requirement;
-messages in other channels and replacement memberships after rejoin or reconnect
-leave it pending. An unavailable agent membership is shown as unavailable.
-The model must explain that missing reply path instead of choosing another room.
+messages in other channels never satisfy it. After a disconnect, peer departure
+or membership replacement, an unreachable target is shown as unavailable and
+requires no further reply. Its original reply remains undelivered.
+Fresh contact uses an explicit current target; an old reply is never redirected
+to another conversation or membership. Resume derives availability from the
+restored connection and conversation state.
 Shared channels admit one copy of incoming traffic. Channels joined only by the
 agent also reach model context.
 .PP

@@ -675,7 +675,10 @@ handling; pending or written sends remain unconfirmed and must not be resent
 merely because the receipt wait ended. Transport events stay in the journal and
 operator views without becoming additional model admissions.
 Local-mention reply obligations belong to their originating targets, not an
-unrelated successful send.
+unrelated successful send. An unavailable target remains recorded as undelivered
+and no longer requires a reply. Availability follows the exact connection
+generation and channel membership; fresh contact selects an explicit current
+target without rebinding an old reply.
 
 Tool calls are durable and use the same start/result ordering and secret-safe
 rendering as other tools. One `-v` shows compact calls without output; `-vv`
