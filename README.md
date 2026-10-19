@@ -10,8 +10,8 @@ sessions carry work across turns; IRC connects agents across machines.
 [Install](#install-and-choose-a-provider) ·
 [User manual](https://agent.snajpa.net/manual.html)
 
-This guide covers current source. Downloads include a matching manual; check
-`snajpagent -V` when behavior differs.
+This guide covers current source. Check `snajpagent -V` and the downloaded
+manual when behavior differs.
 
 ## 1. Work on a project
 
@@ -21,8 +21,8 @@ This guide covers current source. Downloads include a matching manual; check
 snajpagent
 ```
 
-Describe the outcome, constraints and repository; press Enter. Persistent goals
-continue across turns until complete or blocked.
+Describe the outcome, constraints and repository. Goals continue until complete
+or blocked.
 
 `work_context` enters a temporary project or harness role, then returns to the
 broader assignment with conversation, model and notes retained. Goals are optional.
@@ -61,8 +61,8 @@ model with `/model` to enable new input; the selection survives resume.
 
 ### Commands, history and context
 
-Foreground commands and `$EDITOR` own input until finished. Controls acknowledge
-safe-boundary waits; session deletion requires confirmation.
+Foreground commands and `$EDITOR` own input until finished. Session deletion
+requires confirmation.
 
 `/history` shows the last turn, `/history 10` the last ten, and `/history 0`
 counts. Up/Ctrl-R navigate prompt history. `/cat PATH` opens a file in `$PAGER`
@@ -135,8 +135,8 @@ snajpagent -l 25
 snajpagent --resume --last
 ```
 
-`-l` groups attached, detached and other running sessions, then the ten most
-recent stored sessions. Groups sort by saved activity. `-l N` changes the stored count; `-l 0` lists running sessions.
+`-l` groups running sessions, then lists ten stored sessions, sorted by activity.
+`-l N` changes the stored count; `-l 0` lists running sessions.
 
 Convert stopped legacy sessions with `snajpagent convert --jobs 4`. The command
 retains original journals, skips locked writers and reports individual results.
@@ -215,9 +215,9 @@ data destinations and capture controls.
 
 ### Keep useful findings in files
 
-Keep decisions and findings in project notes linked from `AGENTS.md`, distinguishing
-proposals from approvals. `-d DIR` adds a documentation root; repeat it for shared
-notes. Relative paths use the launch directory and persist with the session.
+Link project notes from `AGENTS.md`; distinguish proposals from approvals.
+Repeat `-d DIR` for documentation roots. Relative paths use the launch directory
+and persist with the session.
 
 ## 2. Work together
 
