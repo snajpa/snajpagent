@@ -1079,7 +1079,7 @@ view_submit(void *opaque, const char *id, const char *text, const json_t *route,
     struct snag_ui_display *display = opaque;
     struct snag_ui_runtime *runtime = display->runtime;
     if (display->suspended || display->input_closed ||
-        atomic_load(&runtime->session_attachment) != generation)
+        (generation && atomic_load(&runtime->session_attachment) != generation))
         return snag_errno(ESTALE);
     if (queue_full(&runtime->actions) || display->local) return snag_errno(EAGAIN);
     /* Semantic controllers paint independently; refresh their submission snapshot
@@ -3189,8 +3189,10 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
             return -1;
         }
     }
-    if (item->interface_input && (item->attachment != atomic_load(&runtime->session_attachment) ||
-                                     (ui->native && !item->attachment))) {
+    /* Independent semantic send has a receipt ID and no controller generation. */
+    if (item->interface_input && (item->attachment || !item->view_request[0]) &&
+        (item->attachment != atomic_load(&runtime->session_attachment) ||
+            (ui->native && !item->attachment))) {
         if (item->steering) atomic_fetch_sub(&runtime->steering_pending, 1u);
         (void)snag_ui_view_result(
             ui, item->view_request, "rejected", 0u, "originating controller detached");

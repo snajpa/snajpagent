@@ -477,6 +477,7 @@ snag_cli_usage(int fd)
         " --resume [OPTIONS] [SESSION_ID|-N NAME|--last] [-- FOLLOW-UP...]\n"
         "       " SNAJPAGENT_NAME " --attach [--dotdir DIR] [SESSION_ID|-N NAME] (alias -A)\n"
         "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n"
+        "       " SNAJPAGENT_NAME " send [--dotdir DIR] SESSION_ID [-- PROMPT...]\n"
         "       " SNAJPAGENT_NAME " -l [N] [OPTIONS]\n"
         "       " SNAJPAGENT_NAME " vm [--dotdir DIR] [-N NAME|--resume WORKSPACE|--last|-l [N]]\n"
         "       " SNAJPAGENT_NAME " skills [--dotdir DIR] COMMAND [ARGS] (see skills --help)\n"

@@ -51,6 +51,7 @@ struct snag_view_server;
 struct snag_view_callbacks {
     /* All callbacks run on the presentation owner, never on the engine. */
     void (*bound)(void *, uint64_t generation);
+    /* Generation zero is an independent send, never a controller attachment. */
     int (*submit)(void *, const char *id, const char *text, const json_t *route,
         uint64_t generation, bool terminal, bool queued, int verbosity);
     int (*control)(void *, bool quit);

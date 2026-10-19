@@ -7,6 +7,7 @@
 #include "office.h"
 #include "render.h"
 #include "remote.h"
+#include "send.h"
 #include "snajpagent.h"
 #include "skills.h"
 #include "store_convert.h"
@@ -38,6 +39,7 @@ run(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "optimize"))
         return snag_optimize_main(argc - 2, argv + 2);
     if (argc > 1 && !strcmp(argv[1], "top")) return snag_top_main(argc - 2, argv + 2);
+    if (argc > 1 && !strcmp(argv[1], "send")) return snag_send_main(argc - 2, argv + 2);
     snag_office_program(argv[0]);
     if (argc > 1 && !strcmp(argv[1], "--internal-session-owner"))
         return snag_app_owner_main(argc, argv);

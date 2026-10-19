@@ -341,6 +341,7 @@ struct view_draft {
 
 struct view_receipt {
     char id[SNAG_ID_HEX_LEN + 1u], sha256[SNAG_SHA256_HEX_LEN + 1u];
+    bool independent;
     json_t *result;
     struct view_draft *draft;
     char *command_text;
@@ -676,7 +677,7 @@ refuse_request(struct view_peer *peer, const json_t *message, const char *error)
 {
     const char *type = snag_json_string(message, "type");
     const char *id = snag_json_string(message, "id");
-    if (type && snag_string_in(type, "submit command queue") && request_id(id))
+    if (type && snag_string_in(type, "submit command queue send") && request_id(id))
         return reply(peer, json_pack("{s:s,s:s,s:s}", "type", "error", "id", id, "message", error));
     uint64_t edit;
     if (type && !strcmp(type, "draft") &&
@@ -737,6 +738,7 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     if (!request_id(id) || !text) return refuse_request(peer, message, "invalid submission");
     bool command = !strcmp(snag_json_string(message, "type"), "command");
     bool queued = !strcmp(snag_json_string(message, "type"), "queue");
+    bool independent = !strcmp(snag_json_string(message, "type"), "send");
     if (!queued && command != snag_prompt_command(text))
         return refuse_request(peer, message, "use the command capability for slash commands");
     const json_t *route = json_object_get(message, "route");
@@ -757,7 +759,8 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     snag_sha256_hex(text, strlen(text), digest);
     struct view_receipt *receipt = find_receipt(server, id);
     if (receipt) {
-        if (receipt->command != command || receipt->queued != queued || receipt->draft != draft ||
+        if (receipt->command != command || receipt->queued != queued ||
+            receipt->independent != independent || receipt->draft != draft ||
             receipt->verbosity != verbosity || strcmp(receipt->sha256, digest))
             return refuse_request(peer, message, "request ID already used");
         return reply(peer, json_incref(receipt->result));
@@ -788,6 +791,7 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     receipt->pending = true;
     receipt->command = command;
     receipt->queued = queued;
+    receipt->independent = independent;
     receipt->verbosity = verbosity;
     receipt->draft_revision = draft_revision;
     receipt->draft = draft;
@@ -795,7 +799,7 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     server->receipts = server->pending = receipt;
     peer->waiting = receipt;
     if (server->callbacks.submit(server->callbacks.opaque, id, text, draft->route,
-        peer->generation, false, queued, verbosity) < 0)
+        independent ? 0u : peer->generation, false, queued, verbosity) < 0)
         return snag_view_server_result(server, id, "rejected", 0u, "admission unavailable");
     /* Pending is deliberately not an acceptance acknowledgement. The final
      * result is published by the engine only after its durable admission. */
@@ -810,6 +814,7 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
     const char *fields = !strcmp(type, "hello") ? "type version" :
         (!strcmp(type, "reserve") || !strcmp(type, "reports")) ? "type" :
         !strcmp(type, "receipt") ? "type id" :
+        !strcmp(type, "send") ? "type id text" :
         !strcmp(type, "draft_get") ? "type generation route" :
         !strcmp(type, "draft") ? "type generation route revision edit text cursor" :
         !strcmp(type, "editor_feedback") ? "type generation kind route label text" :
@@ -846,6 +851,7 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         }
         if (!features || json_array_append_new(features, json_string("command_verbosity")) < 0 ||
             json_array_append_new(features, json_string("command_chains")) < 0 ||
+            json_array_append_new(features, json_string("send")) < 0 ||
             json_array_append_new(features, json_string("queue")) < 0) {
             json_decref(capabilities);
             return -1;
@@ -872,6 +878,7 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         return reply(peer, receipt ? json_incref(receipt->result) :
             json_pack("{s:s,s:s,s:s}", "type", "result", "id", id, "status", "unknown"));
     }
+    if (!strcmp(type, "send")) return submit(server, peer, message);
     if (!strcmp(type, "reserve")) {
         if (peer->generation || (server->relay &&
             snag_session_relay_view_reserve(server->relay, &peer->generation) < 0))
