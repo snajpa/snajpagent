@@ -1403,6 +1403,29 @@ class ControlTests(unittest.TestCase):
         child.finish()
         self.assertEqual(self.inputs(), [])
 
+    def test_model_none_discards_workspace_input_and_releases_composer(self):
+        child = self.start('-N', 'model-none')
+        child.command('attach ' + self.owner.sid)
+        child.attached()
+        child.write(b'i/model none\r')
+        child.repaint_until(b'model: none')
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None)
+        child.write(b'discard workspace input\r')
+        child.repaint_until(b'Input discarded: model none')
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None and
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] == '')
+        self.assertEqual(self.inputs(), [])
+        child.write(b'/model host-model\r')
+        child.repaint_until(b'model for next turn: fake / host-model')
+        child.write(b'new workspace input\r')
+        event = self.owner.wait_event('input_received')
+        self.assertEqual(event['data']['text'], 'new workspace input')
+        self.assertEqual(len(self.inputs()), 1)
+        self.escape(child)
+        child.finish('workspace detach')
+
     def test_picker_attach_unicode_paste_submit_and_newer_draft(self):
         child = self.start('-N', 'composing')
         child.until(self.owner.sid[:8].encode())

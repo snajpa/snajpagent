@@ -53,6 +53,35 @@ class QueryViewTests(QueryFixture):
         request = self.view.submit(text, route=route, **options)
         return request, self.view.result(request)
 
+    def test_model_none_keeps_chat_but_excludes_offline_irc_from_model(self):
+        result = self.command('/model none')
+        self.assertEqual(result['outcome'], 'ok', result)
+        requests_before = len(self.seen)
+        self.direct('querybot', 'discard private while none')
+        self.direct('#lab', 'querybot: discard room while none')
+        off = [e for e in self.events() if e['type'] == 'irc_event_v2' and
+               e['data'].get('text') in ('discard private while none',
+                                        'querybot: discard room while none')]
+        self.assertEqual(len(off), 2)
+        self.assertTrue(all(not e['data']['input'] for e in off), off)
+        self.assertEqual(len(self.seen), requests_before)
+        route = self.query('query-peer')
+        _, result = self.send(route, 'operator still chats')
+        self.assertEqual(result['status'], 'committed', result)
+        self.wait_wire(self.peer, b'PRIVMSG query-peer :operator still chats')
+        channel = self.command('/chat #lab')['selection']
+        _, result = self.send(channel, 'operator still chats in room')
+        self.assertEqual(result['status'], 'committed', result)
+        self.wait_wire(self.peer, b'PRIVMSG #lab :operator still chats in room')
+        self.assertEqual(self.command('/model host-model')['outcome'], 'ok')
+        _, result = self.send('rollout', 'new input after none')
+        self.assertEqual(result['status'], 'committed', result)
+        self.wait_idle()
+        wire = str(self.seen)
+        self.assertIn('new input after none', wire)
+        self.assertNotIn('discard private while none', wire)
+        self.assertNotIn('discard room while none', wire)
+
     def test_separate_query_drafts_send_once_without_provider_input(self):
         first = self.query('query-peer')
         second = self.query('observer')

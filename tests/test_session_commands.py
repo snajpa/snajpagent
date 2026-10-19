@@ -37,6 +37,63 @@ class CommandTests(unittest.TestCase):
         request = self.peer.command(text, **options)
         return self.peer.result(request)
 
+    def test_model_none_discards_input_and_reenables_only_new_input(self):
+        seen = []
+        def reply(handler, request, sequence):
+            seen.append(request)
+            self.owner.provider.reply(handler, self.owner.provider.response_body(
+                sequence, 'enabled answer').encode(), close_header=True)
+        self.owner.provider.runtime_handler = reply
+        self.assertEqual(self.command('/model none')['outcome'], 'ok')
+        self.assertIn(b'model: none', self.report(self.command('/status')))
+        before = self.owner.events()[-1]['seq']
+        for text in ('discard ordinary', '/ro discard readonly'):
+            request = self.peer.submit(text)
+            result = self.peer.result(request)
+            self.assertEqual(result['status'], 'discarded', result)
+            self.peer.submit(text, request)
+            self.assertEqual(self.peer.result(request), result)
+        self.assertEqual(self.command('/compact')['outcome'], 'error')
+        self.assertFalse(seen)
+        self.assertFalse(any(e['type'] in ('input_received', 'steering_added',
+            'future_turn_queued', 'response_started', 'compact_started')
+            for e in self.owner.events() if e['seq'] > before))
+        self.assertEqual(self.command('/model host-model')['outcome'], 'ok')
+        self.assertEqual(self.peer.result(self.peer.submit('new enabled input'))['status'],
+                         'committed')
+        self.owner.wait_event('turn_completed', before)
+        self.assertTrue(seen)
+        wire = str(seen)
+        self.assertIn('new enabled input', wire)
+        self.assertNotIn('discard ordinary', wire)
+        self.assertNotIn('discard readonly', wire)
+        self.assertNotIn('discard queued', wire)
+
+    def test_model_none_cancels_an_active_request_before_another_request(self):
+        import threading
+        started = threading.Event()
+        seen = []
+        def held(handler, request, sequence):
+            seen.append(request)
+            started.set()
+            self.owner.release.wait(10)
+            try:
+                self.owner.provider.reply(handler, self.owner.provider.response_body(
+                    sequence, 'late answer').encode(), close_header=True)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        self.owner.provider.runtime_handler = held
+        self.assertEqual(self.peer.result(self.peer.submit('held request'))['status'], 'committed')
+        self.assertTrue(started.wait(5))
+        result = self.command('/model none')
+        self.assertEqual(result['outcome'], 'ok', result)
+        self.owner.wait_event('turn_interrupted')
+        self.assertEqual(self.peer.result(self.peer.submit('discard after cancel'))['status'],
+                         'discarded')
+        self.owner.release.set()
+        self.assertEqual(len(seen), 1)
+        self.assertIn(b'model: none', self.report(self.command('/status')))
+
     def test_status_and_help_are_operator_only_immutable_reports(self):
         original = self.owner.journal.read_bytes()
         self.assertIn('commands', self.peer.capabilities['features'])

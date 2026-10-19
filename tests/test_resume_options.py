@@ -21,6 +21,43 @@ from test_session_listing import append_event
 from test_session_view import View
 
 
+def check_model_none(binary):
+    with tempfile.TemporaryDirectory(prefix="snag-none-resume-") as tmp:
+        root = Path(tmp).resolve()
+        config = root / "empty.ini"
+        config.write_text("")
+        config.chmod(0o600)
+        base = [str(binary), "--config", str(config), "--dotdir", str(root / "state"),
+                "--no-color", "--no-markdown", "--no-listen", "--no-client"]
+        result = subprocess.run([*base, "-m", "none", "-e", "--", "drop cli input"],
+                                capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        assert "input discarded: model none" in result.stderr, result.stderr
+        child = RemoteProcess(root, [*base, "-m", "none"], wrapped=None)
+        try:
+            child.until(b"none", 10)
+            os.write(child.master, b"drop terminal input\r")
+            child.until(b"input discarded: model none", 10)
+            child.output.clear()
+            os.write(child.master, b"/q drop terminal queue\r")
+            child.until(b"input discarded: model none", 10)
+            os.write(child.master, b"/session name no-model\r")
+            child.until(b"session name: no-model", 10)
+            os.write(child.master, b"/exit\r")
+            child.wait(0)
+        finally:
+            child.close()
+        journal, = journal_paths(root / "state")
+        assert not any(e["type"] == "input_received" for e in read_events(journal))
+        sid = journal.parent.name
+        result = subprocess.run([*base, "--resume", sid, "-e", "--", "drop resume input"],
+                                capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        assert "input discarded: model none" in result.stderr, result.stderr
+        assert not any(e["type"] == "input_received" for e in read_events(journal))
+    print("model none: provider-free CLI, terminal discard and persisted resume: ok")
+
+
 def check(binary):
     provider = harness.FakeResponses()
     provider.runtime_handler = lambda handler, request, sequence: provider.reply(
@@ -546,6 +583,7 @@ def check_display_preferences(binary):
 
 if __name__ == "__main__":
     binary = Path(sys.argv[1] if len(sys.argv) > 1 else "./snajpagent").resolve()
+    check_model_none(binary)
     check(binary)
     check_network(binary, Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None)
     check_hosted_rename_resume(binary)
