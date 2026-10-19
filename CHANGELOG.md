@@ -23,6 +23,17 @@
   membership across larger saved rooms. Full servers send an IRC error; clients
   show the rejection once per outage and distinguish handshakes from retries.
 
+- Calibrate context-meter estimates from measured input usage. Learned text density
+  carries across compaction and matching cached-model resumes; `/status` shows the
+  density and sample count. Exact usage remains authoritative, and encrypted or
+  image payloads stay out of text calibration.
+
+- Interpret token-named local output controls as estimated tokens using learned
+  model density. This includes `max_output_tokens`, `max_output_approx_tokens`
+  and `tool_output_approx_tokens`; byte-named controls and provider-native token
+  limits keep their units. Replace byte-valued `[tool] max_output_tokens` settings
+  with `tool_output_bytes` when migrating an existing configuration.
+
 - Use kernel-managed asynchronous disk writeback throughout the application so
   command input, view switching, rendering and request handling never wait for a
   disk flush. The newest tail is best effort; session resume restores the last

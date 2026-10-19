@@ -4142,10 +4142,21 @@ estimate while an exact count is unavailable. The estimate starts from compatibl
 completed input usage, or that response's exact preflight when input usage is
 absent. Known output usage joins that anchor; if only reasoning usage is known,
 retain it while estimating visible output. Unmeasured output
-and new conversation items add four encoded bytes per token. Encrypted continuation
-size does not inflate this estimate. Without compatible usage, visible request
-bytes supply the approximation; opaque context remains uncounted until provider
-usage is available. Streaming growth uses four retained text bytes per token.
+and new conversation items use a byte/token ratio learned from measured input.
+Complete plaintext requests train that ratio. Requests containing encrypted
+continuation or images retain the previously learned ratio without training it.
+Recent byte-weighted samples adapt the estimate as conversation content changes.
+Encrypted continuation and image bytes do not train the text ratio, and output
+usage that includes hidden reasoning is never treated as a visible-text sample.
+Encrypted continuation size does not inflate the estimate. Without compatible
+usage, visible request bytes supply the approximation; opaque context remains
+uncounted until provider usage is available. Streaming growth uses the same learned
+text ratio. Four bytes per token remains the uncalibrated fallback.
+/status reports the learned bytes/token and sample count, or labels that fallback
+uncalibrated. Matching discovered models retain calibration in models.json across
+compaction, catalog refresh and resume; an endpoint, protocol or upstream-model
+change selects separate calibration. Manually typed uncached models learn for the
+running process. Estimates remain marked with ~ regardless of sample count.
 Resume and selection or source changes rebuild the display estimate using the
 selected provider, upstream model, endpoint and current credential snapshot.
 Successful configuration reload invalidates the previous preview, including after
@@ -5413,18 +5424,24 @@ applied values reported. A separate per-result context-safety ceiling may reduce
 the excerpt further and is also reported. These limits leave durable capture
 unchanged. Host argument corrections and applied-limit feedback are supplied
 separately from the bounded command-output body, including with very small
-output budgets. The legacy [tool] max_output_tokens spelling remains a byte-valued
-alias. Use only one spelling in a section. Provider/model max_output_tokens
-settings continue to specify generated tokens.
+output budgets. Use only one output-limit spelling in a section.
+Provider/model max_output_tokens settings continue to specify provider-native
+generated tokens, not local text estimates.
 .TP
 .B tool_output_approx_tokens
-Alternative command-result ceiling in approximate tokens, 1 through 1000000000.
-Each approximate token permits four UTF-8 bytes, including result framing and
-truncation notices. For example, 3000 selects a 12000-byte ceiling. This is the
-same byte-based estimate used by Codex tool-output truncation; actual tokenization
-depends on the model and text. Use one of tool_output_approx_tokens,
-tool_output_bytes or the legacy byte-valued max_output_tokens in a section.
-Both global tool settings and per-model execution settings accept this spelling.
+Alternative command-result ceiling in estimated tokens, 1 through 4000000000.
+The [tool] max_output_tokens spelling has these same token units.
+Conversion uses the selected provider/model's measured text density, with four
+UTF-8 bytes per token until calibrated. Framing and truncation notices consume
+the budget. At turn admission this resolves to a stable byte ceiling, also used
+when resuming that turn; a later turn resolves the setting again. Conversion
+rounds down to bytes, permits at least one byte and saturates at 4000000000 bytes.
+Actual provider tokenization can differ from the estimate.
+Use one of tool_output_approx_tokens, tool_output_bytes or max_output_tokens
+in [tool]. Per-model execution rules accept tool_output_approx_tokens;
+max_output_tokens in a model-limit section remains a provider-native output limit.
+To preserve a formerly byte-valued [tool] max_output_tokens configuration,
+rename that setting to tool_output_bytes.
 .TP
 .B output_cache_bytes
 Maximum command-output bytes kept in the in-memory paging cache, 0 through
@@ -5898,9 +5915,10 @@ interval defaults and configured audio behavior. Coding requests also identify
 the current working directory, configured shell, wait/deadline defaults, parallel-command
 maximum, output ceiling and goal text limits.
 .PP
-The canonical command fields are command, yield_ms and max_output_bytes.
-The legacy spellings cmd, yield_time_ms and max_output_tokens respectively
-remain accepted. Supply one spelling per field: supplying both is rejected,
+The canonical command fields are command, yield_ms and either max_output_bytes
+or max_output_approx_tokens. The legacy spellings cmd and yield_time_ms remain
+accepted. max_output_tokens is accepted in estimated-token units, like
+max_output_approx_tokens, not bytes. Supply one spelling per field: supplying both is rejected,
 even if the values are equal or null. Other unknown fields, including shell,
 are rejected. Original arguments remain unchanged in the journal.
 .PP
@@ -6011,11 +6029,14 @@ A deadline yields control without terminating the child.
 .PP
 .B max_output_bytes
 is a positive retained UTF-8 byte bound for result text sent to model context,
-or omitted/null for the configured ceiling (default 6000). The legacy input
-spelling max_output_tokens retains these byte semantics.
+or omitted/null for the configured ceiling (default 6000 bytes).
 .B max_output_approx_tokens
-accepts a positive approximate-token budget up to 1000000000 and converts it to
-four UTF-8 bytes per token. Omitted/null uses the configured byte ceiling.
+and its accepted alias
+.B max_output_tokens
+use a positive estimated-token budget up to 4000000000, converted through the
+selected provider/model's learned text density (four bytes/token until learned).
+Omitted/null uses the configured ceiling. The same unit choices apply to
+.BR read_tool_output .
 Supply exactly one output-limit field, even when its value is null.
 These arguments select
 the model excerpt; [tool] display_output_bytes controls

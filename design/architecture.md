@@ -852,25 +852,31 @@ Tool stdout and stderr are redacted and retained as bounded `process_output`
 chunks in the existing session journal, without a capture cutoff. Results
 reference contiguous per-stream ranges; successive polls return only newly
 collected output. RAM staging is bounded and I/O service rotates among jobs.
-The app owns journal writes, and the UI owns all display. `exec_command` and
-`write_stdin` advertise `max_output_approx_tokens` at four UTF-8 bytes per
-approximate token, alongside the byte-valued `max_output_bytes`. Both feed one
-runtime selector; supplying both is rejected, including null values. Configuration
-accepts `tool_output_approx_tokens` globally and per model, converting to bytes
-before execution resolution. The model may select either positive limit, or omit/use `null` for
-the configured `[tool] tool_output_bytes` ceiling (6000 by default). Larger
-requests are clamped to that ceiling; smaller requests are honored. Both tool
-schemas advertise the accepted positive range and describe the configured
-ceiling; one shared runtime selector applies it. The
-resolved value is recorded in the durable result so replay is independent of
-later configuration. Model-context projection preserves a valid-UTF-8 head
-and tail plus digest/provenance when the selected conservative
-retained UTF-8 byte budget permits. Provider token accounting is a separate
-request-budget concern and does not change this byte unit. The legacy `[tool]`
-keys `max_output_tokens` and `max_output_bytes` alias `tool_output_bytes` and
-`display_output_bytes` respectively; duplicate aliases are rejected. The durable
-JSON result field `max_output_tokens` retains its byte-valued meaning, and the
-native binary result layout is unchanged. The former
+The app owns journal writes, and the UI owns all display. `exec_command`,
+`write_stdin` and `read_tool_output` share one output-limit selector.
+`max_output_approx_tokens` and its `max_output_tokens` alias use learned text
+density, with four bytes per estimated token until calibration is available.
+`max_output_bytes` selects bytes directly. Supplying multiple limit fields is
+rejected, including null values. Omission or null uses the configured ceiling;
+positive requests are clamped to it with requested/applied feedback.
+
+Configuration accepts `tool_output_approx_tokens` globally and per model, with
+`[tool] max_output_tokens` as its alias. Token ceilings are converted at turn
+admission using the selected model's calibration and retained as byte snapshots
+through execution and resume. Explicit `tool_output_bytes` stays byte-valued
+(6000 by default). Conversion rounds budgets down, permits at least one byte for
+a positive token request, and saturates at the supported byte maximum. Later
+calibration can refine per-call token requests within the admitted ceiling.
+Provider-native token limits retain their native units.
+
+The resolved byte value is recorded in each durable result so replay is
+independent of later configuration. Model-context projection preserves a
+valid-UTF-8 head and tail plus digest/provenance within the retained byte budget.
+The durable JSON result field `max_output_tokens` retains its historical byte
+meaning, and the native binary result layout is unchanged. The legacy `[tool]`
+`max_output_bytes` key aliases presentation-only `display_output_bytes`;
+duplicate configuration aliases are rejected. Existing configurations that used
+`[tool] max_output_tokens` for bytes should use `tool_output_bytes`. The former
 `default_max_output_tokens` configuration key is removed.
 `[tool] display_output_bytes` is presentation-only: it limits the number of
 output bytes shown for each tool call. At level 3 and above, `0`
