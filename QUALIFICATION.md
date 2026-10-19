@@ -4,7 +4,7 @@
 
 ## Pinned commands and monitor controls
 
-Linux native-owner tests exercise full PTY input/output, bounded redacted tails,
+Linux and Mac native-owner tests exercise full PTY input/output, bounded redacted tails,
 explicit resume hooks, durable stop aliases, live attachment without duplicate
 execution, compaction visibility, read-only refusal and private-output-file
 validation. Native checkpoint tests reconstruct saved command definitions.
