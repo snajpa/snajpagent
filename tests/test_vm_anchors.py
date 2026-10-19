@@ -35,11 +35,35 @@ class AnchorTests(unittest.TestCase):
         return frontend.WorkspaceTests.wait_snapshot(self, ready)
 
     def save(self, child):
-        before = next(iter(self.snapshots().values()))['activity_ms']
+        path = next((self.root / 'state' / 'workspaces').glob('*/workspace.json'))
+        before = path.stat()
         child.command('workspace save')
-        values = self.wait_snapshot(lambda rows:
-            next(iter(rows.values()))['activity_ms'] > before)
-        return next(iter(values.values()))['state']
+
+        def saved(rows):
+            after = path.stat()
+            # Saves atomically replace the snapshot. Two saves can have the
+            # same millisecond activity time, including a rejected edit.
+            return (after.st_ino, after.st_mtime_ns) != (before.st_ino, before.st_mtime_ns)
+
+        self.wait_snapshot(saved)
+        return next(iter(self.snapshots().values()))['state']
+
+    def test_save_observes_replacement_with_unchanged_activity_time(self):
+        directory = self.root / 'state' / 'workspaces' / 'fixture'
+        directory.mkdir(parents=True)
+        path = directory / 'workspace.json'
+        snapshot = {'activity_ms': 1234, 'state': {'draft': 'before'}}
+        path.write_text(json.dumps(snapshot))
+
+        class Child:
+            def command(child, text):
+                self.assertEqual(text, 'workspace save')
+                snapshot['state']['draft'] = 'after'
+                temporary = directory / 'replacement'
+                temporary.write_text(json.dumps(snapshot))
+                os.replace(temporary, path)
+
+        self.assertEqual(self.save(Child()), {'draft': 'after'})
 
     def test_redacted_source_anchor_survives_resize_resume_and_legacy_upgrade(self):
         self.redacted_source_anchor(False)
