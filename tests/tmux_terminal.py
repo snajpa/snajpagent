@@ -216,9 +216,9 @@ class FakeResponses:
         response_id = f"resp_irc_ui_{sequence}"
         created = self.event("response.created", {"response": {
             "id": response_id, "status": "in_progress", "output": []}})
-        usage = {"output_tokens": 1}
-        if input_tokens is not None:
-            usage.update(input_tokens=input_tokens, total_tokens=input_tokens + 1)
+        usage = ({"input_tokens": input_tokens, "output_tokens": 1,
+                  "total_tokens": input_tokens + 1} if input_tokens is not None else
+                 {"output_tokens": 1})
         completed = self.event("response.completed", {"response": {
             "id": response_id, "status": "completed", "output": [], "usage": usage}})
         return created + "".join(events) + completed
