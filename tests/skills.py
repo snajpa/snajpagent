@@ -506,6 +506,124 @@ class RuntimeSkills(SkillsCase):
             self.assertEqual(result.stderr.count("• Skill unloaded: " + selector), 1)
             self.assertEqual(result.stderr.count("• No skills unloaded."), 1)
 
+    def test_updated_skill_replaces_same_arguments_and_unloads_all_bindings(self):
+        provider = self.configured_provider()
+        package = self.skill(self.dotdir / "skills", body="OLD-PIN $ARGUMENTS")
+        skill_path = package / "SKILL.md"
+        original = skill_path.read_text()
+        entry = self.run_cli("list")["entries"][0]
+        for selector in ("sample", entry["id"]):
+            with self.subTest(selector=selector):
+                skill_path.write_text(original)
+                requests = []
+                actions = [
+                    {"action": "activate", "id": "sample", "arguments": "first"},
+                    {"action": "refresh"},
+                    {"action": "activate", "id": "sample", "arguments": "first"},
+                    {"action": "activate", "id": "sample", "arguments": "first"},
+                    {"action": "activate", "id": "sample", "arguments": "second"},
+                    {"action": "deactivate", "id": selector},
+                    {"action": "deactivate", "id": selector},
+                    {"action": "activate", "id": "sample", "arguments": "first"},
+                ]
+                def respond(handler, request, sequence):
+                    index = len(requests)
+                    requests.append(request)
+                    if index == 1:
+                        skill_path.write_text(original.replace("OLD-PIN", "NEW-PIN"))
+                    if index < len(actions):
+                        body = provider.function_body(sequence, f"updated-{index}", "skills",
+                            actions[index])
+                    else:
+                        body = provider.response_body(sequence, "updated lifecycle complete")
+                    provider.reply(handler, body.encode(), close_header=True)
+                provider.runtime_handler = respond
+                result = self.execute("Manage updated skill guidance.")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(requests), 9, result.stderr)
+                for index, old, first, second in [
+                        (1, True, False, False), (2, True, False, False),
+                        (3, False, True, False), (4, False, True, False),
+                        (5, False, True, True), (6, False, False, False),
+                        (7, False, False, False), (8, False, True, False)]:
+                    guidance = json.dumps([message for message in requests[index]["input"]
+                        if message.get("role") in ("system", "developer")])
+                    self.assertEqual(guidance.count("OLD-PIN first"), int(old), guidance)
+                    self.assertEqual(guidance.count("NEW-PIN first"), int(first), guidance)
+                    self.assertEqual(guidance.count("NEW-PIN second"), int(second), guidance)
+                for index, removed in [(6, 2), (7, 0)]:
+                    outputs = [item["output"] for item in requests[index]["input"]
+                        if item.get("type") == "function_call_output"]
+                    self.assertEqual(json.loads(outputs[-1])["removed"], removed)
+
+    def test_unload_ambiguous_name_preserves_distinct_skill_ids(self):
+        provider = self.configured_provider()
+        self.skill(self.dotdir / "skills" / "a", body="FIRST-IDENTITY")
+        self.skill(self.dotdir / "skills" / "b", body="SECOND-IDENTITY")
+        first, second = self.run_cli("list")["entries"]
+        bodies = [self.run_cli("show", entry["id"])["body"].strip() for entry in (first, second)]
+        requests = []
+        actions = [{"action": "activate", "id": entry["id"]} for entry in (first, second)]
+        actions.extend({"action": "deactivate", "id": selector}
+            for selector in ("sample", first["id"], second["id"]))
+        def respond(handler, request, sequence):
+            index = len(requests)
+            requests.append(request)
+            body = (provider.function_body(sequence, f"identity-{index}", "skills", actions[index])
+                if index < len(actions) else provider.response_body(sequence, "identities cleared"))
+            provider.reply(handler, body.encode(), close_header=True)
+        provider.runtime_handler = respond
+        result = self.execute("Manage two skill identities.")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(requests), 6, result.stderr)
+        outputs = [item["output"] for item in requests[3]["input"]
+            if item.get("type") == "function_call_output"]
+        self.assertIn("ambiguous", outputs[-1])
+        for index, expected in [(3, (True, True)), (4, (False, True)), (5, (False, False))]:
+            guidance = json.dumps([message for message in requests[index]["input"]
+                if message.get("role") in ("system", "developer")])
+            for body, present in zip(bodies, expected):
+                self.assertEqual(body in guidance, present, guidance)
+
+    def test_resume_unloads_same_skill_with_different_arguments(self):
+        provider = self.configured_provider()
+        self.skill(self.dotdir / "skills", body="RESUMED-PIN $ARGUMENTS")
+        entry = self.run_cli("list")["entries"][0]
+        requests = []
+        def fail_after_bindings(handler, request, sequence):
+            requests.append(request)
+            if len(requests) <= 2:
+                body = provider.function_body(sequence, f"pin-{len(requests)}", "skills",
+                    {"action": "activate", "id": entry["id"],
+                     "arguments": ("first", "second")[len(requests) - 1]})
+                provider.reply(handler, body.encode(), close_header=True)
+            else:
+                provider.reply(handler, b'{"error":{"message":"fixture unavailable"}}',
+                    status=503, close_header=True)
+        provider.runtime_handler = fail_after_bindings
+        failed = self.execute("Load skill arguments before retry.")
+        self.assertNotEqual(failed.returncode, 0)
+        session = max((self.dotdir / "sessions").iterdir(), key=lambda path: path.stat().st_mtime_ns)
+        requests.clear()
+        def resumed(handler, request, sequence):
+            requests.append(request)
+            body = (provider.function_body(sequence, "unload-resumed", "skills",
+                {"action": "deactivate", "id": entry["id"]}) if len(requests) == 1 else
+                provider.response_body(sequence, "resumed bindings cleared"))
+            provider.reply(handler, body.encode(), close_header=True)
+        provider.runtime_handler = resumed
+        result = self.execute("/retry", session=session.name)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(requests), 2, result.stderr)
+        for index, present in [(0, True), (1, False)]:
+            guidance = json.dumps([message for message in requests[index]["input"]
+                if message.get("role") in ("system", "developer")])
+            for arguments in ("first", "second"):
+                self.assertEqual("RESUMED-PIN " + arguments in guidance, present, guidance)
+        outputs = [item["output"] for item in requests[1]["input"]
+            if item.get("type") == "function_call_output"]
+        self.assertEqual(json.loads(outputs[-1])["removed"], 2)
+
     def test_price_alongside_available_skill_preserves_activation(self):
         provider = self.configured_provider()
         self.skill(self.dotdir / "skills", body="APPROVED-PRICE-GUIDANCE")

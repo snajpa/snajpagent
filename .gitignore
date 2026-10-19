@@ -62,6 +62,7 @@
 /tests/update-letter
 /tests/update-letter-dev
 /tests/update-aside
+/tests/test_app_skills
 
 # Release and evidence artifacts
 /build/
