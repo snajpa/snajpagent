@@ -2603,7 +2603,8 @@ cancel_retry(void *opaque, uint32_t wait_ms)
     while ((n = read(cancel->fd, buf, sizeof(buf))) > 0)
         assert(snag_buf_append(&cancel->notice, buf, (size_t)n) == 0);
     assert(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
-    return cancel->notice.data && strstr((const char *)cancel->notice.data, "provider retry 1/2")
+    return cancel->notice.data &&
+            strstr((const char *)cancel->notice.data, "provider attempt 1/2 failed:")
                ? cancel->code
                : 0;
 }
