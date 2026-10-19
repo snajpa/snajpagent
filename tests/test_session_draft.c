@@ -4,6 +4,7 @@
 #include "irc.h"
 
 #include <assert.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,11 +13,72 @@
 #ifndef _WIN32
 #include <fcntl.h>
 
+/* Count owner allocations and payload copies without changing the production
+ * entry points. JSON's allocator covers its parse/serialize work separately. */
+static size_t cost_allocations, cost_bytes, cost_copies, cost_copied;
+static json_malloc_t original_malloc;
+
+static void *
+count_malloc(size_t bytes)
+{
+    ++cost_allocations;
+    cost_bytes += bytes;
+    return original_malloc(bytes);
+}
+
+static void *
+count_calloc(size_t count, size_t bytes)
+{
+    ++cost_allocations;
+    cost_bytes += count * bytes;
+    return calloc(count, bytes);
+}
+
+static char *
+count_strdup(const char *text)
+{
+    ++cost_allocations;
+    cost_bytes += strlen(text) + 1u;
+    ++cost_copies;
+    cost_copied += strlen(text) + 1u;
+    return strdup(text);
+}
+
+static void *
+count_memcpy(void *destination, const void *source, size_t bytes)
+{
+    ++cost_copies;
+    cost_copied += bytes;
+    return memcpy(destination, source, bytes);
+}
+
+#define calloc count_calloc
+#define strdup count_strdup
+#define memcpy count_memcpy
+#include "../src/session_view.c"
+#undef calloc
+#undef strdup
+#undef memcpy
+
+/* The independent marker must fit the original receipt's padding. */
+struct receipt_before_send {
+    char id[SNAG_ID_HEX_LEN + 1u], sha256[SNAG_SHA256_HEX_LEN + 1u];
+    json_t *result;
+    struct view_draft *draft;
+    char *command_text;
+    bool pending, command, queued, terminal_dispatched;
+    int verbosity;
+    uint64_t draft_revision, terminal_generation;
+    struct view_receipt *next;
+};
+_Static_assert(sizeof(struct view_receipt) <= sizeof(struct receipt_before_send),
+    "send must not grow each retained receipt");
+
 /* The real transport and presentation owner run normally. This engine seam
  * deliberately withholds admission, making edit/commit ordering deterministic
  * without scheduler races or signal stops of production-like worker threads. */
 struct engine {
-    uint64_t generation;
+    uint64_t generation, last_submission;
     unsigned int submissions;
 };
 
@@ -27,13 +89,15 @@ bound(void *opaque, uint64_t generation)
 }
 
 static int
-submit(void *opaque, const char *id, const char *text, const json_t *route, uint64_t generation,
-    bool terminal, bool queued, int verbosity)
+engine_submit(void *opaque, const char *id, const char *text, const json_t *route,
+    uint64_t generation, bool terminal, bool queued, int verbosity)
 {
     assert(!queued && verbosity == -1);
     assert(!terminal && route);
     struct engine *engine = opaque;
-    assert(strlen(id) == SNAG_ID_HEX_LEN && *text && generation == engine->generation);
+    assert(strlen(id) == SNAG_ID_HEX_LEN && *text &&
+        (!generation || generation == engine->generation));
+    engine->last_submission = generation;
     ++engine->submissions;
     return 0;
 }
@@ -158,6 +222,62 @@ assert_receipt(struct snag_view_server *server, struct snag_view_channel *peer,
 }
 
 static void
+independent_admission(struct snag_view_server *server, struct snag_view_channel *peer,
+    struct engine *engine, uint64_t generation, uint64_t revision)
+{
+    char *text = malloc(65537u);
+    assert(text);
+    memset(text, 'x', 65536u);
+    text[65536u] = '\0';
+    json_free_t original_free;
+    json_get_alloc_funcs(&original_malloc, &original_free);
+    size_t allocations[2], bytes[2], copies[2], copied[2];
+    const char *ids[] = {"66666666666666666666666666666666",
+        "77777777777777777777777777777777"};
+    for (unsigned int independent = 0u; independent < 2u; ++independent) {
+        cost_allocations = cost_bytes = cost_copies = cost_copied = 0u;
+        json_set_alloc_funcs(count_malloc, original_free);
+        json_t *request = independent ? json_pack("{s:s,s:s,s:s}",
+            "type", "send", "id", ids[independent], "text", text) :
+            json_pack("{s:s,s:I,s:s,s:s}", "type", "submit",
+                "generation", (json_int_t)generation, "id", ids[independent], "text", text);
+        assert(request);
+        json_t *reply = exchange(server, peer, request, "result");
+        assert(!strcmp(snag_json_string(reply, "status"), "pending"));
+        json_decref(reply);
+        assert(snag_view_server_result(server, ids[independent],
+            "committed", 7u + independent, "input_received") == 0);
+        assert_receipt(server, peer, ids[independent], 0u);
+        json_set_alloc_funcs(original_malloc, original_free);
+        allocations[independent] = cost_allocations;
+        bytes[independent] = cost_bytes;
+        copies[independent] = cost_copies;
+        copied[independent] = cost_copied;
+        assert(engine->generation == generation);
+        assert(engine->last_submission == (independent ? 0u : generation));
+        assert_draft(server, peer, generation, revision, "typed while command works");
+    }
+    (void)printf("semantic admission allocations/bytes/copies/copied "
+        "submit=%zu/%zu/%zu/%zu send=%zu/%zu/%zu/%zu\n",
+        allocations[0], bytes[0], copies[0], copied[0],
+        allocations[1], bytes[1], copies[1], copied[1]);
+    assert(allocations[1] <= allocations[0] && bytes[1] <= bytes[0]);
+    assert(copies[1] <= copies[0] && copied[1] <= copied[0]);
+    unsigned int before = engine->submissions;
+    json_t *reply = exchange(server, peer, json_pack("{s:s,s:s,s:s}",
+        "type", "send", "id", ids[1], "text", text), "result");
+    assert(!strcmp(snag_json_string(reply, "status"), "committed"));
+    json_decref(reply);
+    reply = exchange(server, peer, json_pack("{s:s,s:I,s:s,s:s}",
+        "type", "submit", "generation", (json_int_t)generation,
+        "id", ids[1], "text", text), "error");
+    assert(strstr(snag_json_string(reply, "message"), "already used"));
+    json_decref(reply);
+    assert(engine->submissions == before);
+    free(text);
+}
+
+static void
 test_admission_edit_order(void)
 {
     char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
@@ -172,7 +292,7 @@ test_admission_edit_order(void)
     struct snag_session_relay relay;
     assert(snag_session_relay_init(&relay, pipe_fd[0], -1) == 0);
     struct engine engine = {0};
-    struct snag_view_callbacks callbacks = {bound, submit, control, &engine, NULL};
+    struct snag_view_callbacks callbacks = {bound, engine_submit, control, &engine, NULL};
     struct snag_view_server *server = snag_view_server_open(dir, root, lock,
         "0123456789abcdef0123456789abcdef", &relay, callbacks);
     assert(server);
@@ -270,6 +390,7 @@ test_admission_edit_order(void)
     json_decref(a);
     json_decref(b);
 
+    independent_admission(server, &peer, &engine, generation, revision);
     snag_view_channel_close(&peer);
     snag_view_server_close(server);
     snag_session_relay_close(&relay);

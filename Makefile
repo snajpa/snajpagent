@@ -363,6 +363,8 @@ tests/test_vm_public: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c 
 tests/test_vm_workspace: $(PLATFORM_SRC) src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/vm_workspace.c tests/test_vm_workspace.c $(HEADERS)
 
 tests/test_session_draft: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/session_view.c src/vm_text.c src/unicode.c tests/test_session_draft.c $(HEADERS)
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-o $@ $(filter-out src/session_view.c,$(filter %.c,$^)) $(LDLIBS)
 
 tests/test_session_direct: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/session_view.c src/vm_text.c src/unicode.c tests/test_session_direct.c $(HEADERS)
 
@@ -392,7 +394,7 @@ tests/test_base tests/test_sse tests/test_provider_retry tests/test_upload_wire:
 tests/test_metrics:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^) $(LDLIBS)
 
-tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_skills tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_write:
+tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_skills tests/test_json tests/test_store_record $(filter-out tests/test_session_draft,$(VM_TEST_BIN)) tests/test_rules tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_write:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c %.o,$^) $(LDLIBS)
 

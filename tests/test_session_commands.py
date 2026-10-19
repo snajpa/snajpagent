@@ -13,6 +13,173 @@ import uuid
 import test_session_view as owners
 
 
+class SendTests(unittest.TestCase):
+    def setUp(self):
+        self.owner = owners.SessionViewTests()
+        self.owner.setUp()
+        self.addCleanup(self.owner.tearDown)
+
+    def send(self, *words, data=None, prefix=None):
+        command = [str(owners.BINARY), 'send', '--dotdir', str(self.owner.root / 'state'),
+                   prefix or self.owner.sid[:8]]
+        if words:
+            command += ['--', *words]
+        return subprocess.run(command, input=data, capture_output=True, timeout=35,
+                              cwd=self.owner.root, env={**os.environ, 'HOME': str(self.owner.root)})
+
+    def test_send_keeps_attached_terminal_and_its_partial_draft(self):
+        os.write(self.owner.initial.master, b'unsent terminal draft')
+        self.owner.initial.until(b'unsent terminal draft')
+        result = self.send('sideband', 'prompt')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith(b'accepted '), result.stdout)
+        completed = self.owner.wait_event('turn_completed')['seq']
+        self.owner.status('attached')
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        os.write(self.owner.initial.master, b' plus suffix\r')
+        self.owner.wait_event('turn_completed', completed)
+        self.assertEqual([e['data']['text'] for e in self.owner.events()
+                          if e['type'] == 'input_received'],
+                         ['sideband prompt', 'unsent terminal draft plus suffix'])
+
+    def test_send_unbound_receipts_deduplicate_and_do_not_claim_control(self):
+        peer = self.owner.view()
+        self.assertIn('send', peer.capabilities['features'])
+        request = uuid.uuid4().hex
+        peer.send(type='send', id=request, text='independent semantic input')
+        result = peer.result(request)
+        self.assertEqual(result['status'], 'committed', result)
+        self.assertEqual(result['draft_cleared'], 0)
+        self.owner.wait_event('turn_completed')
+        peer.send(type='send', id=request, text='independent semantic input')
+        self.assertEqual(peer.result(request), result)
+        peer.send(type='send', id=request, text='changed payload')
+        refused = peer.until('error')
+        self.assertEqual(refused['id'], request)
+        self.assertIn('already used', refused['message'])
+        peer.submit('independent semantic input', request)
+        self.assertIn('generation', peer.until('error')['message'])
+        self.assertEqual(len([e for e in self.owner.events()
+                              if e['type'] == 'input_received']), 1)
+        self.owner.status('attached')
+
+    def test_send_none_discards_and_leaves_controller_draft_unchanged(self):
+        self.owner.detach()
+        controller = self.owner.view(bind=True)
+        self.assertEqual(controller.result(controller.command('/model none'))['outcome'], 'ok')
+        draft = controller.replace_draft(controller.draft()['revision'], 'keep this draft')['draft']
+        before = self.owner.events()[-1]['seq']
+        result = self.send(data='discard from stdin 👩‍💻\r\n'.encode())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith(b'discarded '), result.stdout)
+        self.assertEqual(controller.draft(), draft)
+        self.assertFalse(any(e['type'] in ('input_received', 'steering_added',
+            'future_turn_queued', 'response_started') for e in self.owner.events()
+            if e['seq'] > before))
+        self.assertEqual(controller.result(controller.command('/model host-model'))['outcome'], 'ok')
+        result = self.send(data='new stdin input 👩‍💻\r\n'.encode())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.owner.wait_event('turn_completed', before)
+        inputs = [e['data']['text'] for e in self.owner.events() if e['type'] == 'input_received']
+        self.assertEqual(inputs, ['new stdin input 👩‍💻'])
+        self.assertEqual(controller.draft(), draft)
+
+    def test_send_during_active_request_reports_durable_steering(self):
+        started = threading.Event()
+        def held(handler, request, sequence):
+            started.set()
+            self.owner.release.wait(10)
+            self.owner.provider.reply(handler, self.owner.provider.response_body(
+                sequence, 'released response').encode(), close_header=True)
+        self.owner.provider.runtime_handler = held
+        self.assertEqual(self.send('start held request').returncode, 0)
+        self.assertTrue(started.wait(5))
+        result = self.send('new steering input')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith(b'queued '), result.stdout)
+        self.assertIn(b'event=steering_added', result.stdout)
+        self.assertEqual(self.owner.wait_event('steering_added')['data']['text'],
+                         'new steering input')
+        self.owner.release.set()
+        self.owner.wait_event('turn_completed')
+
+    def test_send_large_unicode_stdin_and_validation_boundaries(self):
+        text = 'large input 👩‍💻é\\\t' * 9000
+        result = self.send(data=(text + '\n').encode())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.owner.wait_event('input_received')['data']['text'], text)
+        # Drain the real terminal's large prompt echo while the owner runs.
+        self.owner.initial.until(b'semantic-answer', timeout=15)
+        self.owner.wait_event('turn_completed')
+        before = self.owner.journal.read_bytes()
+        for data in (b'', b'\xff', b'x\0y', b'x' * (1024 * 1024 + 1)):
+            with self.subTest(data_length=len(data)):
+                result = self.send(data=data)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        result = self.send('/exit')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(b'command capability', result.stderr)
+        self.assertEqual(self.owner.journal.read_bytes(), before)
+        self.owner.finish(self.owner.initial, b'/exit')
+        before = self.owner.journal.read_bytes()
+        result = self.send('cannot restart stopped owner')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(self.owner.journal.read_bytes(), before)
+
+    def test_send_old_owner_and_lost_receipt_have_truthful_outcomes(self):
+        self.owner.finish(self.owner.initial, b'/exit')
+        path = self.owner.directory / 'view.sock'
+        self.assertFalse(path.exists())
+        for outcome in ('unsupported', 'lost', 'unknown'):
+            supported = outcome != 'unsupported'
+            listener = owners.socket.socket(owners.socket.AF_UNIX)
+            previous = os.getcwd()
+            try:
+                os.chdir(self.owner.directory)
+                listener.bind(path.name)
+            finally:
+                os.chdir(previous)
+            path.chmod(0o600)
+            listener.listen(1)
+            listener.settimeout(10)
+            received = []
+            failures = []
+            def server():
+                try:
+                    connection, _ = listener.accept()
+                    with connection:
+                        connection.settimeout(5)
+                        peer = object.__new__(owners.View)
+                        peer.peer, peer.states = connection, []
+                        received.append(peer.receive())
+                        peer.send(type='capabilities', session=self.owner.sid, version=1,
+                                  instance='0' * 32, features=['send'] if supported else [])
+                        if supported:
+                            request = peer.receive()
+                            received.append(request)
+                            peer.send(type='result', id=request['id'],
+                                      status='unknown' if outcome == 'unknown' else 'pending')
+                except Exception as error:
+                    failures.append(error)
+            worker = threading.Thread(target=server)
+            worker.start()
+            try:
+                result = self.send('receipt boundary prompt')
+            finally:
+                listener.close()
+                worker.join(10)
+                path.unlink()
+            self.assertFalse(worker.is_alive())
+            self.assertFalse(failures, failures)
+            self.assertEqual(len(received), 2 if supported else 1)
+            self.assertEqual(result.returncode, 3 if supported else 1, result.stderr)
+            self.assertEqual(result.stdout, b'')
+            self.assertIn(b'outcome unknown' if supported else b'does not support send',
+                          result.stderr)
+            if supported:
+                self.assertIn(received[1]['id'].encode(), result.stderr)
+
+
 class CommandTests(unittest.TestCase):
     def setUp(self):
         self.owner = owners.SessionViewTests()
