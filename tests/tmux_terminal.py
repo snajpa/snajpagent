@@ -9971,12 +9971,13 @@ def run_context_meter_case(binary, root, provider, environment):
         terminal.exit()
         print("context meter active/idle rendered cells: ok", flush=True)
     finally:
-        for release in releases:
-            release.touch()
-        if terminal is not None:
-            (case / "screen.txt").write_text(terminal.capture(), encoding="utf-8")
-            terminal.close()
-        provider.runtime_handler = None
+        try:
+            if terminal is not None:
+                with fixture_terminal(terminal, case / "screen.txt"):
+                    for release in releases:
+                        release.touch()
+        finally:
+            provider.runtime_handler = None
 
 
 def run_tools_only(binary, root):
