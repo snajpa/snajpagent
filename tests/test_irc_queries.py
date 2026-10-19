@@ -425,11 +425,13 @@ class QueryTests(QueryFixture):
             self.assertIn('input', event['data'])
         self.seen.clear()
         self.resume_at(event['seq'])
-        self.wait(lambda: any(e['seq'] > event['seq'] and e['type'] == 'irc_reply_reminder'
-                  for e in self.events()))
+        self.wait(lambda: bool(self.seen))
         self.wait_idle()
         target = 'target=query:' + source['data']['routing']['conversation_id']
         self.assertIn(target + ' status=unavailable', json.dumps(self.seen))
+        self.assertIn('Outstanding IRC replies for this turn: none.', json.dumps(self.seen))
+        self.assertFalse(any(e['seq'] > event['seq'] and e['type'] == 'irc_reply_reminder'
+                             for e in self.events()))
 
     def test_pending_query_reply_survives_resume(self):
         self.resume_reply_at('irc_admitted')

@@ -13,6 +13,69 @@ from tmux_terminal import FakeResponses, irc_workspace, read_events
 
 
 class ConnectionTests(ChannelFixture):
+    def test_unavailable_query_keeps_other_peers_and_endpoints_pending(self):
+        second = ChannelServer()
+        self.addCleanup(second.close)
+        self.connect_endpoint(second)
+        self.wait_idle()
+        observed = []
+        live = []
+
+        def respond(handler, request, sequence):
+            self.seen.append(request)
+            if 'mixed-unavailable-input' not in json.dumps(request):
+                wire = self.provider.response_body(sequence, 'ready')
+            else:
+                observed.append(request)
+                step = len(observed)
+                if step == 1:
+                    self.held.set()
+                    assert self.release.wait(15), 'mixed-query fixture was not released'
+                    wire = self.provider.function_body(sequence, 'inspect-mixed', 'irc_state', {})
+                elif step == 2:
+                    wire = self.provider.response_body(sequence, 'one query unavailable')
+                elif step in (3, 4):
+                    wire = self.provider.function_body(sequence, 'close-mixed-' + str(step),
+                        'irc_send', dict(destination=live[step - 3], notice=True,
+                                         text='close-current-' + str(step)))
+                else:
+                    wire = self.provider.response_body(sequence, 'current queries closed')
+            self.provider.reply(handler, wire.encode(), close_header=True)
+            handler.close_connection = True
+
+        self.provider.runtime_handler = respond
+        before = self.events()[-1]['seq']
+        self.server.send('querybot', ':first-peer!u@fake PRIVMSG querybot '
+                         ':mixed-unavailable-input\r\n')
+        self.wait(self.held.is_set)
+        self.server.send('querybot', ':other-peer!u@fake PRIVMSG querybot :other-live-input\r\n')
+        second.send('querybot', ':first-peer!u@fake PRIVMSG querybot :endpoint-live-input\r\n')
+        self.wait(lambda: sum(e['seq'] > before and e['data'].get('reply', False)
+                              for e in self.events()) == 3)
+        sources = [e for e in self.events() if e['seq'] > before and e['data'].get('reply')]
+        for marker in ('other-live-input', 'endpoint-live-input'):
+            source = next(e for e in sources if e['data']['text'] == marker)
+            live.append('query:' + source['data']['routing']['conversation_id'])
+        old = 'query:' + sources[0]['data']['routing']['conversation_id']
+        self.server.send('querybot', ':first-peer!u@fake QUIT :gone\r\n')
+        self.wait(lambda: any(e['seq'] > sources[0]['seq'] and
+                             e['data'].get('kind') == 'quit' for e in self.events()))
+        self.release.set()
+        self.wait_idle()
+        text = next(item['content'] for item in reversed(observed[1]['input'])
+                    if isinstance(item.get('content'), str) and
+                    'Outstanding IRC replies for this turn:' in item['content'])
+        self.assertIn('target=' + old + ' status=unavailable', text)
+        for target in live:
+            self.assertIn('target=' + target + ' status=available', text)
+        self.assertNotIn('Outstanding IRC replies for this turn: none.', text)
+        self.assertEqual(sum(e['seq'] > before and e['type'] == 'irc_reply_reminder'
+                             for e in self.events()), 1)
+        self.assertIn('Outstanding IRC replies for this turn: none.', json.dumps(observed[-1]))
+        self.assert_wire('NOTICE other-peer :close-current-3')
+        self.wait(lambda: ('querybot', 'NOTICE first-peer :close-current-4') in second.lines)
+        self.assert_no_wire('NOTICE first-peer :close-current-4')
+
     def connect_endpoint(self, server):
         self.command('/connect ' + server.endpoint)
         # NICK reaches the fixture before welcome/JOIN creates a usable scope.

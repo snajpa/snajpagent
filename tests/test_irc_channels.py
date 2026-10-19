@@ -479,6 +479,103 @@ class ReminderTests(ChannelFixture):
 
 
 class ChannelTests(ChannelFixture):
+    def unavailable_reply(self, *, channel=False, reconnect=False, resume=False):
+        observed = []
+        calls = 0
+
+        def respond(handler, request, sequence):
+            nonlocal calls
+            self.seen.append(request)
+            if 'unreachable-reply-input' not in json.dumps(request):
+                wire = self.provider.response_body(sequence, 'fixture ready')
+            else:
+                observed.append(request)
+                calls += 1
+                if calls == 1:
+                    self.held.set()
+                    assert self.release.wait(15), 'disconnect fixture was not released'
+                    if resume:
+                        return  # The interrupted fixture request has no response.
+                    wire = self.provider.function_body(sequence, 'inspect-after-loss',
+                                                       'irc_state', {})
+                else:
+                    wire = self.provider.response_body(sequence, 'reply path unavailable')
+            self.provider.reply(handler, wire.encode(), close_header=True)
+            handler.close_connection = True
+
+        self.provider.runtime_handler = respond
+        before = self.events()[-1]['seq']
+        original = self.channels()[('agent', '#side')]['routing']
+        if channel:
+            for nick in ('querybot', 'queryop'):
+                self.server.send(nick, '@saj-id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1;saj-op=1 '
+                                 ':queryop!u@fake PRIVMSG #side '
+                                 ':querybot: unreachable-reply-input\r\n')
+        else:
+            self.server.send('querybot', ':query-peer!u@fake PRIVMSG querybot '
+                             ':unreachable-reply-input\r\n')
+        self.wait(self.held.is_set)
+        source = next(e for e in self.events() if e['seq'] > before and
+                      e['type'] == 'irc_event_v2' and e['data'].get('reply'))
+        if reconnect:
+            self.server.links['querybot'].shutdown(socket.SHUT_RDWR)
+            self.wait(lambda: self.channels()[('agent', '#side')]['routing']['generation'] >
+                      original['generation'])
+        elif channel:
+            self.server.send('querybot', ':fake KICK #side querybot :removed\r\n'
+                             ':querybot!u@fake JOIN #side\r\n')
+            self.wait(lambda: self.channels()[('agent', '#side')]['routing']['membership'] !=
+                      original['membership'])
+        else:
+            self.server.send('querybot', ':query-peer!u@fake QUIT :gone\r\n')
+            self.wait(lambda: any(e['seq'] > source['seq'] and
+                      e['data'].get('kind') == 'quit' for e in self.events()))
+        if resume:
+            path, events = read_events(self.root / 'state')
+            self.assertEqual(path.name, 'journal.bin')
+            self.assertEqual(sum(e['type'] == 'turn_started' for e in events),
+                             1 + sum(e['type'] in ('turn_completed', 'turn_completed_silent')
+                                     for e in events))
+            # The fixture's pinned descendant guard kills and joins only its owners.
+            self.terminals[-1][1].close()
+            self.term.wait_exit()
+        self.release.set()
+        if resume:
+            self.term = self.start('--resume', path.parent.name)
+        self.wait_idle()
+        self.assertGreaterEqual(len(observed), 2)
+        text = next(item['content'] for item in reversed(observed[1]['input'])
+                    if isinstance(item.get('content'), str) and
+                    'Outstanding IRC replies for this turn:' in item['content'])
+        self.assertIn('status=unavailable', text)
+        self.assertIn('Outstanding IRC replies for this turn: none.', text)
+        self.assertIn('not delivered', text)
+        self.assertFalse(any(e['seq'] > before and e['type'] == 'irc_reply_reminder'
+                             for e in self.events()))
+        self.assertFalse(any('PRIVMSG ' in line or 'NOTICE ' in line
+                             for nick, line in self.server.lines if nick == 'querybot'))
+
+    def test_unreachable_query_after_reconnect_legacy(self):
+        self.unavailable_reply(reconnect=True)
+
+    def test_unreachable_query_after_quit_legacy(self):
+        self.unavailable_reply()
+
+    def test_unreachable_channel_after_rejoin_legacy(self):
+        self.unavailable_reply(channel=True)
+
+    def test_unreachable_query_after_reconnect(self):
+        self.unavailable_reply(reconnect=True)
+
+    def test_unreachable_query_after_quit(self):
+        self.unavailable_reply()
+
+    def test_unreachable_channel_after_rejoin(self):
+        self.unavailable_reply(channel=True)
+
+    def test_unreachable_query_survives_native_active_resume(self):
+        self.unavailable_reply(resume=True)
+
     def test_catchup_is_retained_for_selected_history_without_auto_display_legacy(self):
         self.test_catchup_is_retained_for_selected_history_without_auto_display()
 
@@ -900,7 +997,7 @@ class ChannelTests(ChannelFixture):
         self.assertTrue(events[0]['data']['reply'])
         self.assertIsNone(events[0]['data']['reply_to'])
         self.assertIn('target=unavailable status=unavailable', json.dumps(self.seen))
-        self.assertEqual(sum(e['type'] == 'irc_reply_reminder' for e in self.events()), 1)
+        self.assertEqual(sum(e['type'] == 'irc_reply_reminder' for e in self.events()), 0)
         self.assert_no_wire('unavailable-reply-input')
 
     def test_exact_id_address_action_notice_and_topic(self):
