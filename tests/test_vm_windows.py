@@ -102,7 +102,7 @@ class WindowsTests(unittest.TestCase):
         child.repaint_until(b'One live session per workspace')
         self.assertEqual(len(list((self.root / 'state' / 'sessions').iterdir())), 1)
 
-        child.write(b'i/fast\r')
+        child.write(b'i/fast on\r')
         child.repaint_until(b'ON')
         self.escape(child)
         child.command('history')
