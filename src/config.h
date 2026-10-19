@@ -232,6 +232,17 @@ struct snag_config {
 
 void snag_config_init(struct snag_config *config);
 /* Read only [terminal] settings, without provider/agent initialization. */
+/* Monitor preferences are loaded separately: top never needs provider credentials. */
+#define SNAG_TOP_FIELDS 9u
+struct snag_top_settings {
+    unsigned int delay_ms, sort, visible, color;
+    int extra_width; /* Negative grows fixed columns automatically. */
+    bool reverse, highlight, commands;
+    char fields[SNAG_TOP_FIELDS + 1u];
+};
+int snag_config_top(const char *, struct snag_top_settings *, char *, size_t);
+int snag_config_save_top(const char *, const struct snag_top_settings *, char *, size_t);
+
 int snag_config_terminal(const char *explicit_path, const char *dotdir, char *downloads,
     size_t capacity, enum snag_clipboard_policy *clipboard, char *error, size_t error_size);
 /* Growable protected-value list; parses and retains one additional source. */

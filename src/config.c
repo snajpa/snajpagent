@@ -21,6 +21,7 @@ enum section {
     SECTION_AGENT,
     SECTION_AUDIO,
     SECTION_TERMINAL,
+    SECTION_TOP,
     SECTION_PROVIDER,
     SECTION_MODEL_LIMIT,
     SECTION_MODEL_ALIAS,
@@ -661,6 +662,8 @@ set_section(struct parse_state *state, char *name)
         section = SECTION_AGENT;
     else if (strcmp(name, "terminal") == 0)
         section = SECTION_TERMINAL;
+    else if (strcmp(name, "top") == 0)
+        section = SECTION_TOP;
     else if (strncmp(name, "mcp ", 4u) == 0)
         return set_mcp_section(state, trim(name + 4u));
     else if (strncmp(name, "provider ", 9u) == 0)
@@ -826,6 +829,52 @@ invalid:
     return snag_errno(EINVAL);
 }
 
+static const char *const top_keys[] = {
+    "delay_ms", "sort", "visible", "color", "extra_width", "reverse", "highlight",
+    "commands", "fields"};
+
+static int
+top_setting(struct snag_top_settings *settings, const char *key, const char *value)
+{
+    struct snag_top_settings ignored = {0};
+    if (!settings) settings = &ignored;
+    size_t k = 0u;
+    while (k < sizeof(top_keys) / sizeof(top_keys[0]) && strcmp(key, top_keys[k])) ++k;
+    if (k == sizeof(top_keys) / sizeof(top_keys[0])) return -1;
+    if (k == 8u) {
+        if (strlen(value) != SNAG_TOP_FIELDS) return -1;
+        unsigned int seen = 0u;
+        for (size_t i = 0u; i < SNAG_TOP_FIELDS; ++i) {
+            unsigned int f = (unsigned int)(value[i] - '0');
+            if (f >= SNAG_TOP_FIELDS || (seen & (1u << f))) return -1;
+            seen |= 1u << f;
+        }
+        memcpy(settings->fields, value, SNAG_TOP_FIELDS + 1u);
+        return (int)k;
+    }
+    if (k >= 5u) {
+        bool flag;
+        if (!strcmp(value, "true")) flag = true;
+        else if (!strcmp(value, "false")) flag = false;
+        else return -1;
+        if (k == 5u) settings->reverse = flag;
+        else if (k == 6u) settings->highlight = flag;
+        else settings->commands = flag;
+        return (int)k;
+    }
+    char *end;
+    errno = 0;
+    long n = strtol(value, &end, 10);
+    if (!*value || *end || errno) return -1;
+    if (k == 0u && n >= 200 && n <= 86400000) settings->delay_ms = (unsigned int)n;
+    else if (k == 1u && n >= 0 && n < SNAG_TOP_FIELDS) settings->sort = (unsigned int)n;
+    else if (k == 2u && n > 0 && n < (1 << SNAG_TOP_FIELDS)) settings->visible = (unsigned int)n;
+    else if (k == 3u && n >= 0 && n <= 2) settings->color = (unsigned int)n;
+    else if (k == 4u && n >= -1 && n <= INT_MAX) settings->extra_width = (int)n;
+    else return -1;
+    return (int)k;
+}
+
 static int
 parse_setting(struct parse_state *state, const char *key, const char *value)
 {
@@ -964,6 +1013,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
             SNAG_CONFIG_TOKEN_LIMIT_MAX}};
 
     if (state->section == SECTION_NONE || !*key || claim_key(state, key) < 0) goto invalid;
+    if (state->section == SECTION_TOP) return top_setting(NULL, key, value) < 0 ? -1 : 0;
     for (size_t i = 0; i < sizeof(settings) / sizeof(settings[0]); ++i) {
         if (settings[i].section != state->section || strcmp(key, settings[i].key)) continue;
         void *target = settings[i].target;
@@ -1354,6 +1404,48 @@ out: {
 }
 
 int
+snag_config_top(const char *path, struct snag_top_settings *settings, char *error, size_t size)
+{
+    struct snag_buf text = {.max = SNAG_CONFIG_FILE_MAX + 1u};
+    int rc = -1;
+    int loaded = read_config(path, false, &text, NULL, NULL, NULL, error, size);
+    if (loaded > 0) return 0;
+    if (loaded < 0) goto done;
+    bool selected = false, found = false;
+    unsigned int seen = 0u, number = 0u;
+    for (char *line = (char *)text.data; line && *line;) {
+        char *next = strchr(line, '\n');
+        if (next) *next++ = '\0';
+        ++number;
+        char *clean = trim(line);
+        if (*clean == '[') {
+            char *end = strchr(clean, ']');
+            if (end) *end = '\0';
+            selected = end && !strcmp(trim(clean + 1), "top");
+            if (selected && found) goto invalid;
+            found |= selected;
+        } else if (selected && *clean && *clean != '#' && *clean != ';') {
+            char *equal = strchr(clean, '=');
+            if (!equal) goto invalid;
+            *equal++ = '\0';
+            int k = top_setting(settings, trim(clean), trim(equal));
+            if (k < 0 || (seen & (1u << k))) goto invalid;
+            seen |= 1u << k;
+        }
+        line = next;
+        continue;
+invalid:
+        snag_fail(error, size, EINVAL, "invalid [top] configuration at line %u", number);
+        goto done;
+    }
+    rc = 0;
+done:
+    snag_secret_clear(text.data, text.len);
+    snag_buf_free(&text);
+    return rc;
+}
+
+int
 snag_config_terminal(const char *explicit_path, const char *dotdir, char *downloads,
     size_t capacity, enum snag_clipboard_policy *clipboard, char *error, size_t error_size)
 {
@@ -1610,7 +1702,7 @@ provider_settings(struct snag_buf *output, const struct snag_provider_config *p)
 static const char *const model_setting_keys[] = {"provider", "model", "reasoning_effort"};
 
 static int
-append_missing_settings(struct snag_buf *out, const bool seen[3], const char *const *keys,
+append_missing_settings(struct snag_buf *out, const bool *seen, const char *const *keys,
     const char *const *values, size_t count)
 {
     if (out->len && out->data[out->len - 1u] != '\n' && snag_buf_putc(out, '\n') < 0) return -1;
@@ -1627,7 +1719,7 @@ replace_settings(const struct snag_buf *input, struct snag_buf *output,
     const char *const *values, size_t count)
 {
     size_t at = 0u;
-    bool selected = false, found = false, seen[3] = {false, false, false};
+    bool selected = false, found = false, seen[9] = {false};
 
     while (at < input->len) {
         const unsigned char *line = input->data + at;
@@ -1731,7 +1823,8 @@ snag_config_validate_provider(
 static int
 save_config_settings(const char *path, bool allow_create, const char *provider, const char *model,
     const char *effort, const struct snag_provider_config *provider_config, uint64_t context_tokens,
-    bool save_model, const char *fallback, char *error, size_t error_size)
+    bool save_model, const char *fallback, const struct snag_top_settings *top,
+    char *error, size_t error_size)
 {
     snag_file_info before;
     snag_file_info current;
@@ -1752,7 +1845,7 @@ save_config_settings(const char *path, bool allow_create, const char *provider, 
     struct snag_buf input = {.max = SNAG_CONFIG_FILE_MAX + 1u};
     struct snag_buf output = {.max = SNAG_CONFIG_FILE_MAX};
     if (!snag_path_root_len(path) || strlen(path) > SNAG_CONFIG_PATH_MAX ||
-        (!fallback && (!provider ||
+        (!top && !fallback && (!provider ||
         !*provider || strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX || !model ||
         (!provider_config && !*model) || strlen(model) >= SNAG_CONFIG_MODEL_MAX || !effort ||
         !*effort || strlen(effort) >= SNAG_CONFIG_EFFORT_MAX || strchr(provider, '\n') ||
@@ -1791,13 +1884,35 @@ save_config_settings(const char *path, bool allow_create, const char *provider, 
     read_rc = read_config(
         path, !allow_create, &input, &before, &private_file, &permissions, error, error_size);
     if (read_rc < 0) goto out;
-    const char *values[] = {provider, model, effort};
+    const char *values[9] = {provider, model, effort};
     const char *const context_keys[] = {"context_window_tokens"};
     const char *const *keys = model_setting_keys;
     char context_section[SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_MODEL_MAX + 16u];
     char tokens[32];
     const char *section = "agent";
     size_t count = 3u;
+    char top_values[5][32];
+    if (top) {
+        const long numbers[] = {
+            top->delay_ms, top->sort, top->visible, top->color, top->extra_width};
+        for (size_t i = 0u; i < 5u; ++i) {
+            snprintf(top_values[i], sizeof(top_values[i]), "%ld", numbers[i]);
+            values[i] = top_values[i];
+        }
+        values[5] = top->reverse ? "true" : "false";
+        values[6] = top->highlight ? "true" : "false";
+        values[7] = top->commands ? "true" : "false";
+        values[8] = top->fields;
+        keys = top_keys;
+        count = 9u;
+        section = "top";
+        for (size_t i = 0u; i < count; ++i) {
+            if (top_setting(NULL, keys[i], values[i]) < 0) {
+                snag_fail(error, error_size, EINVAL, "invalid top preferences");
+                goto out;
+            }
+        }
+    }
     if (fallback) {
         static const char *const fallback_keys[] = {"fallback_model"};
         keys = fallback_keys;
@@ -1908,11 +2023,20 @@ out:
 }
 
 int
+snag_config_save_top(const char *path, const struct snag_top_settings *settings,
+    char *error, size_t size)
+{
+    return save_config_settings(path, true, NULL, NULL, NULL, NULL, 0u, false, NULL,
+        settings, error, size);
+}
+
+int
 snag_config_save_model(const char *path, bool allow_create, const char *provider, const char *model,
     const char *effort, char *error, size_t error_size)
 {
     return save_config_settings(
-        path, allow_create, provider, model, effort, NULL, 0u, false, NULL, error, error_size);
+        path, allow_create, provider, model, effort, NULL, 0u, false, NULL, NULL,
+        error, error_size);
 }
 
 int
@@ -1923,7 +2047,7 @@ snag_config_save_fallback(struct snag_config *config, const char *path, bool all
         strchr(value, '\n') || strchr(value, '\r'))
         return snag_fail(error, error_size, EINVAL, "invalid fallback model");
     if (save_config_settings(path, allow_create, config->provider, config->model,
-            config->reasoning_effort, NULL, 0u, false, value, error, error_size) < 0)
+            config->reasoning_effort, NULL, 0u, false, value, NULL, error, error_size) < 0)
         return -1;
     (void)snag_strcpy(config->fallback_model, sizeof(config->fallback_model), value);
     return 0;
@@ -1953,7 +2077,7 @@ save_context_settings(struct snag_config *config, const char *path, bool allow_c
     if (index == config->model_limit_count && grow_model_limits(config) < 0)
         return snag_errorf(error, error_size, "cannot allocate the context default");
     if (save_config_settings(path, allow_create, provider, model, effort ? effort : "default",
-            selected, tokens, effort != NULL, NULL, error, error_size) < 0)
+            selected, tokens, effort != NULL, NULL, NULL, error, error_size) < 0)
         return -1;
     struct snag_model_limit_config *limit = &config->model_limits[index];
     if (index == config->model_limit_count) {
@@ -1994,7 +2118,8 @@ snag_config_save_provider(const char *path, bool allow_create,
         strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r'))
         return snag_errorf(error, error_size, "invalid provider settings");
     return save_config_settings(path, allow_create, provider->name,
-        initial_model ? initial_model : "", effort ? effort : "default", provider, 0u, false, NULL,
+        initial_model ? initial_model : "", effort ? effort : "default", provider,
+        0u, false, NULL, NULL,
         error, error_size);
 }
 
