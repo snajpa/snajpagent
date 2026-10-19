@@ -75,7 +75,7 @@ NATIVE_FUNCTION_NAMES = {
     "set_command_shell", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
     "irc_host", "irc_disconnect", "irc_sleep", "irc_compact",
     "create_goal", "update_goal", "timer", "defer_steering",
-    "get_cwd", "cd", "work_context", "skills",
+    "get_cwd", "cd", "work_context", "skills", "running_commands",
 }
 
 
@@ -212,13 +212,15 @@ class FakeResponses:
             f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
         )
 
-    def response_envelope(self, sequence, events):
+    def response_envelope(self, sequence, events, *, input_tokens=1):
         response_id = f"resp_irc_ui_{sequence}"
         created = self.event("response.created", {"response": {
             "id": response_id, "status": "in_progress", "output": []}})
+        usage = {"output_tokens": 1}
+        if input_tokens is not None:
+            usage.update(input_tokens=input_tokens, total_tokens=input_tokens + 1)
         completed = self.event("response.completed", {"response": {
-            "id": response_id, "status": "completed", "output": [],
-            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}})
+            "id": response_id, "status": "completed", "output": [], "usage": usage}})
         return created + "".join(events) + completed
 
     def response_body(self, sequence, text, explicit_empty=False):
@@ -244,7 +246,7 @@ class FakeResponses:
     def function_body(self, sequence, call_id, name, arguments):
         return self.functions_body(sequence, [(call_id, name, arguments)])
 
-    def functions_body(self, sequence, calls):
+    def functions_body(self, sequence, calls, *, input_tokens=1):
         events = []
         for index, (call_id, name, arguments) in enumerate(calls):
             item_id = f"fc_irc_ui_{sequence}_{index}"
@@ -257,7 +259,7 @@ class FakeResponses:
             events.append(self.event("response.function_call_arguments.done", {**position, "arguments": encoded}))
             item = dict(item, status="completed", arguments=encoded)
             events.append(self.event("response.output_item.done", {"output_index": index, "item": item}))
-        return self.response_envelope(sequence, events)
+        return self.response_envelope(sequence, events, input_tokens=input_tokens)
 
     def handle(self, handler):
         try:
@@ -424,7 +426,7 @@ class FakeResponses:
                 assert tool["parameters"]["properties"]["max_output_bytes"][
                     "maximum"] == 4000000000
                 assert tool["parameters"]["properties"]["max_output_approx_tokens"][
-                    "maximum"] == 1000000000
+                    "maximum"] == 4000000000
                 assert f"Output ceiling ({ceiling})" in tool["description"]
         outputs = [item["output"] for item in request["input"]
                    if item.get("type") == "function_call_output"]
@@ -438,11 +440,13 @@ class FakeResponses:
                 assert f"Requested {reported_key}={selected}" in controls
                 assert f"applied max_output_bytes={effective}" in controls
             return self.response_body(sequence, "tool cap confirmed")
-        return self.function_body(sequence, "call_cap", "exec_command", {
+        # This group checks cold-start units. A synthetic input count would
+        # train the density before the requested tool budget is applied.
+        return self.functions_body(sequence, [("call_cap", "exec_command", {
             "command": "printf '%08000d' 0", "workdir": str(self.tool_workspace),
             "stdin": None, "pty": False, "timeout_ms": None, "yield_ms": 1000,
             key: selected,
-        })
+        })], input_tokens=None)
 
     def multi_tool_body(self, request, sequence, prompt):
         mode = prompt.split()[-1]
@@ -5173,7 +5177,7 @@ def run_tool_contract_cases(binary, root, provider, environment):
         write_irc_config(config, provider.port, "host-model")
         ceiling = 1 if mode == "tiny" else 1200
         with config.open("a") as out:
-            out.write(f"[tool]\nmax_timeout_ms = 2000\nmax_output_tokens = {ceiling}\n")
+            out.write(f"[tool]\nmax_timeout_ms = 2000\ntool_output_bytes = {ceiling}\n")
         if mode == "read":
             (case / "marker").write_text("x\n")
         if mode == "retry":
@@ -5278,7 +5282,7 @@ def run_tool_contract_cases(binary, root, provider, environment):
                     _, events = read_events(state)
                     assert len(event_list(events, "goal_completed")) == 1
                 if mode not in ("patch", "goal", "read", "minimal", "aliases"):
-                    assert "Requested max_output_bytes=9000" in controls
+                    assert "Requested max_output_tokens=9000" in controls
                     assert f"applied max_output_bytes={ceiling}" in controls
                     assert len(outputs[-1]["output"].encode()) <= ceiling
                 body = provider.response_body(sequence, "tool contract confirmed")
@@ -5362,7 +5366,7 @@ def run_output_cap_cases(binary, root, provider, environment):
             else:
                 settings += f"{model_key} = {configured}\n"
         config.write_text(config.read_text() + settings, encoding="utf-8")
-        ceiling = configured or 6000
+        ceiling = configured * 4 if name == "legacy" else configured or 6000
         with TmuxTerminal(case / "terminal", binary, workspace,
                                 case / "state", config, 120, 24,
                                 args=("-v",), environment=environment) as terminal:
