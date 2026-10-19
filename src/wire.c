@@ -165,6 +165,8 @@ snag_wire_value_redact(json_t **value, const struct snag_wire_secrets *secrets, 
 {
     if (!value || !*value || secrets_valid(secrets) < 0)
         return snag_errorf(error, error_size, "invalid diagnostic secret set");
+    if (json_is_array(*value) && !json_array_size(*value))
+        return max >= 2u ? 0 : snag_errorf(error, error_size, "cannot redact diagnostic JSON");
     size_t bytes = json_dumpb(*value, NULL, 0u, JSON_COMPACT | JSON_ENCODE_ANY);
     int rc = bytes && bytes <= max ? 0 : -1;
     if (!rc) {
