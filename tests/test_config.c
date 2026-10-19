@@ -50,8 +50,8 @@ static void
 test_top_settings(const char *path)
 {
     const struct snag_top_settings expected = {.delay_ms = 375u, .sort = 4u,
-        .visible = 510u, .color = 2u, .extra_width = -1, .reverse = true,
-        .highlight = true, .commands = true, .fields = "102345678"};
+        .visible = 254u, .color = 2u, .extra_width = -1, .reverse = true,
+        .highlight = true, .commands = true, .fields = "10234567"};
     struct snag_top_settings restored = {0};
     char error[256] = "";
     const char spaced[] = "[ top ]\nsort=2\ncommands=true\n";
@@ -62,13 +62,29 @@ test_top_settings(const char *path)
     write_bytes(path, original, sizeof(original) - 1u);
     assert(snag_config_save_top(path, &expected, error, sizeof(error)) == 0);
     assert(snag_config_top(path, &restored, error, sizeof(error)) == 0);
-    assert(restored.delay_ms == 375u && restored.sort == 4u && restored.visible == 510u &&
+    assert(restored.delay_ms == 375u && restored.sort == 4u && restored.visible == 254u &&
         restored.color == 2u && restored.extra_width == -1 && restored.reverse &&
-        restored.highlight && restored.commands && !strcmp(restored.fields, "102345678"));
+        restored.highlight && restored.commands && !strcmp(restored.fields, "10234567"));
     struct snag_config config;
     load_config(&config, path, NULL);
     assert(config.terminal_clipboard == SNAG_CLIP_OFF);
     snag_config_free(&config);
+    const char legacy[] = "[top]\nfields=102345678\nsort=8\nvisible=384\n";
+    write_bytes(path, legacy, sizeof(legacy) - 1u);
+    restored = expected;
+    assert(snag_config_top(path, &restored, error, sizeof(error)) == 0);
+    assert(restored.sort == 7u && restored.visible == 128u &&
+        !strcmp(restored.fields, "10234567"));
+    const char removed[] = "[top]\nfields=012345678\nsort=7\nvisible=128\n";
+    write_bytes(path, removed, sizeof(removed) - 1u);
+    restored = expected;
+    assert(snag_config_top(path, &restored, error, sizeof(error)) == 0);
+    assert(restored.sort == 5u && restored.visible == 255u);
+    const char layout_only[] = "[top]\nfields=012345678\n";
+    write_bytes(path, layout_only, sizeof(layout_only) - 1u);
+    restored = (struct snag_top_settings){.sort = 5u, .visible = 255u};
+    assert(snag_config_top(path, &restored, error, sizeof(error)) == 0);
+    assert(restored.sort == 5u && restored.visible == 255u);
     const char *invalid[] = {"delay_ms=199", "sort=9", "visible=0", "color=3",
         "extra_width=2147483648", "reverse=yes", "highlight=1", "commands=on", "fields=001234567",
         "unknown=1", "sort=1\nsort=2", "sort=1\n[top]\nsort=2"};
@@ -706,7 +722,8 @@ test_prompt_numbers(const char *path)
     static const char *const invalid[] = {"time", "context:", "context:0", "context:04", "hour:0",
         "hour:00", "hour:002", "hour:-2", "hour:+2", "minute: 2", "second:2 ", "hour:2:2",
         "context:511", "hour:0511", "context:99999999999999999999", "model:2", "provider:2",
-        "mode:2", "goal_spinner:1", "activity_spinner:1", "provider_spinner", "tool_spinner",
+        "prefill", "prefill_rate", "prefill_speed", "mode:2", "goal_spinner:1",
+        "activity_spinner:1", "provider_spinner", "tool_spinner",
         "host:2", "operator:2", "effort:2", "queue:02", "model_nick:2", "session_name:2"};
     char label[SNAG_TERM_LABEL_BYTES], template[256];
 

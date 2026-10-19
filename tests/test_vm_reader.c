@@ -82,7 +82,7 @@ static void *
 small_stack_catalog(void *opaque)
 {
     struct catalog_stack_test *test = opaque;
-    test->catalog = snag_store_catalog(test->store, test->owned, 10u,
+    test->catalog = snag_store_catalog(test->store, test->owned ? test->owned->id : NULL, 10u,
         NULL, NULL, test->error, sizeof(test->error));
     return NULL;
 }
@@ -1975,9 +1975,8 @@ main(void)
         json_array_size(result->catalog) == 1u);
     assert(strcmp(json_string_value(json_array_get(json_object_get(
         json_array_get(result->catalog, 0u), "cells"), 1u)), "updated-picker-name"));
-    snag_vm_read_result_free(result);
     catalog.catalog_preview = false;
-    generation = snag_vm_reader_request(reader, &catalog);
+    generation = snag_vm_reader_verify_catalog(reader, result);
     result = await_page(reader, generation);
     assert(!result->error_number && !result->incomplete);
     assert(!strcmp(json_string_value(json_array_get(json_object_get(

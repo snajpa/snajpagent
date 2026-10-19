@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "wire.h"
+#include "json.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -170,11 +171,53 @@ test_json_record_bound(void)
     snag_buf_free(&input);
 }
 
+static void
+test_owned_value_redaction(void)
+{
+    const char *const values[] = {"needle"};
+    const struct snag_wire_secrets secrets = {values, 1u};
+    const char *cases[] = {
+        "[{\"cells\":[\"before needle after\",\"safe\"]}]",
+        "{\"authorization\":\"Bearer hidden\",\"nested\":[{\"text\":\"needle\"}]}",
+        "{\"type\":\"reasoning\",\"text\":\"hidden\"}",
+        "{\"text\":\"Unicode 界 \\n \\t\"}"
+    };
+    char error[256];
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        json_error_t parse;
+        json_t *value = json_loads(cases[i], 0u, &parse);
+        struct snag_buf old = {.max = 4096u}, current = {.max = 4096u};
+        assert(value && snag_wire_json_redact((const unsigned char *)cases[i], strlen(cases[i]),
+            &secrets, &old, error, sizeof(error)) == 0);
+        assert(snag_wire_value_redact(&value, &secrets, current.max, error, sizeof(error)) == 0);
+        assert(snag_json_diagnostic(value, &current) == 0);
+        assert(old.len == current.len && !memcmp(old.data, current.data, old.len));
+        json_decref(value);
+        snag_buf_free(&old);
+        snag_buf_free(&current);
+    }
+    json_t *value = json_pack("{s:s}", "text", "needle");
+    /* Input fits, but redaction expands beyond the same output budget. */
+    assert(snag_wire_value_redact(&value, &secrets, 20u, error, sizeof(error)) < 0);
+    json_decref(value);
+    value = json_pack("{s:s}", "text", "longer than the input budget");
+    assert(snag_wire_value_redact(&value, &secrets, 20u, error, sizeof(error)) < 0);
+    json_decref(value);
+    value = json_array();
+    assert(json_array_append_new(value, json_stringn("a\0b", 3u)) == 0);
+    assert(snag_wire_value_redact(&value, &secrets, 4096u, error, sizeof(error)) < 0);
+    json_decref(value);
+    value = json_pack("{s:s}", "needle-key", "safe");
+    assert(snag_wire_value_redact(&value, &secrets, 4096u, error, sizeof(error)) < 0);
+    json_decref(value);
+}
+
 int
 main(void)
 {
     test_json();
     test_json_record_bound();
+    test_owned_value_redaction();
     test_reasoning_redaction();
     test_max_secret_count();
     test_invalid_json();

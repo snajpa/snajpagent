@@ -53,7 +53,6 @@ main(void)
         .process_started_ms = 1000u,
         .process_pid = 1234u,
         .observed_ms = 6000u,
-        .turn_started_ms = 2000u,
         .turn_output_tokens = 40u,
         .response_started_ms = 3000u,
         .last_response_ms = 450u,
@@ -72,7 +71,6 @@ main(void)
     assert(view.turns == 4u);
     assert(view.process_total_tokens == 330u);
     assert(view.session_total_tokens == 1170u);
-    assert(view.prefill_microtokens_per_second == 100000000u);
     assert(view.decode_microtokens_per_second == 13333333u);
     assert(view.process_uptime_ms == 5000u);
     assert(view.process_pid == 1234u);
@@ -84,6 +82,14 @@ main(void)
     assert(stat(path, &info) == 0);
     assert((info.st_mode & 0777u) == 0600u);
     assert(access(path, R_OK) == 0);
+    FILE *published = fopen(path, "r");
+    char contents[4096u];
+    assert(published);
+    size_t bytes = fread(contents, 1u, sizeof(contents) - 1u, published);
+    assert(!ferror(published) && feof(published) && fclose(published) == 0);
+    contents[bytes] = '\0';
+    assert(!strstr(contents, "prefill"));
+    assert(strstr(contents, "snajpagent_session_decode_tokens_per_second"));
     n = snprintf(path, sizeof(path), "%s/metrics/%s.tmp", directory, session.id);
     assert(n > 0 && (size_t)n < sizeof(path));
     assert(access(path, F_OK) < 0);

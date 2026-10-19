@@ -252,6 +252,33 @@ class TopTests(unittest.TestCase):
         self.assertLess(time.monotonic() - began, 2)
         self.assertEqual(hashlib.sha256(journal.read_bytes()).digest(), before)
 
+    def test_pending_refresh_preserves_the_complete_previous_table(self):
+        journals = [store_history.create_legacy(self.state, self.root, 'fake', name)
+                    for name in ('first-stored', 'second-stored')]
+        top = self.top(delay=None)
+        initial = self.frame(top)
+        self.assertNotIn(b'PREFILL', initial)
+        for journal in journals:
+            self.assertIn(journal.parent.name[:8].encode(), initial)
+        source = journals[0]
+        original = source.read_bytes()
+        # An incomplete replacement has no verified row. Keep the last complete
+        # table through the failed refresh, then replace it when verification succeeds.
+        source.write_bytes(b'incomplete replacement\n')
+        failed = self.command(top, b'r', b'metadata refresh failed; press r to retry')
+        for journal in journals:
+            self.assertIn(journal.parent.name[:8].encode(), failed)
+        self.assertIn(b'TOTAL sessions=2', failed)
+        source.write_bytes(original)
+        added = store_history.create_legacy(self.state, self.root, 'fake', 'third-stored')
+        self.command(top, b'r', b'TOTAL sessions=3')
+        restored = self.frame(top)
+        self.assertIn(added.parent.name[:8].encode(), restored)
+        added.unlink()
+        self.command(top, b'r', b'TOTAL sessions=2')
+        self.assertNotIn(added.parent.name[:8].encode(), self.frame(top))
+        self.quit(top)
+
     def test_bad_source_is_not_retried_until_changed_or_requested(self):
         journal = store_history.create_legacy(self.state, self.root, 'fake', 'bad')
         original = journal.read_bytes()
@@ -365,10 +392,10 @@ class TopTests(unittest.TestCase):
         self.assertEqual(self.selected(frame), first[:8])
         self.assertIn(b'sort=ACTIVE', self.frame(top, b'<'))
         self.assertIn(b'sort=PROCESS', self.frame(top, b'>'))
-        for field in (b'SESSION', b'PREFILL', b'DECODE'):
+        for field in (b'SESSION', b'DECODE'):
             self.command(top, b'>', b'sort=' + field)
         self.assertIn(b'sort=DECODE', self.frame(top, b'>'))
-        for field in (b'PREFILL', b'SESSION', b'PROCESS', b'ACTIVE', b'TURNS',
+        for field in (b'SESSION', b'PROCESS', b'ACTIVE', b'TURNS',
                 b'MODEL', b'STATE', b'SESSION'):
             self.command(top, b'<', b'sort=' + field)
         self.assertIn(b'sort=SESSION', self.frame(top, b'<'))
@@ -431,9 +458,9 @@ class TopTests(unittest.TestCase):
         self.command(top, b'W', b'saved')
         saved = config.read_text()
         self.assertIn(original, saved)
-        for value in ('delay_ms = 400', 'sort = 1', 'visible = 510', 'color = 2',
+        for value in ('delay_ms = 400', 'sort = 1', 'visible = 254', 'color = 2',
                       'reverse = true', 'highlight = true', 'commands = true',
-                      'extra_width = -1', 'fields = 102345678'):
+                      'extra_width = -1', 'fields = 10234567'):
             self.assertIn(value, saved)
         self.assertFalse(marker.exists())
         self.assertEqual(config.stat().st_mode & 0o777, 0o600)

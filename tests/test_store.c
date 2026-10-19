@@ -1873,7 +1873,8 @@ test_checkpoint_cancellation(struct snag_store *store, struct snag_session *sour
     snag_session_close(&view);
     remaining = 64u;
     assert(!snag_store_catalog(
-               store, source, UINT64_MAX, cancel_history_read, &remaining, error, sizeof(error)) &&
+               store, source->id, UINT64_MAX, cancel_history_read, &remaining,
+               error, sizeof(error)) &&
            errno == ECANCELED && !remaining);
     assert_session_lock_retained(source, "after canceled checkpoint reads");
 }
@@ -1953,7 +1954,7 @@ test_catalog_reuses_checkpoint(struct snag_store *store, const char *cwd, bool r
     catalog_read_watch = true;
 #endif
     json_t *rows =
-        snag_store_catalog(store, &session, UINT64_MAX, NULL, NULL, error, sizeof(error));
+        snag_store_catalog(store, session.id, UINT64_MAX, NULL, NULL, error, sizeof(error));
 #if defined(__linux__) && defined(__x86_64__)
     catalog_read_watch = false;
     fprintf(stderr, "catalog checkpoint payload reads: %zu\n", catalog_marker_reads);
@@ -1982,7 +1983,7 @@ test_catalog_reuses_checkpoint(struct snag_store *store, const char *cwd, bool r
     catalog_read_watch = true;
 #endif
     bool incomplete = false;
-    rows = snag_store_catalog_preview(store, &session, UINT64_MAX, NULL, NULL,
+    rows = snag_store_catalog_preview(store, session.id, UINT64_MAX, NULL, NULL,
         &incomplete, error, sizeof(error));
 #if defined(__linux__) && defined(__x86_64__)
     catalog_read_watch = false;
@@ -3687,7 +3688,7 @@ main(int argc, char **argv)
     assert(listed.rows && listed.found && listed.header);
     assert_session_lock_retained(&session, "after listing");
     json_t *catalog =
-        snag_store_catalog(&store, &session, UINT64_MAX, NULL, NULL, error, sizeof(error));
+        snag_store_catalog(&store, session.id, UINT64_MAX, NULL, NULL, error, sizeof(error));
     assert(catalog && json_array_size(catalog));
     bool catalog_found = false;
     struct snag_buf catalog_text = {.max = list_text.max};
