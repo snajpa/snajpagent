@@ -196,7 +196,11 @@ test_owned_value_redaction(void)
         snag_buf_free(&old);
         snag_buf_free(&current);
     }
-    json_t *value = json_pack("{s:s}", "text", "needle");
+    json_t *value = json_array();
+    assert(snag_wire_value_redact(&value, &secrets, 1u, error, sizeof(error)) < 0);
+    assert(snag_wire_value_redact(&value, &secrets, 2u, error, sizeof(error)) == 0);
+    json_decref(value);
+    value = json_pack("{s:s}", "text", "needle");
     /* Input fits, but redaction expands beyond the same output budget. */
     assert(snag_wire_value_redact(&value, &secrets, 20u, error, sizeof(error)) < 0);
     json_decref(value);
