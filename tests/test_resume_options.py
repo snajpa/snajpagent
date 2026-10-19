@@ -314,15 +314,21 @@ def check_hosted_rename_resume(binary):
                     child.close()
             # A correctly hashed envelope still needs IRC shape validation.
             invalid = dict(renames[-1], text="invalid nick")
-            seq = read_events(journal)[-1]["seq"] + 1
             append_event(journal, "irc_event_v2", invalid)
             child = RemoteProcess(root, [*base, "--resume", sid], wrapped=None, extra_env=env)
             try:
-                child.until(f"invalid irc_event_v2 transition at sequence {seq}".encode(), 10)
-                child.until(b"--resume", 10)
-                child.wait(3)
+                # Exclusive resume retains the verified prefix and drops an invalid tail.
+                child.until(b"READY>", 10)
+                os.write(child.master, b"/rollout\r/nick\r")
+                child.until(b"model nick: after", 10)
+                child.until(b"operator nick: operatorafter", 10)
+                os.write(child.master, b"/exit\r")
+                child.wait(0)
             finally:
                 child.close()
+            assert journal.read_bytes().startswith(before)
+            assert not any(e["type"] == "irc_event_v2" and e["data"]["text"] == "invalid nick"
+                           for e in read_events(journal))
             assert not provider.failure, provider.failure
             print("resume hosted nickname history with active and disabled networking: ok")
     finally:
