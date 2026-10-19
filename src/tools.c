@@ -43,12 +43,6 @@ struct process_output {
     struct snag_buf data, pending;
 };
 
-struct output_limit {
-    uint32_t bytes;
-    uint64_t requested_bytes;
-    bool approximate;
-};
-
 struct managed_process {
     char handle[SNAG_ID_HEX_LEN + 1u];
     struct snag_child child;
@@ -63,7 +57,7 @@ struct managed_process {
     uint64_t wait_started_ms;
     uint32_t max_wait_ms;
     uint32_t requested_yield_ms;
-    struct output_limit output_limit;
+    struct snag_output_limit output_limit;
     struct snag_secret_set secrets;
     size_t max_secret;
     struct process_output output[2];
@@ -113,25 +107,26 @@ json_u32_member(const json_t *object, const char *key, uint32_t fallback, uint32
     return true;
 }
 
-static bool
-command_output_limit(
-    const json_t *arguments, uint32_t ceiling, struct output_limit *out, char *error, size_t size)
+bool
+snag_tools_output_limit(const json_t *arguments, uint32_t ceiling,
+    struct snag_token_calibration calibration, struct snag_output_limit *out,
+    char *error, size_t size)
 {
     const char *key =
-        snag_json_arg_name(arguments, "max_output_bytes", "max_output_tokens", error, size);
+        snag_json_arg_name(arguments, "max_output_approx_tokens", "max_output_tokens", error, size);
     if (!key) return false;
-    key = snag_json_arg_name(arguments, "max_output_approx_tokens", key, error, size);
+    key = snag_json_arg_name(arguments, "max_output_bytes", key, error, size);
     if (!key) return false;
-    *out = (struct output_limit){.bytes = ceiling, .requested_bytes = ceiling};
+    *out = (struct snag_output_limit){.bytes = ceiling, .requested_bytes = ceiling, .key = key};
     const json_t *value = json_object_get(arguments, key);
     if (!value || json_is_null(value)) return true;
-    out->approximate = !strcmp(key, "max_output_approx_tokens");
-    uint32_t factor = out->approximate ? SNAG_APPROX_TOKEN_BYTES : 1u;
     uint64_t requested;
-    if (!snag_json_arg_uint(arguments, key, 0u, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX / factor,
+    if (!snag_json_arg_uint(arguments, key, 0u, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
             &requested, error, size))
         return false;
-    out->requested_bytes = requested * factor;
+    out->requested_tokens = strcmp(key, "max_output_bytes") ? requested : 0u;
+    out->requested_bytes = out->requested_tokens ? snag_token_bytes(requested, calibration)
+                                                : requested;
     out->bytes = out->requested_bytes > ceiling ? ceiling : (uint32_t)out->requested_bytes;
     return true;
 }
@@ -219,15 +214,15 @@ excerpt_json(struct snag_buf *text, const char *label, const struct output_excer
         (json_int_t)data->len);
 }
 
-static int
-output_limit_notice(struct snag_buf *text, const struct output_limit *limit)
+int
+snag_tools_output_limit_notice(struct snag_buf *text, const struct snag_output_limit *limit)
 {
     if (limit->requested_bytes <= limit->bytes) return 0;
-    if (limit->approximate) {
+    if (limit->requested_tokens) {
         return snag_buf_printf(text,
-            "Requested max_output_approx_tokens=%llu; applied max_output_bytes=%u "
-            "(configured maximum; 4 UTF-8 bytes per approximate token).\n",
-            (unsigned long long)(limit->requested_bytes / SNAG_APPROX_TOKEN_BYTES), limit->bytes);
+            "Requested %s=%llu; applied max_output_bytes=%u "
+            "(configured maximum, estimated tokens).\n",
+            limit->key, (unsigned long long)limit->requested_tokens, limit->bytes);
     }
     return snag_buf_printf(text,
         "Requested max_output_bytes=%llu; applied "
@@ -245,7 +240,7 @@ result_json(const char *status, const char *reason, int64_t exit_code, int signa
     const char *msg = NULL;
     struct snag_buf text = {.max = SIZE_MAX};
 
-    if (output_limit_notice(&text, &proc->output_limit) < 0)
+    if (snag_tools_output_limit_notice(&text, &proc->output_limit) < 0)
         goto done;
 
     if (snag_string_in(status, "succeeded failed")) {
@@ -833,7 +828,7 @@ snag_tools_collected(const char *handle)
 
 static int
 start_command(const char *handle, const char *command, const char *workdir, const char *stdin_text,
-    uint32_t timeout_ms, struct output_limit output_limit, bool pty,
+    uint32_t timeout_ms, struct snag_output_limit output_limit, bool pty,
     const struct snag_config *config, const char *shell,
     const struct snag_credential *credential, char *error, size_t error_size)
 {
@@ -898,7 +893,7 @@ struct command_args {
     const char *command, *workdir, *input, *handle;
     char *owned_workdir;
     uint32_t timeout, yield;
-    struct output_limit limit;
+    struct snag_output_limit limit;
     bool pty, eof, terminate, exec;
 };
 
@@ -932,7 +927,9 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
         !json_u32_member(call->arguments, yield,
             default_yield_ms < max_wait_ms ? default_yield_ms : max_wait_ms, 0u, max_wait_ms,
             &args->yield, error, size) ||
-        !command_output_limit(call->arguments, tool_output_bytes, &args->limit, error, size))
+        !snag_tools_output_limit(call->arguments, tool_output_bytes,
+            execution ? execution->token_calibration : (struct snag_token_calibration){0},
+            &args->limit, error, size))
         return -1;
     if (args->exec) {
         args->handle = call->call_id;
@@ -982,10 +979,6 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
 }
 
 static int
-attach_output_limit(
-    const struct snag_response_item *call, uint32_t tool_output_bytes, json_t *result);
-
-static int
 tools_prepare(const struct snag_response_item *call, const struct snag_config *config,
     const struct snag_execution_config *execution, const char *cwd, uint32_t max_parallel,
     char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms, json_t **rejected)
@@ -1029,7 +1022,9 @@ tools_prepare(const struct snag_response_item *call, const struct snag_config *c
         } else {
             *rejected = snag_tool_result_not_run(reason);
         }
-        return *rejected && attach_output_limit(call, tool_output_bytes, *rejected) == 0 ? 1 : -1;
+        return *rejected && snag_tools_attach_output_limit(call, tool_output_bytes,
+            execution ? execution->token_calibration : (struct snag_token_calibration){0},
+            *rejected) == 0 ? 1 : -1;
     }
     free(args.owned_workdir);
     if (!journal_write || !journal_read) return snag_errno(EINVAL);
@@ -1117,24 +1112,24 @@ snag_tools_start_execution(const struct snag_response_item *call, const struct s
         call, config, execution, shell, credential, cwd, result, error, error_size);
 }
 
-static int
-attach_output_limit(
-    const struct snag_response_item *call, uint32_t tool_output_bytes, json_t *result)
+int
+snag_tools_attach_output_limit(const struct snag_response_item *call,
+    uint32_t tool_output_bytes, struct snag_token_calibration calibration, json_t *result)
 {
-    struct output_limit limit;
+    struct snag_output_limit limit;
 
     if (!call || !call->name || !result || json_object_get(result, "max_output_tokens") ||
         (!snag_string_in(call->name, "exec_command write_stdin")))
         return 0;
-    if (!command_output_limit(call->arguments, tool_output_bytes, &limit, NULL, 0u))
-        limit = (struct output_limit){.bytes = tool_output_bytes};
+    if (!snag_tools_output_limit(call->arguments, tool_output_bytes, calibration, &limit, NULL, 0u))
+        limit = (struct snag_output_limit){.bytes = tool_output_bytes};
     if (snag_json_set_new(result, "max_output_tokens", json_integer(limit.bytes)) < 0)
         return -1;
     if (limit.requested_bytes > limit.bytes) {
         const char *old = snag_json_string(result, "model_text");
         struct snag_buf text = {.max = SNAG_MAX_EVENT_LINE};
         int rc =
-            !old || output_limit_notice(&text, &limit) < 0 ||
+            !old || snag_tools_output_limit_notice(&text, &limit) < 0 ||
                     snag_buf_append(&text, old, strlen(old)) < 0 || snag_buf_terminate(&text) < 0
                 ? -1
                 : snag_json_set_new(result, "model_text", json_string((const char *)text.data));
@@ -1142,13 +1137,6 @@ attach_output_limit(
         return rc;
     }
     return 0;
-}
-
-int
-snag_tools_attach_output_limit(
-    const struct snag_response_item *call, const struct snag_config *config, json_t *result)
-{
-    return !config ? 0 : attach_output_limit(call, config->tool_output_bytes, result);
 }
 
 static int
@@ -1228,5 +1216,6 @@ snag_tools_run(const struct snag_response_item *call, const struct snag_config *
         wait_process(handle, yield_ms, pump, pump_opaque, wake_fd, result, error, error_size) < 0)
         return -1;
     snag_tools_collected(handle);
-    return snag_tools_attach_output_limit(call, config, *result);
+    return snag_tools_attach_output_limit(call, config->tool_output_bytes,
+        (struct snag_token_calibration){0}, *result);
 }

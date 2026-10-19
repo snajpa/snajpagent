@@ -6,6 +6,7 @@
 #include "media.h"
 #include "secret.h"
 #include "snajpagent.h"
+#include "tools.h"
 #include "wire.h"
 
 #include <errno.h>
@@ -1065,6 +1066,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
     }
     app->request_context_estimate = snag_app_context_estimate(app, app->turn_provider,
         app->turn_model, app->turn_effort, projection);
+    snag_app_context_sample_prepare(app, projection);
     projection->irc_boundary = app->session.next_seq - 1;
     projection->irc_count = app->session.irc_admitted_count;
     memcpy(
@@ -1788,7 +1790,9 @@ snag_app_output_page(struct app_state *app, const struct snag_response_item *cal
     char *error, size_t error_size)
 {
     const char *handle = NULL, *stream_name = NULL;
-    uint64_t offset = 0u, requested = app->session.tool_output_bytes;
+    uint64_t offset = 0u;
+    struct snag_execution_config execution = snag_app_execution_config(app);
+    struct snag_output_limit limit;
     uint32_t applied;
     unsigned int stream;
     size_t retain, raw_limit, available, use;
@@ -1802,15 +1806,17 @@ snag_app_output_page(struct app_state *app, const struct snag_response_item *cal
     if (snag_app_context_cancelled(app))
         return snag_fail(error, error_size, ECANCELED, "retained output read cancelled");
     if (!snag_json_arg_keys(
-            call->arguments, "handle stream", "offset max_output_bytes", error, error_size) ||
+            call->arguments, "handle stream",
+            "offset max_output_bytes max_output_tokens max_output_approx_tokens",
+            error, error_size) ||
         !snag_json_arg_text(call->arguments, "handle", SNAG_ID_HEX_LEN, SNAG_ID_HEX_LEN, false,
             &handle, error, error_size) ||
         !snag_json_arg_text(
             call->arguments, "stream", 6u, 6u, false, &stream_name, error, error_size) ||
         !snag_json_arg_uint(
             call->arguments, "offset", 0u, 0u, UINT64_MAX, &offset, error, error_size) ||
-        !snag_json_arg_uint(call->arguments, "max_output_bytes", app->session.tool_output_bytes,
-            512u, SNAG_CONFIG_TOKEN_LIMIT_MAX, &requested, error, error_size))
+        !snag_tools_output_limit(call->arguments, execution.tool_output_bytes,
+            execution.token_calibration, &limit, error, error_size))
         goto invalid;
     if (!snag_hex_is_lower(handle, SNAG_ID_HEX_LEN) ||
         (strcmp(stream_name, "stdout") && strcmp(stream_name, "stderr"))) {
@@ -1819,8 +1825,13 @@ snag_app_output_page(struct app_state *app, const struct snag_response_item *cal
         goto invalid;
     }
     stream = strcmp(stream_name, "stderr") == 0;
-    applied = requested > app->session.tool_output_bytes ? app->session.tool_output_bytes
-                                                         : (uint32_t)requested;
+    if (!strcmp(limit.key, "max_output_bytes") &&
+        json_is_integer(json_object_get(call->arguments, limit.key)) &&
+        limit.requested_bytes < 512u) {
+        (void)snag_errorf(error, error_size, "max_output_bytes must be at least 512");
+        goto invalid;
+    }
+    applied = limit.bytes;
     raw_limit = applied > sizeof(header) ? (applied - sizeof(header)) * 3u / 4u : 1u;
     retain = app->session.output_cache_bytes ? app->session.output_cache_bytes : raw_limit;
 
@@ -1878,8 +1889,9 @@ snag_app_output_page(struct app_state *app, const struct snag_response_item *cal
         : app->session.output_cache_bytes ? "fill"
                                           : "disabled");
     if (n < 0 || (size_t)n >= sizeof(header)) goto fail;
-    struct snag_buf text = {.max = (size_t)applied + 1u};
-    int rc = snag_buf_append(&text, header, (size_t)n) < 0 ||
+    struct snag_buf text = {.max = SNAG_MAX_EVENT_LINE};
+    int rc = snag_tools_output_limit_notice(&text, &limit) < 0 ||
+                     snag_buf_append(&text, header, (size_t)n) < 0 ||
                      snag_buf_append(&text, payload, payload_len) < 0 ||
                      snag_buf_terminate(&text) < 0
                  ? -1

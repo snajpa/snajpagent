@@ -766,10 +766,49 @@ snag_app_measured_input(struct app_state *app, uint64_t *tokens)
     return true;
 }
 
-static uint64_t
-context_bytes_to_tokens(size_t bytes)
+static bool
+context_anchor_matches(const struct app_state *app,
+    const struct snag_provider_config *provider, const char *model, const char *effort,
+    const struct snag_context_projection *projection)
 {
-    return (uint64_t)(bytes / 4u) + (bytes % 4u != 0u);
+    char source[SNAG_SHA256_HEX_LEN + 1u];
+    provider_capacity_source_sha256(provider, model, source);
+    return snag_input_observation_matches(&projection->display_anchor,
+        provider->name, model, effort, source, app->session.compact_id);
+}
+
+static struct snag_token_calibration
+context_calibration(const struct app_state *app,
+    const struct snag_provider_config *provider, const char *model, const char *effort)
+{
+    struct snag_token_calibration sample = snag_model_calibration(&app->model_cache,
+        provider, snag_provider_catalog_protocol(provider), model);
+    if (app->calibration_binding.valid) {
+        char source[SNAG_SHA256_HEX_LEN + 1u];
+        provider_capacity_source_sha256(provider, model, source);
+        if (snag_input_observation_matches(&app->calibration_binding,
+                provider->name, model, effort, source, "") &&
+            app->context_calibration.samples > sample.samples)
+            return app->context_calibration;
+    }
+    return sample;
+}
+
+struct snag_execution_config
+snag_app_execution_config(const struct app_state *app)
+{
+    struct snag_execution_config execution = {
+        .default_yield_ms = app->session.default_yield_ms,
+        .max_wait_ms = app->session.max_wait_ms,
+        .max_parallel_commands = app->session.max_parallel_commands,
+        .default_timeout_ms = app->session.default_timeout_ms,
+        .max_timeout_ms = app->session.max_timeout_ms,
+        .tool_output_bytes = app->session.tool_output_bytes,
+        .output_cache_bytes = app->session.output_cache_bytes};
+    if (app->turn_provider)
+        execution.token_calibration = context_calibration(app, app->turn_provider,
+            app->turn_model, app->turn_effort);
+    return execution;
 }
 
 uint64_t
@@ -777,16 +816,43 @@ snag_app_context_estimate(const struct app_state *app,
     const struct snag_provider_config *provider, const char *model, const char *effort,
     const struct snag_context_projection *projection)
 {
-    char source[SNAG_SHA256_HEX_LEN + 1u];
-    provider_capacity_source_sha256(provider, model, source);
-    bool anchored = snag_input_observation_matches(&projection->display_anchor,
-        provider->name, model, effort, source, app->session.compact_id);
+    bool anchored = context_anchor_matches(app, provider, model, effort, projection);
     size_t bytes = anchored ? projection->display_bytes : projection->display_plain_bytes;
-    uint64_t tokens = context_bytes_to_tokens(bytes);
+    uint64_t tokens = snag_token_estimate(bytes,
+        context_calibration(app, provider, model, effort));
     if (!anchored) return tokens;
     return tokens > UINT64_MAX - projection->display_tokens
                ? UINT64_MAX
                : projection->display_tokens + tokens;
+}
+
+void
+snag_app_context_sample_prepare(struct app_state *app,
+    const struct snag_context_projection *projection)
+{
+    app->request_calibration_bytes = 0u;
+    /* Opaque state and vision tokens have no text-byte interpretation. Even a
+     * measured prefix includes output/hidden reasoning that may not be replayed. */
+    if (snag_media_request_has_images(projection->create_request.value)) return;
+    if (projection->display_plain_bytes == projection->model_input.bytes)
+        app->request_calibration_bytes = projection->display_plain_bytes;
+}
+
+static void
+context_learn(struct app_state *app, uint64_t tokens)
+{
+    if (!app->request_calibration_bytes || !tokens) return;
+    struct snag_token_calibration sample = context_calibration(app, app->turn_provider,
+        app->turn_model, app->turn_effort);
+    snag_token_calibration_add(&sample, app->request_calibration_bytes, tokens);
+    app->context_calibration = sample;
+    app->calibration_binding = app->prompt_context;
+    app->calibration_binding.compact_id[0] = '\0';
+    char error[256] = {0};
+    if (snag_model_cache_learn(&app->store, &app->model_cache, app->turn_provider,
+            snag_provider_catalog_protocol(app->turn_provider), app->turn_model,
+            app->request_calibration_bytes, tokens, error, sizeof(error)) < 0)
+        (void)app_warning(app, error[0] ? error : "context calibration could not be cached");
 }
 
 static void
@@ -804,6 +870,9 @@ context_observe(struct app_state *app, const char *type, const json_t *data)
     } else {
         struct snag_response_usage usage;
         if (snag_response_usage_from_json(json_object_get(data, "usage"), &usage) < 0) return;
+        if (usage.input_known || !app->prompt_context_estimated)
+            context_learn(app, usage.input_known ? usage.input_tokens :
+                app->prompt_context.input_tokens);
         if (usage.input_known) {
             app->prompt_context.input_tokens = usage.input_tokens;
             app->prompt_context_estimated = false;
@@ -908,7 +977,8 @@ format_context_meter(struct app_state *app, bool active, char meter[32u])
     used = app->prompt_context.input_tokens;
     uint64_t output = app->prompt_context_output_tokens;
     if (!app->prompt_context_output_known) {
-        uint64_t visible = context_bytes_to_tokens(app->prompt_context_output_bytes);
+        uint64_t visible = snag_token_estimate(app->prompt_context_output_bytes,
+            context_calibration(app, provider, model, effort));
         output = visible > UINT64_MAX - output ? UINT64_MAX : output + visible;
     }
     used = output > UINT64_MAX - used ? UINT64_MAX : used + output;
@@ -1659,6 +1729,18 @@ render_status(struct app_state *app)
             : capacity.count_capability == SNAG_COUNT_UNSUPPORTED ? "unsupported"
                                                                   : "unknown") < 0)
         goto out;
+    struct snag_token_calibration calibration = context_calibration(app, provider, model,
+        snag_app_resolve_effort(app->session.default_effort));
+    if (calibration.bytes && calibration.tokens) {
+        if (snag_buf_printf(&text,
+                "\ncontext estimate: %.3Lf bytes/token · %llu measured samples",
+                (long double)calibration.bytes / calibration.tokens,
+                (unsigned long long)calibration.samples) < 0)
+            goto out;
+    } else if (snag_buf_printf(&text,
+                   "\ncontext estimate: 4 bytes/token · uncalibrated") < 0) {
+        goto out;
+    }
     if (app->session.context_meter.valid) {
         bool matches = context_meter_matches(
             app, provider, model, snag_app_resolve_effort(effort));
@@ -5166,7 +5248,9 @@ static int
 finish_call(struct app_state *app, const char *turn_id, const struct snag_response_item *call,
     const char *handle, json_t *result, const char *insert, char *error, size_t error_size)
 {
-    if (!result || snag_tools_attach_output_limit(call, app->config, result) < 0) {
+    struct snag_execution_config execution = snag_app_execution_config(app);
+    if (!result || snag_tools_attach_output_limit(call, execution.tool_output_bytes,
+                       execution.token_calibration, result) < 0) {
         json_decref(result);
         return -1;
     }
@@ -5344,10 +5428,7 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
             /* Snapshot only for admission, before the pump can apply controls.
              * Polling an admitted command does not consume configuration. */
             if (calls[i].process && !calls[i].started) {
-                execution = (struct snag_execution_config){app->session.default_yield_ms,
-                    app->session.max_wait_ms, app->session.max_parallel_commands,
-                    app->session.default_timeout_ms, app->session.max_timeout_ms,
-                    app->session.tool_output_bytes, app->session.output_cache_bytes};
+                execution = snag_app_execution_config(app);
                 shell = app->session.command_shell[0] ? app->session.command_shell
                                                       : app->config->shell;
             }
@@ -5782,15 +5863,14 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         return 2;
     }
     if (continuing) {
-        execution = (struct snag_execution_config){app->session.default_yield_ms,
-            app->session.max_wait_ms, app->session.max_parallel_commands,
-            app->session.default_timeout_ms, app->session.max_timeout_ms,
-            app->session.tool_output_bytes, app->session.output_cache_bytes};
+        execution = snag_app_execution_config(app);
     } else if (snag_config_resolve_execution(app->config, app->turn_provider->name, app->turn_model,
                    &execution, error, sizeof(error)) < 0) {
         (void)app_error(app, error);
         return 2;
     }
+    snag_execution_calibrate(&execution, context_calibration(app, app->turn_provider,
+        app->turn_model, app->turn_effort));
     provider_capacity_source_sha256(app->turn_provider, app->turn_model, provider_source_hash);
     graph = (struct snag_response_graph){0};
     if (continuing) {

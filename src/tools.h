@@ -70,8 +70,16 @@ int snag_tools_run(const struct snag_response_item *call, const struct snag_conf
     const struct snag_credential *credential, const char *session_cwd, snag_tool_pump_fn pump,
     void *pump_opaque, snag_wake_fd wake_fd, json_t **result, char *error, size_t error_size);
 
-int snag_tools_attach_output_limit(
-    const struct snag_response_item *call, const struct snag_config *config, json_t *result);
+struct snag_output_limit {
+    uint32_t bytes;
+    uint64_t requested_bytes, requested_tokens;
+    const char *key;
+};
+bool snag_tools_output_limit(const json_t *, uint32_t ceiling,
+    struct snag_token_calibration, struct snag_output_limit *, char *, size_t);
+int snag_tools_output_limit_notice(struct snag_buf *, const struct snag_output_limit *);
+int snag_tools_attach_output_limit(const struct snag_response_item *,
+    uint32_t ceiling, struct snag_token_calibration, json_t *);
 
 int snag_tools_close_managed(const char *handle, bool user_interrupt, snag_tool_pump_fn pump,
     void *pump_opaque, snag_wake_fd wake_fd, json_t **result, char *error, size_t error_size);

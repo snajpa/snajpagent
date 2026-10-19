@@ -831,21 +831,30 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
 {
     if (state->section == SECTION_MCP) return parse_mcp(state, key, value);
     if (state->section == SECTION_AUDIO) return parse_audio(state, key, value);
-    char converted[32];
-    if ((state->section == SECTION_TOOL || state->section == SECTION_MODEL_LIMIT) &&
-        !strcmp(key, "tool_output_approx_tokens")) {
+    if ((state->section == SECTION_TOOL && !strcmp(key, "max_output_tokens")) ||
+        ((state->section == SECTION_TOOL || state->section == SECTION_MODEL_LIMIT) &&
+            !strcmp(key, "tool_output_approx_tokens"))) {
         uint32_t tokens;
-        if (parse_u32(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX / SNAG_APPROX_TOKEN_BYTES,
-                &tokens) < 0)
+        if (claim_key(state, "tool_output_bytes") < 0 ||
+            parse_u32(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX, &tokens) < 0)
             goto invalid;
-        (void)snprintf(converted, sizeof(converted), "%u", tokens * SNAG_APPROX_TOKEN_BYTES);
-        key = "tool_output_bytes";
-        value = converted;
+        uint64_t bytes = snag_token_bytes(tokens, (struct snag_token_calibration){0});
+        uint32_t applied = bytes > SNAG_CONFIG_TOKEN_LIMIT_MAX ? SNAG_CONFIG_TOKEN_LIMIT_MAX
+                                                              : (uint32_t)bytes;
+        if (state->section == SECTION_TOOL) {
+            state->config->tool_output_approx_tokens = tokens;
+            state->config->tool_output_bytes = applied;
+        } else {
+            struct snag_model_limit_config *limit =
+                &state->config->model_limits[state->model_limit_index];
+            limit->tool_output_approx_tokens = tokens;
+            limit->tool_output_bytes = applied;
+            limit->execution_present |= SNAG_MODEL_EXEC_TOOL_OUTPUT;
+        }
+        return 0;
     }
-    if (state->section == SECTION_TOOL) {
-        if (!strcmp(key, "max_output_tokens")) key = "tool_output_bytes";
-        else if (!strcmp(key, "max_output_bytes")) key = "display_output_bytes";
-    }
+    if (state->section == SECTION_TOOL && !strcmp(key, "max_output_bytes"))
+        key = "display_output_bytes";
     struct snag_config *config = state->config;
     struct snag_provider_config *provider = &config->providers[state->provider_index];
     struct snag_model_limit_config *limit = &config->model_limits[state->model_limit_index];
@@ -2103,6 +2112,7 @@ snag_config_resolve_limits(const struct snag_config *config, const char *provide
             MERGE_EXEC(default_timeout_ms, SNAG_MODEL_EXEC_DEFAULT_TIMEOUT);
             MERGE_EXEC(max_timeout_ms, SNAG_MODEL_EXEC_MAX_TIMEOUT);
             MERGE_EXEC(tool_output_bytes, SNAG_MODEL_EXEC_TOOL_OUTPUT);
+            MERGE_EXEC(tool_output_approx_tokens, SNAG_MODEL_EXEC_TOOL_OUTPUT);
             MERGE_EXEC(output_cache_bytes, SNAG_MODEL_EXEC_OUTPUT_CACHE);
 #undef MERGE_EXEC
         }
@@ -2121,7 +2131,8 @@ snag_config_resolve_execution(const struct snag_config *config, const char *prov
     if (!config || !provider || !model || !out) return snag_errno(EINVAL);
     *out = (struct snag_execution_config){config->default_yield_ms, config->max_wait_ms,
         config->max_parallel_commands, config->default_timeout_ms, config->max_timeout_ms,
-        config->tool_output_bytes, config->output_cache_bytes};
+        config->tool_output_bytes, config->output_cache_bytes,
+        config->tool_output_approx_tokens, {0}};
     (void)snag_config_resolve_limits(config, provider, model, &resolved, NULL);
 #define APPLY_EXEC(field, bit)                                                                     \
     do {                                                                                           \
@@ -2133,6 +2144,7 @@ snag_config_resolve_execution(const struct snag_config *config, const char *prov
     APPLY_EXEC(default_timeout_ms, SNAG_MODEL_EXEC_DEFAULT_TIMEOUT);
     APPLY_EXEC(max_timeout_ms, SNAG_MODEL_EXEC_MAX_TIMEOUT);
     APPLY_EXEC(tool_output_bytes, SNAG_MODEL_EXEC_TOOL_OUTPUT);
+    APPLY_EXEC(tool_output_approx_tokens, SNAG_MODEL_EXEC_TOOL_OUTPUT);
     APPLY_EXEC(output_cache_bytes, SNAG_MODEL_EXEC_OUTPUT_CACHE);
 #undef APPLY_EXEC
     if (out->default_yield_ms > out->max_wait_ms)
@@ -2142,4 +2154,16 @@ snag_config_resolve_execution(const struct snag_config *config, const char *prov
         return snag_fail(error, error_size, EINVAL,
             "effective default_timeout_ms exceeds max_timeout_ms for %s/%s", provider, model);
     return 0;
+}
+
+void
+snag_execution_calibrate(struct snag_execution_config *execution,
+    struct snag_token_calibration calibration)
+{
+    execution->token_calibration = calibration;
+    if (execution->tool_output_approx_tokens) {
+        uint64_t bytes = snag_token_bytes(execution->tool_output_approx_tokens, calibration);
+        execution->tool_output_bytes = bytes > SNAG_CONFIG_TOKEN_LIMIT_MAX
+                                          ? SNAG_CONFIG_TOKEN_LIMIT_MAX : (uint32_t)bytes;
+    }
 }
