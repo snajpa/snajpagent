@@ -643,7 +643,7 @@ input()
         source.write_text(payload)
         resumed.output.clear()
         resumed.write((str(source) + '\r').encode())
-        resumed.until(b'1 unsent attachment(s)', 15)
+        resumed.repaint_until(b'1 unsent attachment(s)', 15)
         self.show_report(resumed, '/receive')
         resumed.command('history')
         requests = []
