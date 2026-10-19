@@ -6862,6 +6862,14 @@ test_channel_reply_membership_restore(void)
                 .rejoin = true}};
         assert(snag_session_commit(&app.session, "irc_event_v2", snag_irc_event_data(&member), NULL,
                    error, sizeof(error)) == 0);
+        struct snag_irc_event connected = member;
+        connected.room[0] = '\0';
+        connected.route.kind = SNAG_IRC_CONNECTION_EVENTS;
+        strcpy(connected.route.conversation, "66666666666666666666666666666666");
+        connected.route.membership[0] = connected.route.target[0] = '\0';
+        connected.route.joined = connected.route.rejoin = false;
+        assert(snag_session_commit(&app.session, "irc_event_v2", snag_irc_event_data(&connected),
+                   NULL, error, sizeof(error)) == 0);
         struct snag_irc_event original = member;
         original.kind = SNAG_IRC_MESSAGE;
         original.classified = original.input = original.urgent = original.reply = true;
@@ -6894,7 +6902,7 @@ test_channel_reply_membership_restore(void)
         assert(snag_session_commit(
                    &app.session, "turn_started", started, NULL, error, sizeof(error)) == 0);
         if (mode == 4u || mode == 5u) {
-            /* New membership or connection cannot satisfy the original obligation. */
+            /* New membership or connection retires the unreachable original target. */
             if (mode == 4u)
                 strcpy(member.route.membership, "77777777777777777777777777777777");
             else
@@ -6909,7 +6917,11 @@ test_channel_reply_membership_restore(void)
             snag_buf_init(&app.irc_urgent_refs, 1024u);
             assert(snag_app_irc_restore(&app, error, sizeof(error)) == 0);
             if (!phase) {
-                assert(snag_app_irc_replies_pending(&app));
+                assert(!snag_app_irc_replies_pending(&app));
+                app.irc_destinations.count = 1u;
+                strcpy(app.irc_destinations.items[0].connection, member.route.connection);
+                app.irc_destinations.items[0].generation = member.route.generation;
+                assert(snag_app_irc_replies_pending(&app) == (mode != 4u && mode != 5u));
                 struct snag_irc_event receipt = member;
                 receipt.kind = mode == 2u ? SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE;
                 receipt.route.direction = SNAG_IRC_OUTGOING;
@@ -6927,7 +6939,8 @@ test_channel_reply_membership_restore(void)
                 }
                 assert(snag_app_irc_event(&app, &receipt) == 0);
             }
-            assert(snag_app_irc_replies_pending(&app) == (mode != 1u && mode != 8u));
+            assert(snag_app_irc_replies_pending(&app) ==
+                   (mode != 1u && mode != 4u && mode != 5u && mode != 8u));
             const json_t *entry =
                 json_object_get(app.irc_turn_conversations, original.route.conversation);
             struct snag_irc_event restored;
