@@ -117,7 +117,10 @@ chmod +x "$tmp/native-bin/pkg-config" "$tmp/target-pkg-config"
 cp "$tmp/pristine.mk" "$tmp/config.mk"
 fixture_yaml_cflags=${YAML_CFLAGS:-$(pkg-config --cflags yaml-0.1 2>/dev/null)}
 fixture_yaml_libs=${YAML_LIBS:-$(pkg-config --libs yaml-0.1 2>/dev/null)}
+fixture_zstd_cflags=${ZSTD_CFLAGS:-$(pkg-config --cflags libzstd 2>/dev/null)}
+fixture_zstd_libs=${ZSTD_LIBS:-$(pkg-config --libs libzstd 2>/dev/null)}
 (cd "$tmp" && YAML_CFLAGS="$fixture_yaml_cflags" YAML_LIBS="$fixture_yaml_libs" \
+	ZSTD_CFLAGS="$fixture_zstd_cflags" ZSTD_LIBS="$fixture_zstd_libs" \
 	PATH="$tmp/native-bin:$PATH" PKG_CONFIG="$tmp/target-pkg-config" \
 	sh ./configure --without-av --with-pdf --without-audio-device \
 	--without-office --without-office-commands >"$tmp/out3" 2>&1)
