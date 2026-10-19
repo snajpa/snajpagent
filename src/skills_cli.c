@@ -215,11 +215,19 @@ snag_skills_main(int argc, char **argv)
         }
     }
     if (result) {
-        char *output = json_dumps(result,
-            JSON_SORT_KEYS | (compact ? JSON_COMPACT : JSON_INDENT(2)));
-        if (output) {
-            rc = printf("%s\n", output) < 0 ? 1 : 0;
-            free(output);
+        if (compact) {
+            char *output = json_dumps(result, JSON_SORT_KEYS | JSON_COMPACT);
+            if (output) {
+                rc = printf("%s\n", output) < 0 ? 1 : 0;
+                free(output);
+            }
+        } else {
+            struct snag_buf output = {.max = SIZE_MAX};
+            if (snag_skills_report(&output, command, result) == 0 &&
+                snag_buf_terminate(&output) == 0) {
+                rc = printf("%s\n", output.data) < 0 ? 1 : 0;
+            }
+            snag_buf_free(&output);
         }
     }
 done:

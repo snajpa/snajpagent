@@ -276,6 +276,37 @@ snag_app_skills_begin(struct app_state *app, const char *prompt, bool continuing
     return 0;
 }
 
+static int
+unload(struct app_state *app, const char *id, size_t *removed, char *error, size_t size)
+{
+    json_t *active = json_array();
+    if (!active) return -1;
+    for (size_t i = 0; i < json_array_size(app->session.active_skills); ++i) {
+        json_t *entry = json_array_get(app->session.active_skills, i);
+        if (id && strcmp(id, snag_json_string(entry, "id")) &&
+            strcmp(id, snag_json_string(entry, "name"))) {
+            if (json_array_append(active, entry) < 0) {
+                json_decref(active);
+                return -1;
+            }
+        }
+    }
+    *removed = json_array_size(app->session.active_skills) - json_array_size(active);
+    if (id && *removed > 1u) {
+        json_decref(active);
+        return snag_errorf(error, size, "skill name is ambiguous; use a qualified ID");
+    }
+    int rc = save_bindings(app, active, error, size);
+    json_decref(active);
+    if (rc < 0) return rc;
+    if (snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_NOTICE,
+        .label = *removed && id ? "Skill unloaded: " : "",
+        .text = !*removed ? "No skills unloaded." : id ? id : "Skills unloaded."}) < 0) {
+        return snag_errorf(error, size, "skill bindings saved but unload notice failed");
+    }
+    return 0;
+}
+
 int
 snag_app_skills_tool(struct app_state *app, const struct snag_response_item *call,
     json_t **result, char *error, size_t size)
@@ -310,9 +341,15 @@ snag_app_skills_tool(struct app_state *app, const struct snag_response_item *cal
             json_object_del(*result, "body");
             json_object_del(*result, "instructions");
         }
+    } else if (!strcmp(action, "deactivate") && id && *id) {
+        size_t removed;
+        if (unload(app, id, &removed, error, size) == 0) {
+            *result = json_pack("{s:s,s:s,s:I}", "action", "deactivate", "id", id,
+                "removed", (json_int_t)removed);
+        }
     } else {
         (void)snag_errorf(error, size,
-            "skills requires list, refresh, show or activate and a matching id");
+            "skills requires list, refresh, show, activate or deactivate and a matching id");
     }
     if (*result) {
         if (json_object_set(*result, "skills_generation",
@@ -338,7 +375,7 @@ manage_command(struct app_state *app, const char *action, const char *operand,
     json_t *words = snag_skill_arguments(operand ? operand : "", error, size);
     const char *fixed[] = {program, "skills", "--dotdir", app->store.root_path,
         "--config", app->config->source_path, "--cwd",
-        app->session.cwd ? app->session.cwd : ".", "--json", action};
+        app->session.cwd ? app->session.cwd : ".", action};
     size_t fixed_count = sizeof(fixed) / sizeof(fixed[0]);
     const char **argv = calloc(fixed_count + json_array_size(words) + 1u, sizeof(*argv));
     struct snag_child child;
@@ -444,23 +481,11 @@ snag_app_skills_command(struct app_state *app, const char *line, bool *handled)
         return rc < 0 ? snag_app_report(app, SNAG_UI_ERROR, error) : rc;
     }
     if (!strcmp(copy, "clear")) {
-        json_t *active = json_array();
-        if (!active) { free(copy); return -1; }
-        for (size_t i = 0; i < json_array_size(app->session.active_skills); ++i) {
-            json_t *entry = json_array_get(app->session.active_skills, i);
-            if (operand && strcmp(operand, snag_json_string(entry, "id")) &&
-                strcmp(operand, snag_json_string(entry, "name"))) {
-                if (json_array_append(active, entry) < 0) {
-                    json_decref(active);
-                    free(copy);
-                    return -1;
-                }
-            }
-        }
-        if (save_bindings(app, active, error, sizeof(error)) == 0) {
-            result = json_pack("{s:s,s:O}", "action", "clear", "active", active);
-        }
-        json_decref(active);
+        size_t removed;
+        int rc = unload(app, operand, &removed, error, sizeof(error));
+        if (rc < 0) rc = snag_app_report(app, SNAG_UI_ERROR, error);
+        free(copy);
+        return rc;
     } else if (snag_app_skills_refresh(app, error, sizeof(error)) == 0) {
         if (!strcmp(copy, "list") || !strcmp(copy, "refresh")) {
             result = snag_skills_list(app->session.skills_catalog, operand, 0u, 50u);
@@ -481,10 +506,16 @@ snag_app_skills_command(struct app_state *app, const char *line, bool *handled)
                 "clear [ID]|refresh|prompt ID]");
         }
     }
-    char *text = result ? json_dumps(result, JSON_INDENT(2) | JSON_SORT_KEYS) : NULL;
-    int rc = snag_app_report(app, SNAG_UI_HOST,
-        text ? text : *error ? error : "skills command failed");
-    free(text);
+    struct snag_buf text = {.max = SIZE_MAX};
+    int rc;
+    if (result) {
+        rc = snag_skills_report(&text, copy, result);
+        if (rc == 0) rc = snag_buf_terminate(&text);
+        if (rc == 0) rc = snag_app_report(app, SNAG_UI_HOST, (char *)text.data);
+    } else {
+        rc = snag_app_report(app, SNAG_UI_ERROR, *error ? error : "skills command failed");
+    }
+    snag_buf_free(&text);
     json_decref(result);
     free(copy);
     return rc;

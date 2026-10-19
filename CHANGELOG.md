@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+- Display concise human-readable skill command reports by default; preserve
+  explicit CLI `--json` and model tool results. Summarize MCP tools and pending
+  calls while keeping exact approval arguments inspectable.
+
+- Add `skills` tool action `deactivate` alongside `activate` so the model can load
+  and unload task guidance.
+
+- Show a green lifecycle bullet when `/skills clear [ID]` unloads skill bindings.
+  Clearing an inactive selection reports that no skills were unloaded.
+
 - Accept up to 1,024 remote IRC client connections per hosted server (512 paired
   agent/operator sessions), in addition to the host's local identities. Preserve
   membership across larger saved rooms. Full servers send an IRC error; clients

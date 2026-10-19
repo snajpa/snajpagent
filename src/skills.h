@@ -31,6 +31,8 @@ json_t *snag_skill_resources(const char *root, size_t budget, char *, size_t);
 bool snag_skill_bindings_valid(const json_t *active);
 struct snag_session;
 bool snag_skill_binding_active(const struct snag_session *, const json_t *entry);
+struct snag_buf;
+int snag_skills_report(struct snag_buf *, const char *action, const json_t *result);
 int snag_skills_main(int argc, char **argv);
 
 #endif

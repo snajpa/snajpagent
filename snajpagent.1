@@ -3177,8 +3177,8 @@ OAuth grant, scopes, expiry, catalog generation and last contact. A label is
 local configuration; an undisclosed authenticated identity remains unknown.
 .TP
 .BR /mcp " tools SERVER"
-Inspect complete remote tool declarations and locally filtered declarations
-with their reasons. The active turn's tool schema remains fixed.
+List remote tool names and descriptions, plus locally filtered tools and their
+reasons. The active turn's tool schema remains fixed.
 .TP
 .BR /mcp " reload SERVER"
 Schedule catalog discovery at the next turn boundary.
@@ -3194,8 +3194,10 @@ stops admitting that server's calls. An active MCP request must finish or be
 cancelled first. Other owners keep their admitted settings until reload or refresh.
 .TP
 .BR /mcp " pending [DIGEST]"
-List pending requests, or inspect the complete server/tool declaration and
-arguments for a particular digest. Inspect a particular digest before approval.
+List concise pending-call summaries, or inspect the complete server/tool
+declaration and arguments as a readable value tree for a particular digest.
+Quoted strings preserve whitespace and escaped control characters.
+Inspect a particular digest before approval.
 .TP
 .BR /mcp " approve DIGEST"
 Admit one subsequent call matching the inspected server, tool declaration and
@@ -4547,7 +4549,12 @@ variables and prices remain literal. Explicit selection errors leave an interact
 session open for correction; one-shot execution fails before contacting a provider.
 .PP
 Bare /skills lists loaded guidance; /skills list browses available packages.
-The model skills tool supports list, show, activate and refresh. List exposes
+Interactive skill commands display readable summaries. Show displays the selected
+source; management commands report the completed action and package path.
+The model skills tool supports list, show, activate, deactivate and refresh.
+Activate loads guidance; deactivate requires an ID or unambiguous name and retires
+that binding from subsequent model requests, with a green unload confirmation.
+Deactivating an inactive selection reports zero removals. List exposes
 concise metadata; show loads instructions and resource locations. Activation pins
 attributed instructions with literal arguments. Changed instructions since discovery
 require refresh. Repeating an identical active selection reuses its binding.
@@ -4558,8 +4565,9 @@ Scripts run only through ordinary declared tools with their normal lifecycle.
 Guidance activated during a visit belongs to that visit. Outside a visit it belongs
 to the current task or active persistent goal. Snapshots survive retry and resume;
 changes to helper resources do not revoke pinned instructions. /skills clear [ID]
-retires bindings. /skills prompt ID puts a package's default prompt in the composer
-for editing. Read-only turns retain their normal tool restrictions.
+retires bindings and displays a green unload confirmation bullet. A clear that
+retires no bindings displays "No skills unloaded."
+/skills prompt ID puts a package's default prompt in the composer for editing. Read-only turns retain their normal tool restrictions.
 .SS "Author and manage packages"
 .nf
 snajpagent skills create /absolute/source/my-skill
@@ -4583,6 +4591,7 @@ or validation fails. Removal deselects an installation; retained versions preser
 rollback data. The private, effective-user-owned dotdir/skills.json records
 installation selections. Managed versions live beneath dotdir/skills/.store.
 .PP
+Skills commands display concise lists, source text and action confirmations.
 Use skills --help for syntax and --json for machine-readable reports. --dotdir
 selects storage, --config selects normal configuration, --cwd supplies project
 lookup context and --root DIR overrides application roots for that invocation.

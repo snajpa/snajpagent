@@ -1031,6 +1031,68 @@ snag_skills_list(const json_t *catalog, const char *query, size_t offset, size_t
     return result;
 }
 
+int
+snag_skills_report(struct snag_buf *text, const char *action, const json_t *result)
+{
+    int rc = 0;
+    if (!strcmp(action, "list") || !strcmp(action, "refresh")) {
+        json_t *entries = json_object_get(result, "entries");
+        size_t count = json_array_size(entries);
+        json_int_t total = json_integer_value(json_object_get(result, "total"));
+        rc = count ? snag_buf_printf(text, "Available skills (%zu of %lld):", count,
+            (long long)total) : snag_buf_printf(text, "No matching skills.");
+        for (size_t i = 0; rc == 0 && i < count; ++i) {
+            json_t *entry = json_array_get(entries, i);
+            const char *description = snag_json_string(entry, "description");
+            rc = snag_buf_printf(text, "\n  %s (%s) — %.*s", snag_json_string(entry, "name"),
+                snag_json_string(entry, "id"), (int)strcspn(description, "\r\n"), description);
+        }
+        json_int_t remaining = json_integer_value(json_object_get(result, "remaining"));
+        if (rc == 0 && remaining) rc = snag_buf_printf(text,
+            "\n%lld more; narrow the search to see other matches.", (long long)remaining);
+    } else if (!strcmp(action, "paths")) {
+        rc = snag_buf_printf(text, "Skill paths:");
+        const char *groups[] = {"roots", "linked_origins", "managed"};
+        for (size_t i = 0; rc == 0 && i < sizeof(groups) / sizeof(groups[0]); ++i) {
+            json_t *entries = json_object_get(result, groups[i]);
+            for (size_t j = 0; rc == 0 && j < json_array_size(entries); ++j) {
+                json_t *entry = json_array_get(entries, j);
+                const char *path = snag_json_string(entry, "path");
+                if (!path) path = snag_json_string(entry, "root");
+                rc = snag_buf_printf(text, "\n  %s: %s", groups[i], path ? path : "unavailable");
+            }
+        }
+        const char *retained = snag_json_string(result, "excluded_retained_storage");
+        if (rc == 0 && retained) rc = snag_buf_printf(text,
+            "\n  Retained storage (excluded): %s", retained);
+    } else {
+        const char *title = !strcmp(action, "show") ? "Skill" :
+            !strcmp(action, "validate") ? "Valid skill" :
+            !strcmp(action, "create") ? "Created skill" :
+            !strcmp(action, "install") ? "Installed skill" :
+            !strcmp(action, "update") ? "Updated skill" : "Removed skill";
+        const char *name = snag_json_string(result, "name");
+        rc = snag_buf_printf(text, "%s: %s", title, name ? name : "unknown");
+        if (rc == 0 && !strcmp(action, "show")) {
+            const char *description = snag_json_string(result, "description");
+            const char *root = snag_json_string(result, "root");
+            const char *body = snag_json_string(result, "body");
+            rc = snag_buf_printf(text, "\n%s\nPath: %s\n\n%s",
+                description ? description : "", root ? root : "", body ? body : "");
+        } else if (rc == 0 && strcmp(action, "remove")) {
+            const char *root = snag_json_string(result, "root");
+            if (root) rc = snag_buf_printf(text, "\nPath: %s", root);
+        }
+    }
+    json_t *diagnostics = json_object_get(result, "diagnostics");
+    for (size_t i = 0; rc == 0 && i < json_array_size(diagnostics); ++i) {
+        json_t *entry = json_array_get(diagnostics, i);
+        rc = snag_buf_printf(text, "\nWarning: %s: %s", snag_json_string(entry, "path"),
+            snag_json_string(entry, "message"));
+    }
+    return rc;
+}
+
 json_t *
 snag_skill_snapshot(const json_t *entry, char *error, size_t size)
 {

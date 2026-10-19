@@ -71,7 +71,10 @@ copy packages atomically. Unrelated resource changes do not invalidate an alread
 pinned instruction snapshot. Retry and resume retain that exact snapshot even if
 its source is removed.
 
-The native `skills` tool provides list, show, activate and refresh. An unchanged
+The native `skills` tool provides list, show, activate, deactivate and refresh.
+Activate loads a binding; deactivate requires an ID or unambiguous name and removes
+it from subsequent request guidance. Both emit lifecycle bullets after saving the
+binding state. A missing active selection returns zero removals. An unchanged
 catalog is reused within a turn instead of rescanning on every tool call. Arguments
 are literal substitutions, including `$ARGUMENTS`, numbered arguments and the
 portable skill-directory marker. `$name` and `/skills use ID -- REQUEST` support
@@ -104,6 +107,8 @@ harnesses retain their read-only and non-destructive rules; disposable local evi
 is sufficient for runtime qualification and does not authorize production access.
 
 Bare `/skills` reports loaded guidance; `/skills list` browses the catalog.
+Interactive commands and the standalone CLI display concise human-readable reports;
+explicit CLI `--json` and native model tool results retain machine-readable data.
 
 ## Verification
 
