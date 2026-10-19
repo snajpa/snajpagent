@@ -31,11 +31,9 @@
       sessions keep their original code.</p>
     <section id="rollout" aria-labelledby="rollout-heading">
       <h2 id="rollout-heading">Work on a project</h2>
-      <p>Give a model an objective, constraints and project context. Persistent
-        goals carry implementation, testing and follow-through across turns;
-        steering and saved sessions keep that work under your direction.
-        Connect agents across machines and rooms to divide work and exchange
-        findings while each runs tools in its own environment.</p>
+      <p>Give a model an objective, constraints and project context. Goals,
+        steering and saved sessions carry work across turns. Connect agents
+        across machines and rooms to divide work; each runs tools locally.</p>
       <p>Start <code>snajpagent</code> and describe the task. Sessions start at home;
         the model manages its working directory. Local tools read/edit files and
         run commands with your OS permissions, without per-call approval.
@@ -80,6 +78,8 @@
         <code>/s d</code> to return to the shell while work continues, then
         <code>snajpagent --attach SESSION_ID</code> to reconnect with the retained
         draft. Detach prints a copyable resume command for the same session.
+        Current source accepts <code>snajpagent send SESSION_ID -- "prompt"</code>
+        from another shell while retaining the attached terminal and its draft.
         Without an ID, attach lists running sessions. Current source accepts
         <code>-N NAME</code> to name a new session and select it on attach or resume;
         <code>/session name NAME</code> names an existing session. <code>--resume</code> attaches to a running owner and restarts a stored session. Session lists show
@@ -125,12 +125,11 @@
         outside trusted networks. The <a href="manual.html">manual</a> covers
         supported providers, data destinations and capture controls.</p>
     </section>
-    <p>Current source supports temporary project roles through <code>work_context</code>:
-      enter a project or harness for a task, then leave to return to the broader work.
-      The same worker retains its conversation, model and notes. Project and configured
-      skill packages supply reusable instructions; <code>/skills paths</code> shows their
-      origins, <code>/skills</code> lists loaded guidance and <code>$my-skill</code> invokes a package. See the
-      <a href="manual.html">manual</a> for the workflow.</p>
+    <p>Use <code>work_context</code> to enter a temporary project role, then leave to
+      return to broader work with the same conversation and model. Project and
+      configured skills supply reusable instructions. <code>/skills paths</code>
+      shows origins, <code>/skills</code> lists loaded guidance and
+      <code>$my-skill</code> invokes a package. See the <a href="manual.html">manual</a>.</p>
     <section id="network" aria-labelledby="network-heading">
       <h2 id="network-heading">Coordinate distributed work</h2>
       <p>Built-in IRC connects people and agents across endpoints and channels.
@@ -142,7 +141,7 @@
       <p>Start a room; connect from another terminal:</p>
       <pre><code>snajpagent -s
 snajpagent -c</code></pre>
-      <p>Defaults connect on localhost. Assign work in the room; agents exchange findings.</p>
+      <p>Defaults connect on localhost. Assign work and exchange findings in the room.</p>
       <p>Agents can use project files and Git for code and handoff notes;
         arrange access to those files separately. IRC has
         no authentication or TLS. Use localhost, a trusted network, or a secure

@@ -78,7 +78,7 @@ All message names below are the JSON `type` value. A new client sends
 `{"type":"hello","version":1}`. `capabilities` supplies `version`, the full
 `session` ID, a random live-owner `instance` ID and `features`.
 The implemented features are `observe`, `control`, `submit`, `cancel`, `quit`,
-`detach`, `receipts`, `drafts`, `commands`, `queue`, `terminal_commands`, `reports`,
+`detach`, `receipts`, `drafts`, `commands`, `queue`, `send`, `terminal_commands`, `reports`,
 `irc_queries`, `irc_channels`, `irc_connections` and `editor_feedback`.
 
 After hello, `state` messages contain a `state` object with committed `seq`,
@@ -103,6 +103,7 @@ still causes the history reader to return its new page.
 | `reserve` | `reserved` with a `generation`, or `error`. Uses the same exclusive reservation as the classic terminal. |
 | `commit` with `generation` | `bound` with that generation. The client may then submit input. Classic STATUS now reports attached. |
 | `submit` with `generation`, 32-character lowercase hexadecimal `id`, and `text` | `result` with that ID and `pending`, followed by `committed` or `rejected`. Input without `route` addresses the rollout, including when the previous terminal showed IRC. A query route addresses that exact operator conversation. Active work uses existing steering/queue admission. Slash commands use the separate `command` exchange; `/ro` retains the ordinary read-only prompt syntax. |
+| `send` with `id` and `text` | Uses the same rollout input admission and receipts as `submit`, independently of the controlling attachment. Requires hello and the advertised capability; accepts no generation, route, command or draft revision. The existing controller and draft remain unchanged. |
 | `queue` with the same fields as `submit` | Retains the draft as a future rollout turn through ordinary queue admission. Only the rollout route is accepted. The capability is required; older owners retain `/queue TEXT`. Receipt identity includes queued versus immediate intent. |
 | `command` with `generation`, `id`, `text`, `route`, and optional `draft_revision` | `pending`, then `completed` with an immutable report or `terminal` before executing any effect. Uses the same mailbox, receipt and draft-revision rules as submission. |
 | `receipt` with `id` | Current `result`, or `unknown`. Requires hello but no controller lease. |
@@ -113,7 +114,9 @@ still causes the history reader to return its new page.
 | `detach` with `generation` | `detached`, then connection close. The owner continues. |
 | `quit` with `generation` | `control` with `intent: quit`; normal owner shutdown follows, then `exit` with its `status` and connection close. |
 
-Generation checks apply to every mutating request. A reservation alone counts
+Generation checks apply to controller mutations; independent `send` input uses
+the same owner admission queue without acquiring or changing a controller lease.
+A reservation alone counts
 as detached; a bound controller counts as attached even if its window is not
 focused. Input waits behind the `bound` response. Another semantic controller
 or classic terminal receives a busy response while the lease is held.
@@ -128,11 +131,14 @@ The journal format stays unchanged.
 The owner retains request IDs, exact routes, text digests and results across
 connection loss. Repeating the same ID/route/text returns the receipt; changing
 its route, text or immediate/queued intent is rejected.
+Independent versus controller submission is also part of that identity.
 The workspace must query an uncertain ID before taking further action and must
 never automatically resubmit it as a new request. An owner restart changes
 `instance`; an unknown receipt remains uncertain until explicitly reconciled
 against retained history. Queue entries from a detached generation are rejected
-before admission and receive a rejected receipt.
+before admission and receive a rejected receipt. Independent sends remain valid
+across attachment changes. Model `none` returns `discarded` before model-bound
+admission; no input or queue event is added and no draft is cleared.
 Submission refusals include the request ID when it is valid. A control error
 does not resolve a pending submission; clients query that submission's receipt
 before offering recovery.

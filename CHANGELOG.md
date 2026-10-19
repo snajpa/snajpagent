@@ -15,6 +15,10 @@
   Preserve exact legacy source bytes in verified `.jsonl.zst` archives and
   recover interrupted journal/index/checkpoint publication under the writer lock.
 
+- Add `snajpagent send SESSION_ID -- "prompt"` and piped-input support for running
+  sessions. The semantic socket preserves terminal control and drafts, reports
+  final admission or model-free discard, and leaves uncertain outcomes explicit.
+
 - Add `/model none` and `-m none` for local controls and IRC without model
   activity. Model-bound input is discarded, automatic model work waits, and the
   selection survives resume, including with no configured provider.

@@ -2,11 +2,8 @@
 
 # snajpagent
 
-A terminal harness for autonomous, long-horizon work and distributed agent teams.
-
-Goals and saved sessions carry work across turns. IRC connects agents across
-machines; each runs tools locally. Point your home directory's `AGENTS.md` to
-project notes that retain findings and unfinished work.
+A terminal harness for autonomous work and distributed teams. Goals and saved
+sessions carry work across turns; IRC connects agents across machines.
 
 [Website](https://agent.snajpa.net) ·
 [Downloads](https://agent.snajpa.net/downloads.html) ·
@@ -18,20 +15,18 @@ This guide covers current source. Downloads include a matching manual; check
 
 ## 1. Work on a project
 
-After [installing and choosing a provider](#install-and-choose-a-provider),
-start snajpagent:
+[Install and choose a provider](#install-and-choose-a-provider), then start:
 
 ```sh
 snajpagent
 ```
 
-Describe the outcome, constraints and repository; press Enter. A persistent
-goal carries implementation, testing and follow-through across turns until
-complete or blocked.
+Describe the outcome, constraints and repository; press Enter. Persistent goals
+continue across turns until complete or blocked.
 
-Ask the model to enter a temporary project or harness role with `work_context`,
-then leave to return to its broader assignment. The worker retains its conversation,
-model and notes; goals are optional. `cd` navigates within that work.
+`work_context` enters a temporary project or harness role, then returns to the
+broader assignment with conversation, model and notes retained. Goals are optional.
+`cd` navigates within that work.
 Skills come from project `.snajpagent/skills`, `.agents/skills` and `.claude/skills`,
 then configured roots or `~/.snajpagent/skills`. Use `/skills` for loaded guidance,
 `/skills list` to browse, `/skills paths` for origins and `$my-skill` to invoke one.
@@ -41,7 +36,7 @@ New sessions start at `~`; the model manages its working directory. Tools read/e
 files and run commands with your OS permissions, without per-call approval.
 Paths may be absolute or explicit `./` paths. Empty Enter opens a fresh prompt.
 
-Scroll back normally. Tool details start hidden: `/verbose 1` shows activity,
+Tool details start hidden: `/verbose 1` shows activity,
 `/verbose 2` adds input/result previews and call references; `[…]` marks omissions.
 `/help` lists commands/keys, available even during work.
 
@@ -92,7 +87,7 @@ Failed turns retry five times; `max_turn_retries` changes that budget. With
 automatic retry enabled, active goals retry ordinary errors without a limit,
 while policy stops pause them.
 
-A normal final answer ends the turn; set a goal to continue work beyond it:
+A final answer ends the turn; a goal continues work:
 
 ```text
 /goal fix the bug and validate the change
@@ -101,28 +96,37 @@ A normal final answer ends the turn; set a goal to continue work beyond it:
 Goals continue until complete or blocked; queued prompts come first. `/goal pause`
 pauses at a turn boundary, `/goal resume` continues paused or blocked work, and
 `/goal clear` cancels while retaining history.
-Blocked goals name their wait channel, such as `irc: endpoint/nick`, a timer or
-an external dependency. `operator` means operator input is required; `/goal`
-shows the recorded destination and blocker.
+Blocked goals name their dependency. `operator` means operator input is required;
+`/goal` shows the destination and blocker.
 
 Ctrl-C clears a nonempty draft; with an empty draft it interrupts work and
 pauses goal continuation. Empty Enter leaves the goal paused; use `/goal resume`.
 Ctrl-D on an empty draft exits, and no work continues after exit. Pending room
 updates remain available for later admission; direct mentions remain urgent.
 
-The conversation, tools, queue and goal are saved as a **session**. Resume
-continues unfinished work; calls with uncertain outcomes require inspection.
+A **session** saves conversation, tools, queue and goal. Resume continues unfinished
+work; inspect calls with uncertain outcomes.
 Linux sessions started on ANSI terminals at least 20 columns wide survive
 terminal loss. Use `/s d` to detach, then `snajpagent --attach SESSION_ID`
 (or `-A`) to reconnect with the retained draft. Without an ID, attach offers a
 running-session picker. `/s a ID` switches live sessions; failure keeps the source.
 Detach and normal exit print a copyable resume command using the full session ID.
 It reconnects to a running owner and retains session settings.
-Current source restores saved view and verbosity on restart.
-
+Restart restores saved view and verbosity.
 File transfers and local audio stop on disconnect; queued downloads remain
 saved. Restart microphone capture after reconnecting. New editors and pagers
 use the replacement terminal's profile; running programs keep their environment.
+
+Send a prompt from another shell:
+
+```sh
+snajpagent send SESSION_ID -- "Check the pending changes"
+printf '%s\n' "Check the pending changes" | snajpagent send SESSION_ID
+```
+
+The terminal and draft stay in place. Receipts report accepted, queued or
+discarded input; model `none` discards it. Inspect unknown outcomes before resending.
+
 List sessions or reopen the latest one:
 
 ```sh
@@ -211,10 +215,9 @@ data destinations and capture controls.
 
 ### Keep useful findings in files
 
-Project notes and `AGENTS.md` carry findings across sessions. Keep decisions
-current and proposals separate from approvals. `-d DIR` adds a documentation
-root; repeat it for shared or cross-repository notes. Relative documentation
-paths use the launch directory and persist in the session.
+Keep decisions and findings in project notes linked from `AGENTS.md`, distinguishing
+proposals from approvals. `-d DIR` adds a documentation root; repeat it for shared
+notes. Relative paths use the launch directory and persist with the session.
 
 ## 2. Work together
 
@@ -265,9 +268,9 @@ conversation tabs, Tab at the end queues a local follow-up during work.
 
 ### Coordinate work
 
-Assign work in the room; agents exchange findings. Keep code/handoff notes in
-project files and Git: IRC shares no files, credentials or processes. Independent
-edits use separate Git worktrees.
+Assign work in the room; keep code/handoff notes in project files and Git.
+IRC shares no files, credentials or processes. Independent edits use separate
+Git worktrees.
 
 `/server start` hosts a room and `/connect ENDPOINT` adds a connection to that
 endpoint's advertised room; repeat it for other endpoints. `/names` lists rooms
@@ -297,9 +300,8 @@ pricing. `/status` explains accounting; `?%` means usage is unknown.
 
 ### Connect MCP tools
 
-Current development builds expose configured Streamable HTTP MCP tools directly
-in model turns. Add `[mcp NAME]` with the endpoint and registered OAuth client,
-then run `snajpagent mcp login NAME` and complete the displayed consent URL.
+Configure Streamable HTTP tools with `[mcp NAME]`, an endpoint and registered OAuth
+client. Run `snajpagent mcp login NAME` and open the consent URL.
 `/configure` adopts the login in an existing session; `/mcp tools NAME` shows
 exact declarations and `/mcp status NAME` shows identity, scopes and diagnostics.
 Calls require exact operator approval unless local policy allows their names.

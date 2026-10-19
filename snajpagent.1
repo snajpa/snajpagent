@@ -21,6 +21,11 @@ snajpagent \- terminal coding agent with built-in IRC
 .RI [ options ]
 .RI "[-- " prompt " ...]"
 .br
+.B snajpagent send
+.RI [ --dotdir " PATH]"
+.I session-id
+.RI "[-- " prompt " ...]"
+.br
 .B snajpagent \-l
 .RI [ N ]
 .RI [ options ]
@@ -602,7 +607,44 @@ New editors and pagers use the attached terminal's TERM and GNU Screen profile.
 An already-running external program keeps its launch environment and receives
 the terminal resize notification. Owner configuration, including color policy,
 stays unchanged.
+.SS Send a prompt to a running session
+Use the full session ID or a unique lowercase hexadecimal ID prefix:
 .PP
+.nf
+snajpagent send SESSION_ID -- "Check the pending changes"
+printf '%s\en' "Check the pending changes" | snajpagent send SESSION_ID
+.fi
+.PP
+The command submits rollout input through the running owner's private semantic
+socket. The attached terminal, its unsent draft and its selected conversation
+remain available. An idle session starts a turn; an active session admits the
+text as steering. With model
+.BR none ,
+the owner discards the prompt before queueing or adding it to model context.
+Slash commands use the interactive controls; send accepts prompt text, including
+the ordinary /ro prefix.
+.PP
+Put
+.B --dotdir PATH
+before SESSION_ID for a nondefault application directory. To read stdin, omit
+the separator and pipe UTF-8 input or redirect a file. One trailing newline
+and its optional carriage return are removed. The prompt limit is 1 MiB.
+The session must already be running in a build advertising semantic send support;
+send never starts or resumes an owner.
+.PP
+The command waits up to 30 seconds for a final receipt. Output starts with
+.BR accepted ,
+.BR queued ,
+or
+.B discarded
+and includes the session ID, request ID and admission sequence. Accepted and
+queued mean durable input admission, not completed model work. Exit status 0
+also covers an explicit discard; status 1 reports refusal or connection failure
+before submission, and status 2 reports invalid arguments or input.
+If the connection is lost after submission without a final receipt, status 3
+reports an unknown outcome and the request ID. Inspect the running session
+before resending; the CLI performs no automatic retry.
+.SS Saved session state
 A session saves its name, current working directory, conversation, tool results,
 model selection, queue and goal on disk. Normal exit prints a command to reopen
 that exact session. You can also list sessions with
