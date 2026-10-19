@@ -47,6 +47,47 @@ expect_invalid(const char *path)
 }
 
 static void
+test_top_settings(const char *path)
+{
+    const struct snag_top_settings expected = {.delay_ms = 375u, .sort = 4u,
+        .visible = 510u, .color = 2u, .extra_width = -1, .reverse = true,
+        .highlight = true, .commands = true, .fields = "102345678"};
+    struct snag_top_settings restored = {0};
+    char error[256] = "";
+    const char spaced[] = "[ top ]\nsort=2\ncommands=true\n";
+    write_bytes(path, spaced, sizeof(spaced) - 1u);
+    assert(snag_config_top(path, &restored, error, sizeof(error)) == 0);
+    assert(restored.sort == 2u && restored.commands);
+    const char original[] = "# preserve\n[terminal]\nclipboard = off\n";
+    write_bytes(path, original, sizeof(original) - 1u);
+    assert(snag_config_save_top(path, &expected, error, sizeof(error)) == 0);
+    assert(snag_config_top(path, &restored, error, sizeof(error)) == 0);
+    assert(restored.delay_ms == 375u && restored.sort == 4u && restored.visible == 510u &&
+        restored.color == 2u && restored.extra_width == -1 && restored.reverse &&
+        restored.highlight && restored.commands && !strcmp(restored.fields, "102345678"));
+    struct snag_config config;
+    load_config(&config, path, NULL);
+    assert(config.terminal_clipboard == SNAG_CLIP_OFF);
+    snag_config_free(&config);
+    const char *invalid[] = {"delay_ms=199", "sort=9", "visible=0", "color=3",
+        "extra_width=2147483648", "reverse=yes", "highlight=1", "commands=on", "fields=001234567",
+        "unknown=1", "sort=1\nsort=2", "sort=1\n[top]\nsort=2"};
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        char text[256];
+        int n = snprintf(text, sizeof(text), "[top]\n%s\n", invalid[i]);
+        assert(n > 0 && (size_t)n < sizeof(text));
+        write_bytes(path, text, (size_t)n);
+        assert(snag_config_top(path, &restored, error, sizeof(error)) < 0 && *error);
+        expect_invalid(path);
+    }
+    assert(unlink(path) == 0);
+    assert(snag_config_save_top(path, &expected, error, sizeof(error)) == 0);
+    assert(snag_config_top(path, &restored, error, sizeof(error)) == 0);
+    struct stat st;
+    assert(stat(path, &st) == 0 && (st.st_mode & 0777) == 0600);
+}
+
+static void
 test_clipboard_setting(const char *path)
 {
     const char *names[] = {"native", "osc52", "off"};
@@ -1505,6 +1546,7 @@ main(void)
     test_many_config_secrets(path);
     test_many_model_aliases(path);
     test_spinner_frames(path);
+    test_top_settings(path);
     test_clipboard_setting(path);
     test_many_providers_and_limits(path);
     test_context_configuration_save(path);

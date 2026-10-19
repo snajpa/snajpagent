@@ -5527,6 +5527,47 @@ test_compacted_irc_turn_resume(struct snag_store *store, const char *cwd, bool c
 }
 
 static void
+test_pinned_commands_checkpoint(struct snag_store *store, const char *cwd)
+{
+    char error[512] = {0}, id[SNAG_ID_HEX_LEN + 1u];
+    struct snag_session session;
+    snag_session_init(&session);
+    assert(!snag_session_create(store, &session, cwd, "default", "fixture", "default",
+        error, sizeof(error)));
+    memcpy(id, session.id, sizeof(id));
+    for (unsigned int phase = 0u; phase < 2u; ++phase) {
+        json_t *jobs = json_pack("[{s:s,s:s,s:s,s:s,s:s,s:s,s:b}]", "id", OTHER_ID,
+            "name", "watcher", "command", "sleep 60", "workdir", cwd,
+            "shell", "/bin/sh", "on_resume", "echo resumed", "enabled", phase == 0u);
+        assert(jobs && snag_pinned_commands_valid(jobs));
+        commit_data(&session, "pinned_commands_updated", json_pack("{s:O}", "commands", jobs));
+        assert(json_equal(jobs, session.pinned_commands));
+        struct snag_binary_checkpoint_sources sources = {0};
+        struct snag_binary_anchor anchor;
+        struct snag_binary_index_tree tree;
+        assert(!snag_session_binary_checkpoint_capture(&session, &anchor, &tree, &sources,
+            error, sizeof(error)));
+        assert(sources.pinned_commands);
+        test_store_binary_payloads_state(session.log_fd, &anchor, &sources, &session);
+        snag_binary_checkpoint_sources_free(&sources);
+        json_t *state = snag_checkpoint_state_encode(&session);
+        struct snag_session decoded;
+        assert(state && !snag_checkpoint_state_decode(state, &decoded));
+        assert(json_equal(decoded.pinned_commands, jobs));
+        snag_session_close(&decoded);
+        json_decref(state);
+        assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+        snag_session_close(&session);
+        snag_session_init(&session);
+        assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+        assert(json_equal(session.pinned_commands, jobs));
+        assert(!session.process_count && !session.active_turn && !session.pinned_status);
+        json_decref(jobs);
+    }
+    snag_session_close(&session);
+}
+
+static void
 test_work_context_checkpoint(struct snag_store *store, const char *cwd)
 {
     char error[512] = {0};
@@ -5648,6 +5689,7 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
     test_host_snapshot_references(store, cwd);
     test_host_literal_candidates();
     test_work_context_checkpoint(store, cwd);
+    test_pinned_commands_checkpoint(store, cwd);
     test_skill_checkpoint(store, cwd);
     test_live_native_snapshot(store, cwd);
     test_compacted_irc_turn_resume(store, cwd, false);

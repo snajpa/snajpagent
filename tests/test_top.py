@@ -70,7 +70,7 @@ class TopTests(unittest.TestCase):
         temporary.chmod(0o600)
         temporary.replace(path)
 
-    def top(self, height=24, width=120, delay='1', wait=True, ignore_sigchld=False):
+    def top(self, height=24, width=120, delay='1', wait=True, ignore_sigchld=False, config=None, color="always", sort=None):
         # Keep the controlling PTY alive after top exits so Darwin still exposes
         # its termios state. Without this parent, exit invalidates the slave.
         # PENDIN is a kernel retype request, not an application terminal mode.
@@ -84,7 +84,10 @@ class TopTests(unittest.TestCase):
                   'print("TOP_TERMINAL_RESTORED",flush=True); sys.exit(rc)')
         top = RemoteProcess(self.root, [sys.executable, '-c', runner,
                             str(PRODUCT), 'top', '--dotdir', str(self.state),
-                            '--color', 'always', *([] if delay is None else ['--delay', delay])],
+                            *(['--color', color] if color else []),
+                            *(['--config', str(config)] if config else []),
+                            *(['--sort', sort] if sort else []),
+                            *([] if delay is None else ['--delay', delay])],
                             wrapped=None)
         self.addCleanup(top.close)
         fcntl.ioctl(top.master, termios.TIOCSWINSZ, struct.pack('HHHH', height, width, 0, 0))
@@ -106,6 +109,19 @@ class TopTests(unittest.TestCase):
             if select.select([top.master], [], [], .05)[0]:
                 top.output.extend(os.read(top.master, 65536))
         self.fail('top did not finish its frame: ' + repr(bytes(top.output)))
+
+    def command(self, top, keys, expected):
+        top.output.clear()
+        os.write(top.master, keys)
+        top.until(expected)
+        if expected in (b'Fields:', b'interactive commands'):
+            top.until(b'DECODE/s' if expected == b'Fields:' else b'Press any key to return')
+            return bytes(top.output)
+        return self.frame(top)
+
+    def signal_selected(self, top, expected):
+        self.command(top, b'\r', b'Signal for PID')
+        return self.command(top, b'\r', expected)
 
     def selected(self, frame):
         match = re.search(rb'\033\[7m([0-9a-f]{8}) ', frame)
@@ -300,7 +316,7 @@ class TopTests(unittest.TestCase):
         self.assertIn(b'TOTAL sessions=1 turns=3 process=330 session=330', result.stdout)
         self.assertEqual(hashlib.sha256(journal.read_bytes()).digest(), before)
         top = self.top()
-        self.assertIn(b'stored sessions cannot be killed', self.frame(top, b'x'))
+        self.assertIn(b'stored sessions cannot be killed', self.frame(top, b'k'))
         self.quit(top)
 
     def test_selection_stays_with_session_after_sort_changes(self):
@@ -329,13 +345,128 @@ class TopTests(unittest.TestCase):
         first, first_worker = self.session(900, live=True)
         second, second_worker = self.session(100, live=True)
         top = self.top()
-        self.assertIn(b'press y/n', self.frame(top, b'x'))
+        self.assertIn(b'PID to signal', self.frame(top, b'k'))
         self.metrics(second, 1000, second_worker.pid)
-        self.frame(top, b'r')
-        frame = self.frame(top, b'y')
-        self.assertIn(b'termination requested', frame)
+        top.output.clear()
+        self.frame(top)
+        frame = self.signal_selected(top, b'signal 15 requested')
+        self.assertIn(b'signal 15 requested', frame)
         self.assertIsNone(second_worker.poll(), 'confirmation killed a different session')
         first_worker.wait(timeout=5)
+        self.quit(top)
+
+    def test_gnu_help_sort_reverse_highlight_color_and_delay(self):
+        first, _ = self.session(900)
+        second, _ = self.session(100)
+        top = self.top()
+        frame = self.frame(top, b'R')
+        self.assertIn(b'sort=PROCESS reverse', frame)
+        self.assertLess(frame.index(second[:8].encode()), frame.index(first[:8].encode()))
+        self.assertEqual(self.selected(frame), first[:8])
+        self.assertIn(b'sort=ACTIVE', self.frame(top, b'<'))
+        self.assertIn(b'sort=PROCESS', self.frame(top, b'>'))
+        for field in (b'SESSION', b'PREFILL', b'DECODE'):
+            self.command(top, b'>', b'sort=' + field)
+        self.assertIn(b'sort=DECODE', self.frame(top, b'>'))
+        for field in (b'PREFILL', b'SESSION', b'PROCESS', b'ACTIVE', b'TURNS',
+                b'MODEL', b'STATE', b'SESSION'):
+            self.command(top, b'<', b'sort=' + field)
+        self.assertIn(b'sort=SESSION', self.frame(top, b'<'))
+        for field in (b'STATE', b'MODEL', b'TURNS', b'ACTIVE', b'PROCESS'):
+            self.command(top, b'>', b'sort=' + field)
+        self.assertIn(b'\033[1m', self.frame(top, b'x'))
+        self.assertNotIn(b'\033[1m', self.frame(top, b'z'))
+        self.assertIn(b'\033[1m', self.frame(top, b'z'))
+        for key in (b'h', b'?'):
+            self.command(top, key, b'interactive commands')
+            self.assertIn(b'negative automatic growth', bytes(top.output))
+            self.frame(top, b' ')
+        self.command(top, b's', b'Change delay seconds')
+        frame = self.command(top, b'0.375\r', b'delay=0.375s')
+        self.assertIn(b'sort=PROCESS reverse', frame)
+        self.command(top, b'd', b'Change delay seconds')
+        self.command(top, b'0.1\r', b'delay must be')
+        self.quit(top)
+
+    def test_width_auto_defaults_and_unicode(self):
+        sid, _ = self.session(20)
+        metrics = self.state / 'metrics' / (sid + '.prom')
+        model = '界' * 12 + '-long-model-tail'
+        metrics.write_text(metrics.read_text().replace('top-fixture', model))
+        top = self.top(width=200)
+        frame = self.frame(top, b'r')
+        self.assertIn(('界' * 9 + '+').encode(), frame)
+        frame.decode('utf-8')
+        self.command(top, b'X', b'Extra fixed width')
+        frame = self.command(top, b'-7\r', model.encode())
+        self.assertIn(model.encode(), frame)
+        metrics.write_text(metrics.read_text().replace(model, 'short'))
+        frame = self.frame(top, b'r')
+        self.assertIn(b'short' + b' ' * 30, frame)  # auto width never shrinks
+        self.command(top, b'X', b'Extra fixed width')
+        self.command(top, b'0\r', b'short' + b' ' * 15)
+        self.quit(top)
+
+    def test_fields_and_selected_config_saved_defaults_cli_precedence(self):
+        self.session(20)
+        config = self.root / 'chosen.ini'
+        marker = self.root / 'credential-must-not-run'
+        original = ('# retained comment\n[provider fake]\n'
+                    'base_url = http://127.0.0.1:1\n'
+                    f'api_key = {marker}\n')
+        config.write_text(original)
+        config.chmod(0o600)
+        top = self.top(config=config)
+        self.command(top, b'f', b'Fields:')
+        # Hide ID, move it right of STATE, choose STATE as the sort field.
+        self.command(top, b' \033[C\033[B\033[D\033[Asq', b'sort=STATE')
+        self.command(top, b'c', b'COMMAND')
+        self.command(top, b'X', b'Extra fixed width')
+        self.command(top, b'-1\r', b'snajpagent --resume')
+        self.frame(top, b'R')
+        self.frame(top, b'x')
+        self.frame(top, b'z')
+        self.command(top, b's', b'Change delay seconds')
+        self.command(top, b'.4\r', b'delay=0.400s')
+        self.command(top, b'W', b'saved')
+        saved = config.read_text()
+        self.assertIn(original, saved)
+        for value in ('delay_ms = 400', 'sort = 1', 'visible = 510', 'color = 2',
+                      'reverse = true', 'highlight = true', 'commands = true',
+                      'extra_width = -1', 'fields = 102345678'):
+            self.assertIn(value, saved)
+        self.assertFalse(marker.exists())
+        self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+        self.assertFalse((self.state / 'config.ini').exists())
+        self.quit(top)
+        top = self.top(config=config, color=None, delay=None)
+        self.assertIn(b'delay=0.400s  sort=STATE reverse', top.output)
+        self.assertIn(b'COMMAND', top.output)
+        self.assertNotIn(b'\033[1m', top.output)
+        self.quit(top)
+        top = self.top(config=config, color='always', delay='.7', sort='total')
+        self.assertIn(b'delay=0.700s  sort=PROCESS reverse', top.output)
+        self.assertIn(b'\033[1m', top.output)
+        self.quit(top)
+        self.assertEqual(config.read_text(), saved)
+        self.assertFalse(marker.exists())
+
+    def test_kill_pid_signal_cancel_and_foreign_pid_refused(self):
+        _, worker = self.session(900, live=True)
+        top = self.top()
+        self.command(top, b'k', b'PID to signal')
+        self.command(top, str(os.getpid()).encode() + b'\r', b'not a verified live session owner')
+        self.command(top, b'k', b'PID to signal')
+        self.command(top, b'\r', b'Signal for PID')
+        self.command(top, b'0\r', b'invalid or zero signal')
+        self.assertIsNone(worker.poll())
+        self.command(top, b'k', b'PID to signal')
+        self.frame(top, b'\033')
+        self.assertIsNone(worker.poll())
+        self.command(top, b'k', b'PID to signal')
+        self.command(top, str(worker.pid).encode() + b'\r', b'Signal for PID')
+        self.command(top, b'SIGTERM\r', b'signal 15 requested')
+        worker.wait(timeout=5)
         self.quit(top)
 
     def test_terminal_lines_fit_and_return_to_first_column(self):
@@ -354,14 +485,14 @@ class TopTests(unittest.TestCase):
         sid, worker = self.session(900, live=True)
         _, other = self.session(100, live=True)
         top = self.top()
-        self.frame(top, b'x')
+        self.frame(top, b'k')
         self.metrics(sid, 900, worker.pid, started=2000)
-        self.assertIn(b'owner changed', self.frame(top, b'y'))
+        self.assertIn(b'owner changed', self.signal_selected(top, b'owner changed'))
         self.assertIsNone(worker.poll())
         self.metrics(sid, 900, other.pid, started=2000)
         self.frame(top, b'r')
-        self.frame(top, b'x')
-        self.assertIn(b'lock owner', self.frame(top, b'y'))
+        self.frame(top, b'k')
+        self.assertIn(b'lock owner', self.signal_selected(top, b'lock owner'))
         self.assertIsNone(worker.poll())
         self.assertIsNone(other.poll())
         self.quit(top)
@@ -381,8 +512,8 @@ class TopTests(unittest.TestCase):
         self.assertIn('snajpagent_session_process_pid ', metrics[0].read_text())
         top = self.top()
         self.assertIn(b'attached', top.output)
-        self.frame(top, b'x')
-        self.assertIn(b'termination requested', self.frame(top, b'y'))
+        self.frame(top, b'k')
+        self.assertIn(b'signal 15 requested', self.signal_selected(top, b'signal 15 requested'))
         owner.wait(128 + signal.SIGTERM)
         self.quit(top)
         self.assertFalse(provider.requests, 'monitoring started a provider request')

@@ -6118,7 +6118,7 @@ test_event_names(void)
         {248u, "rule_log"}, {249u, "rule_transform"}, {256u, "audio_usage"}, {257u, "voice_event"},
         {264u, "voice_transfer_record"}, {265u, "voice_transfer_sealed"},
         {266u, "voice_transfer_adopted"}, {272u, "skills_updated"},
-        {273u, "work_context_changed"}
+        {273u, "work_context_changed"}, {274u, "pinned_commands_updated"}
     };
     for (size_t i = 0u; i < sizeof(expected) / sizeof(expected[0]); ++i) {
         const char *name = snag_binary_event_name((enum snag_binary_kind)expected[i].kind);

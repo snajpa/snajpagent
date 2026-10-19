@@ -442,6 +442,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_skills
 	SNAJPAGENT_TEST_BIN=./tests/snajpagent-transport python3 tests/skills.py
 	SNAJPAGENT_TEST_BIN=./tests/snajpagent-transport python3 tests/test_work_context.py
+	SNAJPAGENT_TEST_BIN=./tests/snajpagent-transport python3 tests/test_running.py
 	python3 tests/test_cwd_recovery.py ./$(BIN)
 	./tests/test_credential
 	./tests/test_sse
