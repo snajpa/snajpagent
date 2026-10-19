@@ -956,6 +956,78 @@ test_large_compact_prefix(struct snag_store *store, const char *cwd)
     snag_session_close(&session);
 }
 
+static json_malloc_t cost_malloc;
+static size_t cost_allocations, cost_bytes;
+
+static void *
+context_cost_malloc(size_t bytes)
+{
+    ++cost_allocations;
+    cost_bytes += bytes;
+    return cost_malloc(bytes);
+}
+
+static void
+test_compacted_history_cost(struct snag_store *store, const char *cwd)
+{
+    size_t allocations[2][2], bytes[2][2];
+    char text[16385];
+    memset(text, 'x', sizeof(text) - 1u);
+    text[sizeof(text) - 1u] = '\0';
+    for (unsigned int large = 0u; large < 2u; ++large) {
+        struct snag_session session;
+        struct snag_context_projection projection = {0};
+        char error[256] = "", id[SNAG_ID_HEX_LEN + 1u];
+        create_session(store, &session, cwd, "medium");
+        memcpy(id, session.id, sizeof(id));
+        for (unsigned int i = 1u; i <= (large ? 256u : 128u); ++i) {
+            char turn[33], response[33];
+            snprintf(turn, sizeof(turn), "%032x", i);
+            snprintf(response, sizeof(response), "%032x", i + 1024u);
+            commit_completed_turn(&session, cwd, turn, response, i, "old task", text);
+        }
+        assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+            false, 0u, false, NULL, &projection, error, sizeof(error), NULL) == 0);
+        json_t *output = compact_output_fixture();
+        commit_counted_compaction(&session, "cc000000000000000000000000000001", "manual",
+            SNAJPAGENT_MODEL, &projection, output);
+        snag_context_projection_free(&projection);
+        json_decref(output);
+        commit_event(&session, "turn_started", turn_started(
+            "cc000000000000000000000000000002", large ? 257u : 129u,
+            "same retained task", cwd, NULL));
+        json_t *steering = json_array();
+        assert(steering);
+        build_context_cached(&session, 1u, steering, NULL, &projection);
+        snag_context_projection_free(&projection);
+        assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+        snag_session_close(&session);
+        for (unsigned int warm = 0u; warm < 2u; ++warm) {
+            json_free_t release;
+            json_get_alloc_funcs(&cost_malloc, &release);
+            cost_allocations = cost_bytes = 0u;
+            json_set_alloc_funcs(context_cost_malloc, release);
+            if (!warm) assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+            build_context_cached(&session, 1u, steering, NULL, &projection);
+            json_set_alloc_funcs(cost_malloc, release);
+            allocations[large][warm] = cost_allocations;
+            bytes[large][warm] = cost_bytes;
+            assert(projection.model_input.bytes < 128u * 1024u);
+            snag_context_projection_free(&projection);
+        }
+        json_decref(steering);
+        snag_session_close(&session);
+    }
+    for (unsigned int warm = 0u; warm < 2u; ++warm) {
+        fprintf(stderr, "compacted context cost warm=%u: %zu/%zu -> %zu/%zu\n", warm,
+            allocations[0][warm], bytes[0][warm], allocations[1][warm], bytes[1][warm]);
+        /* Only sequence-number widths differ in the retained request. Historical
+         * response text must stay behind native references on cold and warm builds. */
+        assert(allocations[1][warm] <= allocations[0][warm]);
+        assert(bytes[1][warm] <= bytes[0][warm] + 256u);
+    }
+}
+
 static void
 test_compact_groups(struct snag_store *store, const char *cwd)
 {
@@ -1660,7 +1732,8 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle, uint32_t m
                       "timeout_ms", "type", "integer", "null", "minimum", 1, "maximum",
                       (json_int_t)max_timeout_ms, "max_output_approx_tokens", "type", "integer",
                       "null", "minimum", 1,
-                      "maximum", (json_int_t)1000000000, "max_output_bytes", "type", "integer",
+                      "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX, "max_output_bytes",
+                      "type", "integer",
                       "null",
                       "minimum", 1, "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX));
     }
@@ -1672,7 +1745,7 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle, uint32_t m
         "handle", "type", "string", "data", "type", "string", "eof", "type", "boolean", "null",
         "terminate", "type", "boolean", "null", "yield_ms", "type", "integer", "null", "minimum", 0,
         "maximum", (json_int_t)max_wait_ms, "max_output_approx_tokens", "type", "integer", "null",
-        "minimum", 1, "maximum", (json_int_t)1000000000,
+        "minimum", 1, "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX,
         "max_output_bytes", "type", "integer", "null", "minimum", 1,
         "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX);
     assert(expected);
@@ -1684,10 +1757,13 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle, uint32_t m
     tool = item_by_field(tools, "name", "read_tool_output");
     if (tool)
         assert_properties(tool,
-            json_pack("{s:{s:s},s:{s:s,s:[s,s]},s:{s:[s,s],s:i},s:{s:[s,s],s:i,s:I}}", "handle",
+            json_pack("{s:{s:s},s:{s:s,s:[s,s]},s:{s:[s,s],s:i},s:{s:[s,s],s:i,s:I},"
+                      "s:{s:[s,s],s:i,s:I}}", "handle",
                 "type", "string", "stream", "type", "string", "enum", "stdout", "stderr", "offset",
                 "type", "integer", "null", "minimum", 0, "max_output_bytes", "type", "integer",
-                "null", "minimum", 512, "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX));
+                "null", "minimum", 512, "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX,
+                "max_output_approx_tokens", "type", "integer", "null", "minimum", 1,
+                "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX));
     tool = item_by_field(tools, "name", "read_session_history");
     if (tool)
         assert_properties(
@@ -6619,6 +6695,7 @@ main(int argc, char **argv)
     test_irc_summary_during_active_compaction(&store, cwd);
     test_irc_context_summary(&store, cwd);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);
+    test_compacted_history_cost(&store, cwd);
     test_compact_groups(&store, cwd);
     test_repeated_compaction_active_seam(&store, cwd);
     test_large_compact_prefix(&store, cwd);

@@ -351,6 +351,120 @@ test_catalog_reload_boundary(struct snag_store *store, struct snag_model_cache *
     json_decref(replacement);
 }
 
+static json_malloc_t cost_malloc;
+static size_t cost_allocations, cost_bytes;
+
+static void *
+cache_cost_malloc(size_t bytes)
+{
+    ++cost_allocations;
+    cost_bytes += bytes;
+    return cost_malloc(bytes);
+}
+
+static void
+test_calibration_copy_cost(struct snag_model_cache *cache,
+    const struct snag_provider_config *provider)
+{
+    size_t allocations[2], bytes[2];
+    struct snag_store unavailable;
+    snag_store_init(&unavailable);
+    json_t *model = (json_t *)snag_model_cache_find(cache, provider->name, "org/model");
+    assert(model);
+    for (unsigned int large = 0u; large < 2u; ++large) {
+        size_t length = large ? 4u * 1024u * 1024u : 64u;
+        char *payload = malloc(length + 1u);
+        assert(payload);
+        memset(payload, 'x', length);
+        payload[length] = '\0';
+        assert(json_object_set_new(model, "cost_metadata", json_stringn(payload, length)) == 0);
+        free(payload);
+        json_t *snapshot = json_incref(cache->providers);
+        json_t *metadata = json_object_get(model, "cost_metadata");
+        json_free_t release;
+        json_get_alloc_funcs(&cost_malloc, &release);
+        cost_allocations = cost_bytes = 0u;
+        json_set_alloc_funcs(cache_cost_malloc, release);
+        char error[256] = "";
+        int rc = snag_model_cache_learn(&unavailable, cache, provider, "openai", "org/model",
+            3000u, 2000u, error, sizeof(error));
+        json_set_alloc_funcs(cost_malloc, release);
+        allocations[large] = cost_allocations;
+        bytes[large] = cost_bytes;
+        assert(rc < 0 && cache->providers == snapshot);
+        assert(json_object_get(model, "cost_metadata") == metadata);
+        json_decref(snapshot);
+    }
+    fprintf(stderr, "calibration staged-copy cost: %zu/%zu -> %zu/%zu\n",
+        allocations[0], bytes[0], allocations[1], bytes[1]);
+    /* Immutable catalog payload must not be copied even when persistence fails. */
+    assert(allocations[1] == allocations[0] && bytes[1] == bytes[0]);
+    assert(json_object_del(model, "cost_metadata") == 0);
+}
+
+static void
+test_token_calibration(struct snag_store *store, struct snag_model_cache *cache,
+    struct snag_config *config, const json_t *providers)
+{
+    char error[256] = {0};
+    struct snag_token_calibration sample = {0};
+    assert(snag_token_estimate(5u, sample) == 2u);
+    snag_token_calibration_add(&sample, 3u, 2u);
+    assert(snag_token_estimate(4u, sample) == 3u);
+    assert(snag_token_estimate(0u, sample) == 0u);
+    assert(snag_token_estimate(UINT64_MAX,
+        (struct snag_token_calibration){1u, 3u, 1u}) == UINT64_MAX);
+    snag_token_calibration_add(&sample, 0u, 1u);
+    snag_token_calibration_add(&sample, UINT64_MAX, 1u);
+    assert(sample.samples == 1u);
+
+    const struct snag_provider_config *provider = &config->providers[0];
+    json_t *catalog = json_incref(cache->providers);
+    const json_t *limits = json_object_get(
+        snag_model_cache_find(cache, provider->name, "org/model"), "limits");
+    assert(snag_model_cache_learn(store, cache, provider, "openai", "org/model",
+        3000u, 2000u, error, sizeof(error)) == 0);
+    /* Frequent calibration updates must not clone the discovered catalog. */
+    assert(cache->providers != catalog);
+    const json_t *old_models = json_object_get(json_array_get(catalog, 0u), "models");
+    const json_t *new_models = json_object_get(json_array_get(cache->providers, 0u), "models");
+    assert(json_array_get(old_models, 1u) == json_array_get(new_models, 1u));
+    assert(json_object_get(snag_model_cache_find(cache, provider->name, "org/model"),
+        "limits") == limits);
+    json_decref(catalog);
+    sample = snag_model_calibration(cache, provider, "openai", "org/model");
+    assert(sample.bytes == 3000u && sample.tokens == 2000u && sample.samples == 1u);
+    struct snag_model_cache other = {0};
+    assert(snag_model_cache_load(store, &other, error, sizeof(error)) == 0);
+    assert(snag_model_cache_learn(store, &other, provider, "openai", "org/model",
+        6000u, 3000u, error, sizeof(error)) == 0);
+    /* A stale session merges its observation without discarding the other writer. */
+    assert(snag_model_cache_learn(store, cache, provider, "openai", "org/model",
+        2000u, 1000u, error, sizeof(error)) == 0);
+    snag_model_cache_free(&other);
+    assert(snag_model_cache_load(store, &other, error, sizeof(error)) == 0);
+    sample = snag_model_calibration(&other, provider, "openai", "org/model");
+    assert(sample.bytes == 5750u && sample.tokens == 3000u && sample.samples == 3u);
+    assert(snag_model_cache_replace(store, providers, 123456u, cache,
+        error, sizeof(error)) == 0);
+    sample = snag_model_calibration(cache, provider, "openai", "org/model");
+    assert(sample.samples == 3u);
+    assert(snag_model_calibration(cache, provider, "codex", "org/model").samples == 0u);
+    assert(snag_model_calibration(cache, provider, "openai", "unknown").samples == 0u);
+    struct snag_provider_config changed = *provider;
+    struct snag_provider_model alias = {.name = "local", .upstream = "org/model"};
+    changed.models = &alias;
+    changed.model_count = 1u;
+    assert(snag_model_calibration(cache, &changed, "openai", "local").samples == 3u);
+    strcpy(changed.base_url, "https://other.example.test/v1");
+    assert(snag_model_calibration(cache, &changed, "openai", "org/model").samples == 0u);
+    assert(snag_model_cache_learn(store, cache, provider, "openai", "uncached",
+        100u, 20u, error, sizeof(error)) == 1);
+    assert(snag_model_cache_learn(store, cache, provider, "openai", "org/model",
+        0u, 20u, error, sizeof(error)) < 0);
+    snag_model_cache_free(&other);
+}
+
 int
 main(void)
 {
@@ -721,6 +835,8 @@ main(void)
     capacity = resolve_capacity(&cache, &config, 0, "org/model", "openai");
     assert(capacity.hard_input_tokens == 700000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) == 630000u);
+    test_calibration_copy_cost(&cache, &config.providers[0]);
+    test_token_calibration(&store, &cache, &config, providers);
     test_catalog_reload_boundary(&store, &cache, &config, providers);
     /* Legacy samples stay readable but refresh clears them and never derives ratios. */
     json_t *legacy_model =
