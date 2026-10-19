@@ -616,7 +616,7 @@ class WorkspaceTests(unittest.TestCase):
         original = journal.read_bytes()
         child = self.start('-N', 'reading')
         child.until(journal.parent.name[:8].encode())
-        child.write(b'o')
+        child.write(b'jo')
         child.until(b'retained-answer-marker')
         child.write(b'gg')
         child.until(b'retained-question-marker')
