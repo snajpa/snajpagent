@@ -25,7 +25,8 @@ snag_binary_checkpoint_sources_clone(struct snag_binary_checkpoint_sources *dest
         (source->process_count && !source->processes) ||
         (source->queue_count && !source->queue) ||
         (source->download_count && !source->downloads)) return snag_errno(EINVAL);
-    if (source->process_count > SIZE_MAX / sizeof(*source->processes) ||
+    if ((source->process_count &&
+            SIZE_MAX / source->process_count < sizeof(*source->processes)) ||
         source->queue_count > SIZE_MAX / sizeof(*source->queue) ||
         source->download_count > SIZE_MAX / sizeof(*source->downloads))
         return snag_errno(EOVERFLOW);
@@ -34,7 +35,8 @@ snag_binary_checkpoint_sources_clone(struct snag_binary_checkpoint_sources *dest
     staged.queue = NULL;
     staged.downloads = NULL;
     staged.process_capacity = source->process_count;
-    staged.queue_capacity = source->queue_count;
+    if (source->queue_count > UINT32_MAX) return snag_errno(EOVERFLOW);
+    staged.queue_capacity = (uint32_t)source->queue_count;
     staged.download_capacity = source->download_count;
     if (source->process_count) {
         staged.processes = malloc(source->process_count * sizeof(*source->processes));
@@ -72,7 +74,7 @@ update_process_sources(struct snag_binary_checkpoint_sources *sources,
 {
     size_t old_count = sources->process_count;
     if (state->process_count > old_count) {
-        if (old_count == SIZE_MAX || state->process_count != old_count + 1u ||
+        if (state->process_count > UINT32_MAX || state->process_count != old_count + 1u ||
             kind != SNAG_BINARY_TOOL_STARTED || !sources->calls.graph ||
             sources->calls.graph >= sequence) return snag_errno(EINVAL);
         if (state->process_count > sources->process_capacity) {
@@ -157,6 +159,7 @@ update_sources(struct snag_binary_checkpoint_sources *sources, const struct snag
 {
     if (kind == SNAG_BINARY_SKILLS_UPDATED) sources->skills = sequence;
     if (kind == SNAG_BINARY_WORK_CONTEXT_CHANGED) sources->work_context = sequence;
+    if (kind == SNAG_BINARY_PINNED_COMMANDS_UPDATED) sources->pinned_commands = sequence;
     if (kind == SNAG_BINARY_SESSION_OPTIONS) sources->resume_options = sequence;
     if (!json_object_get(state->strings, "resume_options")) sources->resume_options = 0u;
     if (kind == SNAG_BINARY_RESPONSE_STARTED) {
@@ -187,13 +190,14 @@ update_sources(struct snag_binary_checkpoint_sources *sources, const struct snag
         }
         if (sources->queue_count == sources->queue_capacity) {
             size_t capacity = state->pending_queue_capacity;
-            if (capacity <= sources->queue_count || capacity > SIZE_MAX / sizeof(*sources->queue))
+            if (capacity <= sources->queue_count || capacity > UINT32_MAX ||
+                capacity > SIZE_MAX / sizeof(*sources->queue))
                 return snag_errno(EOVERFLOW);
             struct snag_binary_checkpoint_queue_source *grown =
                 realloc(sources->queue, capacity * sizeof(*grown));
             if (!grown) return -1;
             sources->queue = grown;
-            sources->queue_capacity = capacity;
+            sources->queue_capacity = (uint32_t)capacity;
         }
         sources->queue[sources->queue_count++] = (struct snag_binary_checkpoint_queue_source){
             .creation = sequence, .text = sequence};

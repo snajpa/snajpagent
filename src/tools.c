@@ -46,6 +46,7 @@ struct process_output {
 struct managed_process {
     char handle[SNAG_ID_HEX_LEN + 1u];
     struct snag_child child;
+    bool pinned;
     bool stdin_open;
     bool child_done;
     bool output_incomplete;
@@ -65,7 +66,11 @@ struct managed_process {
     size_t input_written;
     uint64_t input_accepted_total, input_written_total;
     bool input_eof, pty_eof_sent, in_call;
-    uint64_t output_offset[2], collected_offset[2], result_offset[2];
+    uint64_t output_offset[2], result_offset[2];
+    union {
+        uint64_t collected_offset[2];
+        int pinned_fd[2];
+    };
     const char *handoff;
 };
 
@@ -435,6 +440,10 @@ managed_release(struct managed_process *proc)
 {
     if (!proc) return;
     snag_child_free(&proc->child);
+    if (proc->pinned) {
+        close(proc->pinned_fd[0]);
+        close(proc->pinned_fd[1]);
+    }
     for (unsigned int s = 0u; s < 2u; ++s) {
         snag_buf_free(&proc->output[s].pending);
         snag_buf_free(&proc->output[s].data);
@@ -482,7 +491,15 @@ bool
 snag_tools_busy(void)
 {
     for (size_t i = 0u; i < process_capacity; ++i)
-        if (processes[i] && !process_ready(processes[i])) return true;
+        if (processes[i] && !processes[i]->pinned && !process_ready(processes[i])) return true;
+    return false;
+}
+
+bool
+snag_tools_pinned_busy(void)
+{
+    for (size_t i = 0u; i < process_capacity; ++i)
+        if (processes[i] && processes[i]->pinned && !process_ready(processes[i])) return true;
     return false;
 }
 
@@ -522,7 +539,7 @@ void
 snag_tools_close_all(bool user_interrupt)
 {
     for (size_t i = 0u; i < process_capacity; ++i)
-        if (processes[i]) begin_close(processes[i], user_interrupt);
+        if (processes[i] && !processes[i]->pinned) begin_close(processes[i], user_interrupt);
 }
 
 static int
@@ -551,7 +568,13 @@ flush_capture(struct managed_process *proc, unsigned int stream, char *error, si
             }
         }
         if (!n) break;
-        if (!journal_write ||
+        if (proc->pinned) {
+            if (snag_write_full(proc->pinned_fd[stream], data->data + consumed, n) < 0) {
+                rc = snag_errorf(error, error_size, "pinned output write failed: %s",
+                    strerror(errno));
+                break;
+            }
+        } else if (!journal_write ||
             journal_write(journal_opaque, proc->handle, stream, proc->output_offset[stream],
                 data->data + consumed, n, error, error_size) < 0) {
             rc = -1;
@@ -681,6 +704,8 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
         bool input =
             proc->stdin_open && (proc->input.len || (proc->input_eof && !proc->pty_eof_sent));
         if (input && !proc->input.len && !proc->child.pty) process_write(proc);
+        if (proc->pinned && process_ready(proc) && !proc->child.reaped &&
+            snag_child_reap(&proc->child) < 0) goto fail;
         for (unsigned int s = 0u; s < 3u; ++s) {
             bool open =
                 s < 2u ? proc->output[s].open : input && proc->stdin_open && !proc->child.pty;
@@ -996,12 +1021,13 @@ tools_prepare(const struct snag_response_item *call, const struct snag_config *c
     } else {
         *yield_ms = args.yield;
         proc = find_process(args.handle);
-        for (size_t i = 0u; i < process_capacity; ++i) used += processes[i] != NULL;
+        for (size_t i = 0u; i < process_capacity; ++i)
+            used += processes[i] && (!processes[i]->pinned || !process_ready(processes[i]));
         if (args.exec && used >= max_parallel)
             reason = "process_limit";
         else if (args.exec && proc)
             reason = "process_busy";
-        else if (!args.exec && !proc)
+        else if (!args.exec && (!proc || proc->pinned))
             reason = "managed_process_handle_mismatch";
         else if (!args.exec && proc->in_call)
             reason = "process_busy";
@@ -1218,4 +1244,84 @@ snag_tools_run(const struct snag_response_item *call, const struct snag_config *
     snag_tools_collected(handle);
     return snag_tools_attach_output_limit(call, config->tool_output_bytes,
         (struct snag_token_calibration){0}, *result);
+}
+
+int
+snag_tools_pinned_start(const char *id, const char *command, const char *workdir,
+    const char *shell, const int fds[2], const struct snag_config *config,
+    const struct snag_credential *credential, char *error, size_t size)
+{
+    size_t used = 0u;
+    for (size_t i = 0u; i < process_capacity; ++i)
+        used += processes[i] && (!processes[i]->pinned || !process_ready(processes[i]));
+    if (find_process(id) || used >= config->max_parallel_commands)
+        return snag_errorf(error, size, "command already owned or process limit reached");
+    uint64_t offsets[2];
+    for (unsigned int s = 0u; s < 2u; ++s) {
+        int64_t end = snag_seek(fds[s], 0, SEEK_END);
+        if (end < 0)
+            return snag_errorf(error, size, "cannot seek command output: %s", strerror(errno));
+        offsets[s] = (uint64_t)end;
+    }
+    struct snag_output_limit limit = {.bytes = config->tool_output_bytes,
+        .requested_bytes = config->tool_output_bytes};
+    if (start_command(id, command, workdir, NULL, 0u, limit, true,
+            config, shell, credential, error, size) < 0) return -1;
+    struct managed_process *proc = find_process(id);
+    proc->pinned = true;
+    proc->pinned_fd[0] = fds[0];
+    proc->pinned_fd[1] = fds[1];
+    for (unsigned int s = 0u; s < 2u; ++s) proc->output_offset[s] = offsets[s];
+    return 0;
+}
+
+json_t *
+snag_tools_pinned_state(const char *id)
+{
+    struct managed_process *proc = find_process(id);
+    if (!proc || !proc->pinned) return NULL;
+    bool ready = process_ready(proc);
+    if (ready && !proc->child.reaped) {
+        snag_child_signal(&proc->child, SNAG_CHILD_KILL);
+        if (snag_child_reap(&proc->child) < 0) return NULL;
+    }
+    const char *state = !ready ? proc->closing ? "stopping" : "running" :
+        proc->child.signal_number >= 0 ? "signaled" :
+        proc->child.exit_code ? "failed" : "exited";
+    return json_pack("{s:s,s:b,s:I,s:I,s:I,s:i}", "state", state,
+        "stdin_open", proc->stdin_open, "stdout_bytes", (json_int_t)proc->output_offset[0],
+        "stderr_bytes", (json_int_t)proc->output_offset[1],
+        "exit_code", (json_int_t)proc->child.exit_code, "signal", proc->child.signal_number);
+}
+
+int
+snag_tools_signal(const char *id)
+{
+    struct managed_process *proc = find_process(id);
+    if (!proc) return 0;
+    begin_close(proc, false);
+    return 0;
+}
+
+int
+snag_tools_pinned_input(const char *id, const char *data, bool eof,
+    char *error, size_t size)
+{
+    struct managed_process *proc = find_process(id);
+    size_t length = data ? strlen(data) : 0u;
+    if (!proc || !proc->pinned || !proc->stdin_open || proc->input_eof)
+        return snag_errorf(error, size, "pinned command stdin is closed or unavailable");
+    if (proc->input_written) {
+        memmove(proc->input.data, proc->input.data + proc->input_written,
+            proc->input.len - proc->input_written);
+        proc->input.len -= proc->input_written;
+        proc->input_written = 0u;
+    }
+    if (length > SNAG_TOOL_STDIN_MAX - proc->input.len ||
+        length > UINT64_MAX - proc->input_accepted_total ||
+        snag_buf_append(&proc->input, data, length) < 0)
+        return snag_errorf(error, size, "pinned command input queue is full");
+    proc->input_accepted_total += length;
+    proc->input_eof = eof;
+    return 0;
 }

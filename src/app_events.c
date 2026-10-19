@@ -1026,6 +1026,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
     const struct snag_credential *credential, struct snag_context_projection *projection,
     const char **count_method, struct snag_buf *request_body, char *error, size_t error_size)
 {
+    if (snag_app_running_snapshot(app) < 0) return -1;
     int rc;
     struct snag_context_control control = {.cancelled = snag_app_context_cancelled,
         .opaque = app,

@@ -222,6 +222,8 @@ struct snag_session {
     /* The one-file journal checkpoint's persisted provider view is consumed
      * once on resume. Live checkpoint encoding is supplied by context.c. */
     json_t *checkpoint_context, *checkpoint_state;
+    json_t *pinned_commands; /* Durable definitions; live children belong to the owner. */
+    json_t *pinned_status; /* Derived request snapshot, never checkpointed. */
     json_t *skills_catalog; /* Derived owner catalog; not checkpointed. */
     json_t *work_context; /* Current temporary visit, or NULL; journal-owned and immutable. */
     json_t *active_skills; /* Exact journal-owned snapshots, including task/goal bindings. */
@@ -235,6 +237,7 @@ struct snag_session {
     /* Filesystem snapshots read native custody without writer ownership.
      * Source rechecks detect races; commits and checkpoint writes fail EROFS. */
     bool snapshot_read_only;
+    bool append_rollback_pending, checkpoint_has_context;
     struct snag_buf *pending_log; /* New sessions stay in memory until input. */
     int64_t log_end;
     /* Exact range of the last successful commit call, excluding automatic
@@ -243,7 +246,6 @@ struct snag_session {
     uint64_t next_seq;
     int64_t checkpoint_offset;
     uint64_t checkpoint_seq;
-    bool checkpoint_has_context;
     /* Derived paging position only; never encoded into a checkpoint. */
     struct snag_journal_cursor history_cursor;
     /* Read-only history worker hook, borrowed and never serialized. Cancellation
@@ -296,7 +298,6 @@ struct snag_session {
     size_t pending_steering_count, pending_steering_capacity;
     size_t pending_queue_count, pending_queue_capacity;
     uint64_t write_failures; /* Process-local, includes every event writer. */
-    bool append_rollback_pending;
     int64_t append_rollback_end;
     unsigned int pending_controls, started_controls;
     bool compact_control_image_boundary;

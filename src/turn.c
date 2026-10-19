@@ -76,7 +76,7 @@ snag_read_only_tool(const char *name)
     return snag_string_in(name,
         "get_cwd list_files read_file grep view_image view_video read_document "
         "listen_audio transcribe_audio read_tool_output read_session_history "
-        "list_goals download_queue skills work_context");
+        "list_goals download_queue skills work_context running_commands");
 }
 
 const char *
@@ -808,4 +808,33 @@ snag_tool_result_valid(const json_t *result)
         return json_is_null(exit_value) && json_is_integer(signal_value) ? 0 : -1;
     if (snag_string_in(status, "timed_out patch_rejected io_failed")) return 0;
     return -1;
+}
+
+bool
+snag_pinned_commands_valid(const json_t *jobs)
+{
+    if (!json_is_array(jobs)) return false;
+    for (size_t i = 0u; i < json_array_size(jobs); ++i) {
+        const json_t *job = json_array_get(jobs, i);
+        if (!snag_json_exact_keys(job, "id name command workdir shell on_resume enabled") ||
+            !json_is_boolean(json_object_get(job, "enabled"))) return false;
+        const char *keys[] = {"id", "name", "command", "workdir", "shell", "on_resume"};
+        const size_t limits[] = {32u, 128u, 262144u, 4096u, 4096u, 262144u};
+        for (size_t k = 0u; k < sizeof(keys) / sizeof(keys[0]); ++k) {
+            const json_t *value = json_object_get(job, keys[k]);
+            const char *text = json_string_value(value);
+            if (!text || strlen(text) != json_string_length(value) ||
+                strlen(text) > limits[k] || (!*text && k != 5u)) return false;
+        }
+        const char *id = snag_json_string(job, "id");
+        const char *name = snag_json_string(job, "name");
+        for (const unsigned char *p = (const unsigned char *)name; *p; ++p)
+            if (*p < 32u || *p == 127u) return false;
+        if (strlen(id) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
+            snag_json_string(job, "workdir")[0] != '/' ||
+            snag_json_string(job, "shell")[0] != '/') return false;
+        for (size_t j = 0u; j < i; ++j)
+            if (!strcmp(id, snag_json_string(json_array_get(jobs, j), "id"))) return false;
+    }
+    return true;
 }

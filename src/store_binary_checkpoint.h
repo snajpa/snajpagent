@@ -154,16 +154,17 @@ struct snag_binary_checkpoint_sources {
     struct snag_binary_checkpoint_texts texts;
     struct snag_binary_checkpoint_call_source calls;
     struct snag_binary_checkpoint_process_source *processes;
-    size_t process_count;
+    /* Counts are bounded by uint32 command concurrency and the 16 MiB queue. */
+    uint32_t process_count, queue_capacity;
     uint64_t input;
     struct snag_binary_checkpoint_queue_source *queue;
     size_t queue_count;
     uint64_t compact_start, compact_end, response_start, response_end;
     uint64_t active_compact; /* Current attempt, separate from retained completed output. */
-    uint64_t resume_options, skills, work_context;
+    uint64_t resume_options, skills, work_context, pinned_commands;
     struct snag_binary_checkpoint_download_source *downloads;
     size_t download_count;
-    size_t process_capacity, queue_capacity, download_capacity; /* Owning memory only. */
+    size_t process_capacity, download_capacity; /* Owning memory only. */
 };
 
 /* Release an initialized/returned owning source set, then zero it. Successful
@@ -332,7 +333,7 @@ void snag_binary_checkpoint_inputs_free(struct snag_binary_checkpoint_inputs_sta
 
 struct snag_binary_checkpoint_payloads {
     uint64_t turn, compact_start, compact_end, response_start, response_end;
-    uint64_t resume_options, skills, work_context;
+    uint64_t resume_options, skills, work_context, pinned_commands;
     const unsigned char *downloads; /* Borrowed LEu64 receipt sequences. */
     size_t download_count;
     bool downloads_present;
@@ -340,7 +341,7 @@ struct snag_binary_checkpoint_payloads {
 
 struct snag_binary_checkpoint_payloads_state {
     json_t *instructions, *compact_output, *response_public, *downloads;
-    json_t *resume_options, *skills, *work_context;
+    json_t *resume_options, *skills, *work_context, *pinned_commands;
     size_t response_public_bytes;
 };
 

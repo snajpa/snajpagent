@@ -172,7 +172,8 @@ hosted_search_kind(enum snag_binary_kind kind)
 static bool
 legacy_kind(enum snag_binary_kind kind)
 {
-    return kind == SNAG_BINARY_SKILLS_UPDATED || kind == SNAG_BINARY_WORK_CONTEXT_CHANGED ||
+    return kind == SNAG_BINARY_PINNED_COMMANDS_UPDATED ||
+        kind == SNAG_BINARY_SKILLS_UPDATED || kind == SNAG_BINARY_WORK_CONTEXT_CHANGED ||
         hosted_search_kind(kind) ||
         metadata_kind(kind) || timer_kind(kind) ||
         goal_kind(kind) || rule_voice_kind(kind) ||
@@ -2172,7 +2173,8 @@ snag_binary_legacy_encode(struct snag_buf *out, const char *type, const json_t *
         if (rc == 0) rc = snag_binary_rule_value_encode(&scratch, data);
         if (rc == 0) rc = snag_binary_rule_value_decode(scratch.data, scratch.len,
             &event.data.work_context.context);
-    } else if (event.kind == SNAG_BINARY_SKILLS_UPDATED) {
+    } else if (event.kind == SNAG_BINARY_SKILLS_UPDATED ||
+        event.kind == SNAG_BINARY_PINNED_COMMANDS_UPDATED) {
         rc = snag_binary_rule_value_encode(&scratch, data);
         if (rc == 0) rc = snag_binary_rule_value_decode(scratch.data, scratch.len,
             &event.data.skills_updated);
@@ -3703,8 +3705,10 @@ snag_binary_legacy_decode(const struct snag_binary_record *record, const char **
         *data = NULL;
         return invalid();
     }
-    if (rc == 0 && event.kind == SNAG_BINARY_SKILLS_UPDATED) {
-        *type = "skills_updated";
+    if (rc == 0 && (event.kind == SNAG_BINARY_SKILLS_UPDATED ||
+        event.kind == SNAG_BINARY_PINNED_COMMANDS_UPDATED)) {
+        *type = event.kind == SNAG_BINARY_SKILLS_UPDATED ?
+            "skills_updated" : "pinned_commands_updated";
         return snag_binary_rule_value_json(&event.data.skills_updated, data);
     }
     if (rc != 0 || !legacy_kind(event.kind)) return unsupported();

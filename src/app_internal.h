@@ -59,6 +59,7 @@ struct app_state {
     struct snag_provider_transport provider_transport;
     struct snag_mcp *mcp;
     bool retry_skill_binding;
+    json_t *pinned_errors;
     /* Informational output from one command is shown in one pager invocation. */
     struct snag_buf *command_report;
     struct app_view_terminal *view_terminal;
@@ -330,6 +331,11 @@ int snag_app_input_command(struct app_state *, const char *, bool, bool *, bool 
  * confirmed (or not presentable), -1 on error. */
 int snag_app_consent(struct app_state *app, const char *reason, char *error, size_t error_size);
 int snag_app_sync_destinations(struct app_state *app);
+int snag_app_running_command(struct app_state *, const char *, bool *);
+int snag_app_running_snapshot(struct app_state *);
+int snag_app_running_resume(struct app_state *);
+int snag_app_running_tool(struct app_state *, const struct snag_response_item *,
+    const struct snag_credential *, json_t **, char *, size_t);
 int snag_app_skills_command(struct app_state *, const char *, bool *);
 int snag_app_skills_refresh(struct app_state *, char *, size_t);
 json_t *snag_app_skills_catalog(struct app_state *, const char *, const json_t *, char *, size_t);

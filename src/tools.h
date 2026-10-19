@@ -43,6 +43,7 @@ int snag_tools_start_execution(const struct snag_response_item *, const struct s
 int snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t error_size);
 bool snag_tools_ready(const char *handle);
 bool snag_tools_busy(void);
+bool snag_tools_pinned_busy(void);
 const char *snag_tools_handoff(const char *handle);
 int snag_tools_collect(
     const char *handle, const char *reason, json_t **result, char *error, size_t error_size);
@@ -50,6 +51,12 @@ void snag_tools_collected(const char *handle);
 void snag_tools_process_state(struct snag_process_state *state);
 void snag_tools_close_all(bool user_interrupt);
 void snag_tools_shutdown(void);
+
+int snag_tools_pinned_start(const char *, const char *, const char *, const char *,
+    const int[2], const struct snag_config *, const struct snag_credential *, char *, size_t);
+json_t *snag_tools_pinned_state(const char *);
+int snag_tools_signal(const char *);
+int snag_tools_pinned_input(const char *, const char *, bool, char *, size_t);
 
 struct snag_session;
 int snag_tools_document(const struct snag_response_item *, struct snag_session *, snag_tool_pump_fn,

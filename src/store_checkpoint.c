@@ -384,6 +384,7 @@ encode_state(const struct snag_session *s)
     if (s->irc_conversations) JSON_FIELD(irc_conversations);
     if (s->irc_activity) JSON_FIELD(irc_activity);
     if (s->active_skills) JSON_FIELD(active_skills);
+    if (s->pinned_commands) JSON_FIELD(pinned_commands);
     if (s->work_context) JSON_FIELD(work_context);
 #undef JSON_FIELD
 #define TEXT_FIELD(f) PUT("has_" #f, json_boolean(s->f != NULL))
@@ -480,6 +481,11 @@ decode_state(const json_t *data, struct snag_session *s)
     if (work_context) {
         if (!snag_work_context_valid(work_context)) return -1;
         s->work_context = json_incref(work_context);
+    }
+    json_t *pins = json_object_get(data, "pinned_commands");
+    if (pins) {
+        if (!snag_pinned_commands_valid(pins)) return -1;
+        s->pinned_commands = json_incref(pins);
     }
     json_t *skills = json_object_get(data, "active_skills");
     if (skills) {

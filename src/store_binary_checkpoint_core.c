@@ -412,7 +412,8 @@ copy_sources(struct snag_binary_checkpoint_sources *sources,
     const struct snag_binary_checkpoint_inputs *inputs,
     const struct snag_binary_checkpoint_payloads *payloads, const struct snag_session *state)
 {
-    if (processes->count > SIZE_MAX / sizeof(*sources->processes) ||
+    if (processes->count > UINT32_MAX || inputs->queue_count > UINT32_MAX ||
+        processes->count > SIZE_MAX / sizeof(*sources->processes) ||
         inputs->queue_count > SIZE_MAX / sizeof(*sources->queue) ||
         payloads->download_count > SIZE_MAX / sizeof(*sources->downloads))
         return snag_errno(EOVERFLOW);
@@ -426,6 +427,7 @@ copy_sources(struct snag_binary_checkpoint_sources *sources,
     sources->resume_options = payloads->resume_options;
     sources->skills = payloads->skills;
     sources->work_context = payloads->work_context;
+    sources->pinned_commands = payloads->pinned_commands;
     if (sources->process_count) {
         sources->processes = calloc(sources->process_count, sizeof(*sources->processes));
         if (!sources->processes) return -1;
@@ -569,6 +571,8 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     state->pending_steering_count = state->pending_steering_capacity = input_state.steering_count;
     json_decref(input_state.strings);
     input_state = (struct snag_binary_checkpoint_inputs_state){0};
+    state->pinned_commands = payload_state.pinned_commands;
+    payload_state.pinned_commands = NULL;
     state->work_context = payload_state.work_context;
     payload_state.work_context = NULL;
     state->active_skills = payload_state.skills;

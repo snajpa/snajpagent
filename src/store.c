@@ -265,6 +265,8 @@ free_session_state(struct snag_session *session)
     json_decref(session->checkpoint_context);
     json_decref(session->checkpoint_state);
     json_decref(session->skills_catalog);
+    json_decref(session->pinned_commands);
+    json_decref(session->pinned_status);
     json_decref(session->work_context);
     json_decref(session->active_skills);
     json_decref(session->download_queue);
@@ -1094,7 +1096,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
     const char *diag_call = NULL;
     const char *diag_status = NULL;
 
-    if (!strcmp(type, "skills_updated")) {
+    if (!strcmp(type, "pinned_commands_updated")) {
+        json_t *jobs = json_object_get(data, "commands");
+        if (!snag_json_exact_keys(data, "commands") ||
+            !snag_pinned_commands_valid(jobs)) goto invalid;
+        json_decref(session->pinned_commands);
+        session->pinned_commands = json_incref(jobs);
+    } else if (!strcmp(type, "skills_updated")) {
         json_t *active = json_object_get(data, "active");
         if (!snag_skill_bindings_valid(active)) goto invalid;
         const char *policy = snag_json_string(data, "policy_digest");
@@ -4482,6 +4490,8 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->checkpoint_context = json_incref(source->checkpoint_context);
     staged->checkpoint_state = json_incref(source->checkpoint_state);
     staged->skills_catalog = json_incref(source->skills_catalog);
+    staged->pinned_commands = json_incref(source->pinned_commands);
+    staged->pinned_status = json_incref(source->pinned_status);
     staged->work_context = json_incref(source->work_context);
     staged->active_skills = json_deep_copy(source->active_skills);
     staged->download_queue = json_deep_copy(source->download_queue);

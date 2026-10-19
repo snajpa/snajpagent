@@ -4005,7 +4005,9 @@ handle_common_command(
     *handled = true;
     *prompt_ready = false;
     {
-        int rc = snag_app_skills_command(app, line, handled);
+        int rc = snag_app_running_command(app, line, handled);
+        if (rc || *handled) return rc;
+        rc = snag_app_skills_command(app, line, handled);
         if (*handled) return rc;
         if (!strncmp(line, "/skills use ", 12u)) return 0;
         rc = snag_app_voice_command(app, line, handled);
@@ -7379,6 +7381,7 @@ idle_poll_timeout(const struct app_state *app)
     int timeout =
         app->pager || app->audio || app->voice || app->networked || app->irc_background.len ? 25
                                                                                             : -1;
+    if (snag_tools_pinned_busy() && (timeout < 0 || timeout > 25)) timeout = 25;
     if (app->transfer && (timeout < 0 || timeout > 50)) timeout = 50;
     if (snag_mcp_watching(app->mcp) && (timeout < 0 || timeout > 100)) timeout = 100;
     if (json_array_size(app->session.download_queue) && (timeout < 0 || timeout > 250))
@@ -7627,6 +7630,13 @@ interactive_loop(struct app_state *app, const char *initial)
                 !app->session.active_turn && snag_monotonic_ms() - app->remote_probe_at >= 1000u &&
                 snag_app_remote_probe(app) < 0)
                 goto ui_failed;
+            if (json_array_size(app->session.pinned_commands)) {
+                char detail[256] = {0};
+                if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), detail, sizeof(detail)) < 0) {
+                    (void)app_error(app, detail);
+                    goto ui_failed;
+                }
+            }
             int poll_rc = poll_input(app, idle_poll_timeout(app), &action, &owned);
             if (owned) app->input_received_ms = app->ui.input_received_ms;
             history_warning(app);
@@ -8014,6 +8024,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
             goto fail;
         }
         app.history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
+        if (snag_app_running_resume(&app) < 0) goto fail;
         app.history_recovery_rebase = app.session.active_turn;
         app.goal_armed = app.session.goal_status == SNAG_GOAL_ACTIVE;
         if ((cli->provider || cli->model || cli->effort) &&
@@ -8156,6 +8167,7 @@ out:
     atomic_store(&shutdown_ui, NULL);
     snag_tools_shutdown();
     snag_tools_journal(NULL, NULL, NULL);
+    json_decref(app.pinned_errors);
     if (app.ui.native || app.ui.direct) {
         /* Stop accepting controllers before releasing the original writer
          * lock. EXIT acknowledges a stopped owner to the frontend. */

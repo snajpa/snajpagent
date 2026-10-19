@@ -16,6 +16,7 @@ bool snag_tool_name_valid(const char *name);
 /* Provider item/call identity: UTF-8 text without control or C1 bytes. */
 bool snag_provider_id_valid(const char *s);
 /* Durable identity/output counters plus engine-owned observations, never PIDs. */
+bool snag_pinned_commands_valid(const json_t *);
 struct snag_process_state {
     char handle[SNAG_ID_HEX_LEN + 1u];
     char command[257];
