@@ -3064,13 +3064,25 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
                 "Ordinary exec_command handles still require normal collection. Read-only "
                 "turns may list/show only. start requires name and command; show/write/stop "
                 "require id (full ID, unique prefix or name; stop also accepts all).",
-                json_pack("{s:{s:s,s:[s,s,s,s,s]},s:{s:[s,s]},s:{s:[s,s]},"
-                          "s:{s:[s,s]},s:{s:[s,s]},s:{s:[s,s]},s:{s:[s,s]},s:{s:[s,s]}}",
+                json_pack("{s:{s:s,s:[s,s,s,s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
+                          "s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
+                          "s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
                     "action", "type", "string", "enum", "start", "list", "show", "write", "stop",
-                    "id", "type", "string", "null", "name", "type", "string", "null",
-                    "command", "type", "string", "null", "on_resume", "type", "string", "null",
-                    "workdir", "type", "string", "null", "data", "type", "string", "null",
-                    "eof", "type", "boolean", "null"))) < 0 ||
+                    "description", "One of: start, list, show, write, stop.",
+                    "id", "type", "string", "null", "description",
+                    "Job ID, unique prefix or name; stop also accepts all.",
+                    "name", "type", "string", "null", "description",
+                    "Job name, required for start, at most 128 UTF-8 bytes.",
+                    "command", "type", "string", "null", "description",
+                    "Shell command for start, at most 262144 UTF-8 bytes.",
+                    "on_resume", "type", "string", "null", "description",
+                    "Optional command run once by a resumed owner; empty or omitted disables it.",
+                    "workdir", "type", "string", "null", "description",
+                    "Existing working directory for start; omitted uses the session cwd.",
+                    "data", "type", "string", "null", "description",
+                    "PTY input for write, at most 1048576 UTF-8 bytes.",
+                    "eof", "type", "boolean", "null", "description",
+                    "Close stdin after pending input is written; omitted or null means false."))) < 0 ||
         json_array_append_new(tools,
             tool_schema("skills", "action",
                 "Search/list skill metadata, show source, load or unload task guidance. "
