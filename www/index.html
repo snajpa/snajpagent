@@ -67,6 +67,9 @@
         Work and IRC continue while the pager is open;
         new output appears when it closes. <code>/ro QUERY</code> queues read-only inspection,
         and <code>/compact</code> summarizes context while preserving the local log.</p>
+      <p>Current source supports <code>-m none</code> and <code>/model none</code>
+        for local controls and IRC while discarding model-bound input.
+        Select a real model to enable new input.</p>
       <p>Resume continues unfinished work without a new prompt. For scripts, use
         <code>snajpagent -e --resume SESSION_ID &lt;/dev/null</code>. Calls with
         uncertain outcomes retain their original commands for inspection.</p>

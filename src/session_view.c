@@ -574,7 +574,8 @@ snag_view_server_result(struct snag_view_server *server, const char *id,
     if (!receipt) return snag_errno(ENOENT);
     json_t *result = json_pack("{s:s,s:s,s:I,s:s}", "id", id,
         "status", status, "seq", (json_int_t)seq, "event", event ? event : "");
-    return finish_receipt(server, receipt, result, !strcmp(status, "committed"));
+    return finish_receipt(server, receipt, result,
+        !strcmp(status, "committed") || !strcmp(status, "discarded"));
 }
 
 int

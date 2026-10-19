@@ -21,6 +21,7 @@ const struct snag_term_command snag_commands[] = {
     {"/verbose [0..6]", "show/set verbosity for this process"},
     {"/banner [TEXT|clear]", "show/set session banner echoed in later requests"},
     {"/model [list|cache]", "list cached models; cache refreshes all providers"},
+    {"/model none", "discard model input; retain local controls and IRC"},
     {"/model [#]N[:CONTEXT] [save|s]", "select numbered model/effort row (N starts at 1)"},
     {"/model MODEL[/EFFORT][:CONTEXT] [save|s]", "select on the next-turn provider"},
     {"/model PROVIDER/MODEL/EFFORT[:CONTEXT] [save|s]", "select explicit provider/model/effort"},

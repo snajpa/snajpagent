@@ -376,6 +376,12 @@ snag_app_resolve_effort(const char *preference)
     if (!snag_text_valid(preference, 1u, SNAG_CONFIG_EFFORT_MAX - 1u)) return NULL;
     return preference;
 }
+bool
+snag_app_model_enabled(const struct app_state *app)
+{
+    return strcmp(app->session.default_model, "none") != 0;
+}
+
 static const struct snag_provider_config *
 next_provider(const struct app_state *app)
 {
@@ -709,6 +715,17 @@ commit_input(struct app_state *app, const char *type, json_t *data, const json_t
 }
 
 static int
+discard_model_input(struct app_state *app)
+{
+    json_decref(app->draft_content);
+    app->draft_content = NULL;
+    if (snag_ui_view_result(&app->ui, app->ui.view_request, "discarded",
+            app->session.next_seq - 1u, "model none") < 0)
+        return -1;
+    return app_textf(app, SNAG_UI_HOST, "input discarded: model none");
+}
+
+static int
 render_queue(struct app_state *app)
 {
     if (app->session.pending_queue_count == 0u) {
@@ -946,6 +963,10 @@ format_context_meter(struct app_state *app, bool active, char meter[32u])
     unsigned int percent;
     int n;
 
+    if (!snag_app_model_enabled(app)) {
+        memcpy(meter, "-", sizeof("-"));
+        return 0;
+    }
     if (!active && app->session.turn_count == 0u && !app->session.last_user) {
         memcpy(meter, "0", sizeof("0"));
         return 0;
@@ -1026,12 +1047,14 @@ render_prompt(struct app_state *app, bool active, const char *submitted)
                             : active                                     ? 2u
                                                                          : 1u;
 
-    if (!provider || !model || !effort || format_context_meter(app, active || submitted, meter) < 0)
+    if (!snag_app_model_enabled(app)) model = "none";
+    if (!model || (!provider && strcmp(model, "none")) || !effort ||
+        format_context_meter(app, active || submitted, meter) < 0)
         return -1;
     if (!submitted)
         memcpy(app->prompt_context_value, meter, strlen(meter) + 1u);
     prompt_hostname(hostname, sizeof(hostname));
-    values[0] = provider->name;
+    values[0] = provider ? provider->name : "none";
     values[1] = model;
     values[2] = effort;
     values[3] = app->irc ? snag_irc_operator_nick(app->irc) : app->config->irc.operator_nick;
@@ -1113,9 +1136,9 @@ validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
     char label[SNAG_TERM_LABEL_BYTES];
     int rc = -1;
 
-    if (!provider || !model || !effort) return -1;
+    if (!model || (!provider && strcmp(model, "none")) || !effort) return -1;
     prompt_hostname(hostname, sizeof(hostname));
-    values[0] = provider->name;
+    values[0] = provider ? provider->name : "none";
     values[1] = model;
     values[2] = effort;
     values[3] = config->irc.operator_nick;
@@ -1350,6 +1373,10 @@ snag_app_voice_submit(struct app_state *app, const json_t *source, const char *t
     struct snag_buf prompt = {.max = SNAG_MAX_STEERING_TEXT};
     *result = NULL;
     id[0] = '\0';
+    if (!snag_app_model_enabled(app)) {
+        *result = snag_tool_result_terminal(true, "Input discarded: model none.");
+        return *result ? 0 : -1;
+    }
     if (!target || (strcmp(target, "queue") && (!app->session.active_turn ||
                                                    strcmp(target, app->session.active_turn_id)))) {
         *result = snag_tool_result_terminal(
@@ -1439,6 +1466,7 @@ snag_app_voice_interrupt(
 static int
 queue_future_turn(struct app_state *app, const char *text, bool arm, char *error, size_t error_size)
 {
+    if (!snag_app_model_enabled(app)) return discard_model_input(app);
     char queue_id[SNAG_ID_HEX_LEN + 1u];
     bool read_only;
     const char *queued_text = snag_prompt_parse(text, &read_only);
@@ -1597,6 +1625,10 @@ append_compact_threshold(struct snag_buf *text, const struct snag_provider_confi
 static int
 render_status(struct app_state *app)
 {
+    if (!snag_app_model_enabled(app))
+        return app_reportf(app, "session: %s\nmodel: none\n"
+            "Model-bound input is discarded; local controls and IRC remain available.\n",
+            app->session.id);
     const char *id = app->session.id;
     const struct snag_provider_config *provider =
         app->session.active_turn ? app->turn_provider : next_provider(app);
@@ -2441,6 +2473,26 @@ commit_model_selection(struct app_state *app, const struct snag_provider_config 
     bool current_turn = app->session.active_turn;
     int rc;
 
+    if (!strcmp(model, "none")) {
+        const char *name = provider ? provider->name : "none";
+        if (choice) return app_error(app, "model none has no context window");
+        if (save && snag_config_save_model(app->config_path, app->config_allow_create,
+                name, model, effort, error, sizeof(error)) < 0)
+            return app_error(app, error);
+        if (record_model_selection(app, name, model, effort, error, sizeof(error)) < 0 ||
+            persist_session(app, error, sizeof(error)) < 0)
+            return app_error(app, error), -1;
+        snag_app_irc_summary_close(app);
+        app->interrupt_requested = current_turn;
+        app->model_switch_requested = false;
+        app->goal_armed = false;
+        if (save) {
+            (void)snag_strcpy(app->config->provider, sizeof(app->config->provider), name);
+            (void)snag_strcpy(app->config->model, sizeof(app->config->model), model);
+        }
+        return app_textf(app, SNAG_UI_HOST,
+            "model: none; model-bound input is discarded until a real model is selected");
+    }
     struct snag_context_choice current = {app->session.context_mode, app->session.context_tokens};
     struct snag_model_capacity capacity;
     if (snag_app_context_preview(app, provider, model, choice ? choice : &current, &capacity,
@@ -2725,6 +2777,13 @@ change_model(struct app_state *app, const char *value, bool active)
         return app_error(app, error);
     }
     selector = trim_selector_part(selector);
+    if (!strcmp(selector, "none")) {
+        rc = commit_model_selection(app, next_provider(app), "none",
+            snag_app_resolve_effort(app->session.default_effort), true, save,
+            context_set ? &choice : NULL);
+        free(copy);
+        return rc;
+    }
     rc = select_cached_model(app, selector, save, context_set ? &choice : NULL);
     if (rc == 1)
         rc = select_typed_model(app, selector, save, context_set ? &choice : NULL);
@@ -3826,7 +3885,9 @@ apply_controls(struct app_state *app)
         } else if (bit == SNAG_CONTROL_CACHE) {
             rc = change_model(app, "cache", false);
         } else if (bit == SNAG_CONTROL_COMPACT) {
-            if (!app->execute && snag_ui_hold(&app->ui, app->session.active_turn) < 0) {
+            if (!snag_app_model_enabled(app)) {
+                rc = app_error(app, "model none: compaction is disabled");
+            } else if (!app->execute && snag_ui_hold(&app->ui, app->session.active_turn) < 0) {
                 result = rc = -1;
             } else {
                 rc = app->session.compact_control_image_boundary
@@ -3991,6 +4052,8 @@ handle_common_command(
         const char *rest = line + 8u;
         while (isspace((unsigned char)*rest)) ++rest;
         if (*rest) return app_error(app, "usage: /compact");
+        if (!snag_app_model_enabled(app))
+            return app_error(app, "model none: compaction is disabled");
         if (!app->session.turn_count)
             return app_textf(app, SNAG_UI_HOST, "nothing to compact before the first prompt");
         return request_control(app, SNAG_CONTROL_COMPACT, "/compact");
@@ -4884,6 +4947,11 @@ again:;
     }
     if (action == SNAG_TERM_VIEW) return input_view_toggle(app);
     if (!line) return 0;
+    if (!snag_app_model_enabled(app) && !snag_prompt_command(line) &&
+        (action == SNAG_TERM_QUEUE || app->ui.input_view != SNAG_RENDER_CHAT)) {
+        rc = discard_model_input(app);
+        goto active_done;
+    }
     remember_input(app, line);
     error[0] = '\0';
     if (app->queue_edit_id[0] && !snag_prompt_command(line)) {
@@ -6827,6 +6895,7 @@ static int
 run_tracked_turn(struct app_state *app, const char *prompt, const struct snag_queued_turn *queued,
     bool goal_turn, bool read_only, const json_t *content, bool timer_turn)
 {
+    if (!snag_app_model_enabled(app)) return discard_model_input(app) < 0 ? 3 : 0;
     if (app->session.active_turn) {
         read_only = app->session.active_read_only;
         goal_turn = app->session.active_goal;
@@ -7276,7 +7345,8 @@ run_queued_chain(struct app_state *app)
 static bool
 timer_due(const struct app_state *app)
 {
-    return app && app->session.timer_id[0] && app->session.timer_due_ms &&
+    return app && snag_app_model_enabled(app) && app->session.timer_id[0] &&
+           app->session.timer_due_ms &&
            snag_time_ms() >= app->session.timer_due_ms;
 }
 
@@ -7313,7 +7383,7 @@ idle_poll_timeout(const struct app_state *app)
     if (snag_mcp_watching(app->mcp) && (timeout < 0 || timeout > 100)) timeout = 100;
     if (json_array_size(app->session.download_queue) && (timeout < 0 || timeout > 250))
         timeout = 250;
-    if (app->session.timer_id[0] && app->session.timer_due_ms) {
+    if (snag_app_model_enabled(app) && app->session.timer_id[0] && app->session.timer_due_ms) {
         uint64_t now = snag_time_ms();
         uint64_t remaining = app->session.timer_due_ms > now ? app->session.timer_due_ms - now : 0u;
         if (remaining < (uint64_t)(timeout < 0 ? INT_MAX : timeout))
@@ -7333,7 +7403,7 @@ run_ready_chains(struct app_state *app)
             return 0;
         }
         if (apply_controls(app) < 0) return 3;
-        if (app->input_closed) return 0;
+        if (app->input_closed || !snag_app_model_enabled(app)) return 0;
         if (!app->session.active_turn && app->session.pending_input) {
             turn_rc = run_tracked_turn(app, snag_json_string(app->session.pending_input, "text"),
                 NULL, false, json_is_true(json_object_get(app->session.pending_input, "read_only")),
@@ -7406,6 +7476,11 @@ submit_idle(
     bool retry = single_line && strcmp(prompt, "/retry") == 0;
     int rc = 0;
 
+    if (!snag_app_model_enabled(app) && input_view != SNAG_RENDER_CHAT &&
+        !snag_prompt_command(prompt)) {
+        *prompt_ready = false;
+        return discard_model_input(app) < 0 ? 3 : 0;
+    }
     if (app->queue_edit_id[0] && !snag_prompt_command(prompt)) {
         char error[256] = {0};
         rc = finish_queue_edit(app, prompt, false, error, sizeof(error));
@@ -7518,7 +7593,8 @@ interactive_loop(struct app_state *app, const char *initial)
             rc = 6;
             break;
         }
-        if (!prompt && !snag_ui_leaving(&app->ui) && app->session.queue_armed &&
+        if (!prompt && snag_app_model_enabled(app) && !snag_ui_leaving(&app->ui) &&
+            app->session.queue_armed &&
             !app->queue_edit_id[0] && app->session.pending_queue_count) {
             rc = run_ready_chains(app);
             if (rc == 3 || rc == 6) break;
@@ -7647,7 +7723,9 @@ interactive_loop(struct app_state *app, const char *initial)
                 continue;
             }
             prompt = owned;
-            remember_input(app, prompt);
+            if (snag_app_model_enabled(app) || snag_prompt_command(prompt) ||
+                app->ui.input_view == SNAG_RENDER_CHAT)
+                remember_input(app, prompt);
         }
         rc = submit_idle(
             app, prompt, owned ? app->ui.input_view : snag_ui_view(&app->ui), &prompt_ready);
@@ -7821,7 +7899,9 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         rc = 0;
         goto out;
     }
-    if (!cli->list && ((!config.provider_count) ||
+    bool model_none = !strcmp(cli->model ? cli->model
+        : cli->resume ? app.session.default_model : config.model, "none");
+    if (!cli->list && !model_none && ((!config.provider_count) ||
                           (cli->provider && !snag_config_provider(&config, cli->provider)))) {
         invalid_message = cli->provider ? "--provider names an unconfigured provider"
                                         : "no provider is configured; run snajpagent login";
@@ -7867,7 +7947,10 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     }
     new_model = effective_model(config.model);
     new_effort = cli->effort ? cli->effort : config.reasoning_effort;
-    if (cli->model) {
+    if (cli->model && model_none) {
+        new_model = "none";
+        selection.provider = snag_config_provider(&config, cli->provider);
+    } else if (cli->model) {
         if (snag_model_select_selector(&app.model_cache, &config, cli->model,
                 snag_config_provider(&config, cli->provider), new_effort, &selection, error,
                 sizeof(error)) < 0) {
@@ -7914,7 +7997,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
                               : snag_config_provider(&config,
                                     cli->provider ? cli->provider : app.session.default_provider);
         resume_model = cli->model ? new_model : app.session.default_model;
-        if (!resume_provider) {
+        if (!resume_provider && !model_none) {
             invalid_message = "selected provider is not configured; use --provider NAME";
             goto invalid;
         }
@@ -7934,7 +8017,8 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         app.history_recovery_rebase = app.session.active_turn;
         app.goal_armed = app.session.goal_status == SNAG_GOAL_ACTIVE;
         if ((cli->provider || cli->model || cli->effort) &&
-            record_model_selection(&app, resume_provider->name, resume_model,
+            record_model_selection(&app, resume_provider ? resume_provider->name : "none",
+                resume_model,
                 cli->model || cli->effort ? new_effort : app.session.default_effort, error,
                 sizeof(error)) < 0) {
             goto fail;
@@ -7953,7 +8037,8 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
             invalid_message = "configured prompt cannot be rendered with the current selection";
             goto invalid;
         }
-        if (snag_session_prepare(&app.session, cwd, selected_provider->name, new_model, new_effort,
+        if (snag_session_prepare(&app.session, cwd,
+                selected_provider ? selected_provider->name : "none", new_model, new_effort,
                 error, sizeof(error)) < 0) {
             goto fail;
         }

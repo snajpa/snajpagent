@@ -1115,6 +1115,17 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             buffer->reconcile_pending = buffer->terminal_result = true;
             buffer_message(
                 buffer, "Command needs :classic; not executed; :recover restores its text");
+        } else if (!strcmp(status, "discarded")) {
+            if (strcmp(connection->instance, snag_json_string(buffer->pending, "instance")))
+                return snag_errno(EPROTO);
+            if (receipt_draft(buffer, value) < 0) return -1;
+            json_decref(buffer->pending);
+            buffer->pending = NULL;
+            buffer->submitting = buffer->query = buffer->reconcile_pending = false;
+            buffer->terminal_result = buffer->terminal_auto = false;
+            buffer->draft_get = connection->drafts;
+            buffer->receipt_at = 0u;
+            buffer_message(buffer, "Input discarded: model none");
         } else if (!strcmp(status, "committed") || !strcmp(status, "completed")) {
             uint64_t seq;
             if (snag_json_integer_u64(value, "seq", &seq) < 0 || !seq ||

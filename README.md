@@ -60,6 +60,10 @@ Waiting prompts run oldest first; `(N)` counts them. `/next` resumes a paused
 queue, and `/q c` clears it. Tab first completes `/command` names; completion
 never submits text.
 
+Use `snajpagent -m none` or `/model none` for local controls and IRC without model
+activity. Model-bound input received in this mode is discarded. Select a real
+model with `/model` to enable new input; the selection survives resume.
+
 ### Commands, history and context
 
 Foreground commands and `$EDITOR` own input until finished. Controls acknowledge

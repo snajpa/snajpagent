@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add `/model none` and `-m none` for local controls and IRC without model
+  activity. Model-bound input is discarded, automatic model work waits, and the
+  selection survives resume, including with no configured provider.
+
 - Stop requiring replies to unavailable IRC conversations after reconnect,
   peer departure or channel membership replacement. Preserve the original
   undelivered target and exact private/channel routing boundaries on resume.

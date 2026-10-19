@@ -1071,6 +1071,10 @@ and accepts nonempty UTF-8 text up to 512 bytes.  Labels are descriptive; they
 do not change which files are read or what writes are authorized.
 .TP
 .BI \-m " [provider/]model[/effort][:context]"
+Use
+.B none
+for local controls and IRC without model activity; model-bound input is discarded.
+This also works with no provider configured.
 Select the model for the next request on start or resume, including an unfinished
 turn. With an omitted
 provider, use the first provider defined in the configuration (or an explicit
@@ -3048,6 +3052,17 @@ There is no automatic catalog refresh or protocol fallback.  Failure leaves
 the previous cache intact.  During active work the refresh starts at the next
 safe request boundary.  See
 .BR "Model selection and context" .
+.TP
+.B /model none
+Select no model and cancel the active model turn. Model-bound terminal, frontend,
+voice and IRC input received in this mode is discarded rather than queued or
+included in a later request. IRC chat and local controls remain available.
+Automatic queue, timer, goal and compaction requests wait while this selection is
+active. The selection survives resume; choose a real model with
+.B /model
+or
+.B -m
+to enable new input. Previously saved work remains retained.
 .TP
 .BR /model " " number ", " /model " #" number
 Select an exact displayed provider/model/effort row.

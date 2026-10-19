@@ -233,8 +233,10 @@ submissions remain supported. Duplicate request IDs return their saved receipt
 before consulting the current draft, so later edits cannot invalidate a receipt.
 On successful admission, the owner clears the draft only if that exact revision
 is still current. A newer edit, including one from a replacement controller,
-survives the older admission. The receipt's `draft_cleared` is the resulting
-empty-draft revision, or zero when no draft was cleared. Clients use that identity
+survives the older admission. A `discarded` result accepts and clears the matching
+draft without creating a model input event when the selection is `none`. Its text
+is never replayed after a model is selected. The receipt's `draft_cleared` is the
+resulting empty-draft revision, or zero when no draft was cleared. Clients use that identity
 to distinguish admission's clear from an independently edited remote draft.
 
 ## Private query routes

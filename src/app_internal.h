@@ -417,6 +417,7 @@ int snag_app_parse_queue_argument(
 json_t *snag_app_input_received_data(struct app_state *, const char *, bool, bool);
 
 bool snag_app_context_cancelled(void *opaque);
+bool snag_app_model_enabled(const struct app_state *app);
 int snag_app_active_input_pump(void *opaque, unsigned int timeout_ms);
 int snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms);
 bool snag_app_retry_allowed(const void *opaque);

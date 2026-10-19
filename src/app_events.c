@@ -394,6 +394,8 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         accepted.urgent = accepted.input && event->kind == SNAG_IRC_MESSAGE && !event->historical;
         accepted.reply = accepted.urgent;
     }
+    if (!snag_app_model_enabled(app))
+        accepted.input = accepted.urgent = accepted.reply = false;
     enum snag_irc_casemapping mapping = SNAG_IRC_CASE_UNKNOWN;
     for (size_t i = 0u; i < app->irc_destinations.count; ++i) {
         const struct snag_irc_destination *item = &app->irc_destinations.items[i];
@@ -432,6 +434,7 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         event->route.identity == SNAG_IRC_OPERATOR &&
         snag_ui_text(&app->ui, SNAG_UI_WARNING, event->text) < 0)
         return -1;
+    if (!snag_app_model_enabled(app)) return 0;
     own_agent = snag_irc_local_identity(app->irc, event, true);
     if (conversation_replied(
             app->irc_turn_conversations, event, app->session.irc_conversations, own_agent) < 0)
@@ -592,7 +595,7 @@ snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size)
     int rc;
     bool admit_all;
 
-    if (!app || !app->session.active_turn) return 0;
+    if (!app || !snag_app_model_enabled(app) || !app->session.active_turn) return 0;
     int sleeping = snag_app_irc_sleeping(app, error, error_size);
     if (sleeping) return sleeping < 0 ? -1 : 0;
     admit_all = irc_background_steering(app);
@@ -632,6 +635,8 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     char *copy;
     size_t used;
 
+    if (local_operator) *local_operator = false;
+    if (!app || !snag_app_model_enabled(app)) return NULL;
     if (app) {
         int sleeping = snag_app_irc_sleeping(app, NULL, 0);
         if (sleeping < 0) app->input_closed = true;

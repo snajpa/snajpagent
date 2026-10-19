@@ -176,7 +176,8 @@ snag_app_irc_summary_start(struct app_state *app, const struct snag_context_proj
     uint64_t count = projection->irc_count;
     const char *extra = snag_json_string(s->strings, "irc_compact_instruction");
 
-    if (app->irc_summary || !s->irc_compact_updates || s->active_read_only ||
+    if (!snag_app_model_enabled(app) || app->irc_summary || !s->irc_compact_updates ||
+        s->active_read_only ||
         count < s->irc_compact_count || count - s->irc_compact_count < s->irc_compact_updates ||
         count <= app->irc_summary_attempt_count) return;
     app->irc_summary_attempt_count = count;
