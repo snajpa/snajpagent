@@ -218,7 +218,7 @@ read_snapshot(struct snag_session *session, bool native)
     return rc;
 }
 
-enum catalog_content { CATALOG_IDENTITY, CATALOG_CELLS, CATALOG_MONITOR };
+enum catalog_content { CATALOG_IDENTITY, CATALOG_CELLS, CATALOG_MONITOR, CATALOG_PREVIEW };
 
 struct catalog_row {
     json_t *owner;
@@ -865,6 +865,17 @@ catalog_write(struct snag_session *session, json_t *cells,
     return published;
 }
 
+static json_t *
+catalog_metrics(struct snag_store *store, const char *id)
+{
+    struct snag_metrics_view metrics;
+    if (snag_metrics_read(store->root_fd, id, &metrics, NULL, 0u) < 0 || !metrics.valid)
+        return NULL;
+    char turns[32];
+    (void)snprintf(turns, sizeof(turns), "%llu", (unsigned long long)metrics.turns);
+    return json_pack("[s,s,s,s,s,s,s]", id, "-", metrics.model, turns, "stored", "-", "-");
+}
+
 static bool
 load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const char *id,
     unsigned int columns, enum catalog_content content, bool (*cancel)(void *),
@@ -892,13 +903,8 @@ load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const 
         /* Metrics already supply every monitor field. Do not queue journal
          * verification for a live owner on each append, or replay a completed
          * conversation only to discard its preview in the monitor. */
-        struct snag_metrics_view metrics;
-        if (snag_metrics_read(store->root_fd, id, &metrics, NULL, 0u) == 0 && metrics.valid) {
-            char turns[32];
-            (void)snprintf(turns, sizeof(turns), "%llu", (unsigned long long)metrics.turns);
-            json_t *cells = json_pack("[s,s,s,s,s,s,s]", id, "-", metrics.model,
-                turns, "stored", "-", "-");
-            if (!cells) goto fail;
+        json_t *cells = catalog_metrics(store, id);
+        if (cells) {
             *summary = (struct catalog_row){.owner = cells, .cells = cells};
             return true;
         }
@@ -911,7 +917,7 @@ load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const 
         catalog_source(&before, source);
         snag_sha256_update(pending, id, SNAG_ID_HEX_LEN);
         snag_sha256_update(pending, source, sizeof(source));
-        /* A monitor may show the last metadata from an append-only owner while
+        /* A picker may show the last metadata from an append-only owner while
          * its worker verifies the new boundary. Replacements never reuse it. */
         row = catalog_read(snapshot->dir_fd, id, NULL, columns);
         const json_t *stamp = json_object_get(row, "source");
@@ -919,6 +925,13 @@ load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const 
             json_integer_value(json_array_get(stamp, 1u)) == (json_int_t)before.st_ino &&
             json_integer_value(json_array_get(stamp, 2u)) <= before.st_size) goto cached;
         json_decref(row);
+        if (content == CATALOG_PREVIEW) {
+            json_t *cells = catalog_metrics(store, id);
+            if (cells) {
+                *summary = (struct catalog_row){.owner = cells, .cells = cells};
+                return true;
+            }
+        }
         goto fail;
     }
     memcpy(snapshot->id, id, sizeof(snapshot->id));
@@ -1137,7 +1150,7 @@ list_sessions(struct snag_store *store, const struct snag_session *owned, uint64
         }
         struct snag_metrics_view metrics;
         unsigned int status = live ? 2u : 3u;
-        if (live && content != CATALOG_MONITOR) {
+        if (live && content != CATALOG_MONITOR && content != CATALOG_PREVIEW) {
             int attachment = snag_session_endpoint_status(snapshot->dir_fd, snapshot->dir_path);
             if (attachment >= 0) status = attachment ? 0u : 1u;
         } else if (live &&
@@ -1241,6 +1254,24 @@ snag_store_catalog(struct snag_store *store, const struct snag_session *owned,
         json_decref(rows);
         rows = NULL;
     }
+    return rows;
+}
+
+json_t *
+snag_store_catalog_preview(struct snag_store *store, const struct snag_session *owned,
+    uint64_t stored_limit, bool (*cancel)(void *), void *opaque, bool *incomplete,
+    char *error, size_t error_size)
+{
+    struct snag_sha256 pending;
+    snag_sha256_init(&pending);
+    *incomplete = false;
+    json_t *rows = json_array();
+    if (rows && list_sessions(store, owned, stored_limit, 0u, NULL, NULL, rows, cancel,
+            opaque, &pending, CATALOG_PREVIEW, error, error_size) < 0) {
+        json_decref(rows);
+        return NULL;
+    }
+    *incomplete = pending.bit_count != 0u;
     return rows;
 }
 

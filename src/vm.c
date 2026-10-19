@@ -64,10 +64,10 @@ static const char *const help_rows[] = {
     "Ctrl-W s/v: split    Ctrl-W w/h/j/k/l: focus    Ctrl-W =: equalize",
     "Ctrl-W +/-: height    Ctrl-W >/<: width    Ctrl-W q: close",
     ":workspace    :workspace name NAME    :workspace save",
-    "Workspace names accept quoted text. :close closes the focused window.",
+    "Workspace names accept quoted text. :q / :q! / :close close the focused window.",
     "Enter/:session [ID]: resume owner    :new [NAME]: create owner",
-    ":q / :x / :wq / :workspace detach: save and detach workspace; sessions continue",
-    ":w: save workspace    :q!: stop workspace sessions and exit",
+    ":qa / :x / :wq / :workspace detach: save and detach workspace; sessions continue",
+    ":w: save workspace    :qa!: stop workspace sessions and exit",
     ":session quit[!]: stop session    :sessions quit[!]: stop all controlled sessions",
     ":session detach (or :detach): detach the focused session; workspace stays open",
     "NORMAL: navigate/edit    INSERT: type into pane    COMMAND-LINE (Ex): : commands",
@@ -878,7 +878,7 @@ refresh(struct vm *vm)
         if (vm->windows[i].kind == VIEW_SESSIONS) sessions = true;
     if (!sessions) { vm->dirty = true; return; }
     struct snag_vm_read_request request = {.kind = SNAG_VM_READ_SESSIONS,
-        .stored_limit = vm->stored_limit};
+        .stored_limit = vm->stored_limit, .catalog_preview = true};
     vm->page.generation = reader_request(vm, &vm->page, &request);
     vm->page.window = 0u;
     if (!vm->page.generation) notice(vm, "Cannot start session list loading");
@@ -2086,11 +2086,11 @@ command_single(struct vm *vm, const char *text)
         if (vm->count > count && *rest) buffer_select(vm, rest);
     }
     else if (*rest) command_error(vm, "Unexpected command argument");
-    else if (!strcmp(word, "close")) close_window(vm);
-    else if (!strcmp(word, "q!") || !strcmp(word, "qa!")) {
+    else if (snag_string_in(word, "close q q!")) close_window(vm);
+    else if (!strcmp(word, "qa!")) {
         quit_sessions(vm, true, true);
     }
-    else if (snag_string_in(word, "q qa x wq")) detach_workspace(vm);
+    else if (snag_string_in(word, "qa x wq")) detach_workspace(vm);
     else if (!strcmp(word, "w")) {
         vm->meaningful = true;
         if (save(vm, NULL) == 0) notice(vm, "Workspace saved");
@@ -4319,6 +4319,12 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
     json_t *rows = view_rows(vm, window);
     size_t visible = 0u;
     size_t available = window->kind == VIEW_HELP ? count : json_array_size(rows);
+    if (window->kind == VIEW_SESSIONS && !count && height && vm->page.generation &&
+        !vm->page.window) {
+        const char *message = "Preparing session list…";
+        if (snag_vm_grid_text(&vm->grid, rectangle->row, rectangle->column,
+                rectangle->columns, message, strlen(message), SNAG_VM_DIM) < 0) return -1;
+    }
     for (size_t i = 0u; !document_view(window) && i < available; ++i) {
         json_t *row = json_array_get(rows, i);
         if (window->kind != VIEW_HELP && !matches(window, row)) continue;
@@ -4702,6 +4708,12 @@ collect(struct vm *vm, struct vm_read *read)
         json_decref(vm->sessions);
         vm->sessions = result->catalog;
         result->catalog = NULL;
+        if (result->request.catalog_preview && result->incomplete) {
+            struct snag_vm_read_request request = result->request;
+            request.catalog_preview = false;
+            read->generation = reader_request(vm, read, &request);
+            if (!read->generation) notice(vm, "Cannot refresh session metadata; R retries");
+        }
         for (size_t w = 0u; w < vm->count; ++w) {
             struct vm_window *window = &vm->windows[w];
             if (window->kind != VIEW_SESSIONS || !window->selected_id[0]) continue;

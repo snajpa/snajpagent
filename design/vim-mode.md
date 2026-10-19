@@ -520,6 +520,10 @@ The main decisions are:
   queries and reports. Several buffers share one session owner/IRC connection.
 - Named workspace snapshots retain the layout and buffer state. `vm -l` lists
   these workspaces; `vm --resume` restores one without submitting saved drafts.
+- The session picker displays cached rows before verifying changed journals in
+  the background. Its initial pass reads metadata and metrics without replaying
+  journals or contacting owner sockets. A cold, empty picker shows preparation
+  text. Session attachment and history opening retain source verification.
 - The workspace renders semantic history. It does not reconstruct history by
   interpreting the current terminal byte stream.
 - A new private semantic attachment shares controller ownership with the
@@ -529,10 +533,12 @@ The main decisions are:
   visible layouts; cache eviction never deletes history.
 - Explicit yanks update an internal register and attempt workstation clipboard
   delivery. Remote delivery uses the existing negotiated wrapper transport.
-- `:q` / `:x` / `:wq` save and detach the workspace; `:w` saves it. `:q!`
+- `:qa` / `:x` / `:wq` save and detach the workspace; `:w` saves it. `:qa!`
   stops all controlled sessions and exits with recoverable layout/drafts.
-  `:session quit` stops one session; `:detach` releases its controller; `:close`
-  closes a window. These meanings hold in every buffer and picker.
+  `:session quit` stops one session; `:detach` releases its controller;
+  `:q` / `:q!` / `:close` close the focused window and preserve drafts.
+  Closing the last window detaches the workspace, or hides the live in-process
+  agent on Windows. These meanings hold in every buffer and picker.
 - `WITH_VM=1` includes the module in ordinary and release builds. `WITH_VM=0`
   removes its implementation. Runtime activation remains explicit.
 
@@ -1595,9 +1601,9 @@ Workspace commands have the same scope in every pane, report and picker:
 | Command | Effect |
 | --- | --- |
 | `:w` / `:workspace save` | Save layout, buffers and drafts. |
-| `:q` / `:x` / `:wq` / `:qa` / `:workspace detach` | Save and detach the workspace; native owners continue. |
-| `:q!` / `:qa!` | Save the workspace, request normal shutdown of all controlled sessions, and exit after acknowledgement. Preserve workspace drafts. |
-| `:close` / `Ctrl-W q` | Close the focused window, releasing control when its last view closes. |
+| `:qa` / `:x` / `:wq` / `:workspace detach` | Save and detach the workspace; native owners continue. |
+| `:qa!` | Save the workspace, request normal shutdown of all controlled sessions, and exit after acknowledgement. Preserve workspace drafts. |
+| `:q` / `:q!` / `:close` / `Ctrl-W q` | Close the focused window and preserve drafts, releasing control when its last view closes. Closing the last workspace window detaches, or hides the live in-process agent on Windows. |
 | `:session detach` / `:detach` | Release the focused session controller for all its buffers. |
 | `:session quit` | Request normal shutdown of the focused controlled session; refuse unsent drafts or unresolved submissions. |
 | `:session quit!` | Discard that session's drafts and request normal shutdown. |
@@ -1859,7 +1865,7 @@ data-structure shape.
 | View projection | Retrospective verbosity toggles preserve source position; hidden anchors restore predictably. Completion records do not duplicate streamed text. HOLD does not move on incoming output. |
 | Input | Slow/fragmented Escape, UTF-8 and bracketed paste; a paste ending exactly at a read boundary appears without an extra key. Pasted Vim commands never execute. Composer edits, undo and queue handling preserve text. |
 | Grid | PTY screen assertions cover partial writes, blocked output, resize, wide/combining text, external return and force-redraw. No protocol frame or raw model escape reaches the visible terminal. |
-| Windows and lifecycle | Same-conversation splits share one draft; different queries/channels have distinct drafts and frozen routes. Session buffers share one controller. Verify identical workspace `:q`/`:q!` scope in transcripts and queries, `:close`, `:detach`, unsent drafts, failed attach, stale generation and lost acknowledgement without duplicate input or owner kill. |
+| Windows and lifecycle | Same-conversation splits share one draft; different queries/channels have distinct drafts and frozen routes. Session buffers share one controller. Verify pane-local `:q`/`:q!` and workspace-wide `:qa`/`:qa!` scope in transcripts and queries, `:close`, `:detach`, unsent drafts, failed attach, stale generation and lost acknowledgement without duplicate input or owner kill. |
 | Saved workspaces | `vm -N`, `-l N`, `--resume`, `--last`, rename and atomic save use a separate namespace from agent CLI flags. Restore split proportions, buffer addresses and anchors across exit/crash; detect live locks and corrupt/newer snapshots. Retain conflicting newer drafts. Never send saved text or restart stopped agents implicitly. |
 | IRC direct routing | Operator and agent DMs work with the built-in and an external IRC fixture, including peers without common channels. Verify exact recipient/identity, same nick on different endpoints/sessions, nick changes/reuse, reconnect, line splitting, errors, NOTICE/actions and mid-send focus changes. Public `/all` never includes queries. |
 | IRC privacy and history | Uninvolved clients, channel history and hosting-agent context never receive peer DMs. Operator DMs stay out of model admission/default history and IRC summaries. Agent DMs wake the right admission path. Resume and read-only history retain recipient/provenance; older readers reject the new schema before mutation. |

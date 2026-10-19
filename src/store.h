@@ -377,6 +377,9 @@ int snag_store_list(struct snag_store *store, const struct snag_session *owned,
  * activity_ms, status_rank and seven display cells. Empty stores return []. */
 json_t *snag_store_catalog(struct snag_store *, const struct snag_session *owned,
     uint64_t stored_limit, bool (*cancel)(void *), void *cancel_opaque, char *, size_t);
+/* Display-only cached rows; incomplete requests background source verification. */
+json_t *snag_store_catalog_preview(struct snag_store *, const struct snag_session *,
+    uint64_t, bool (*)(void *), void *, bool *, char *, size_t);
 /* Metrics-first monitor snapshot. With pending, never replay journals: identify
  * the boundary needing backfill, allowing last metadata across same-file appends.
  * Without pending, verify uncached historical rows for redirected output. */

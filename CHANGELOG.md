@@ -9,6 +9,14 @@
   retained across retry and resume. Shared names across different skill IDs
   continue to require a qualified ID.
 
+- Make workspace `:q` and `:q!` close only the focused pane, preserving drafts
+  and running agents. Use `:qa` to detach the whole workspace or `:qa!` to stop
+  its controlled sessions and exit.
+
+- Populate the workspace session picker from cached metadata while verifying
+  changed journals in the background. Show preparation text when a cold picker
+  has no rows yet, and keep cached rows usable when an owner is unresponsive.
+
 - Add `snajpagent optimize [--dotdir DIR]` for serial, lossless offline session
   upgrades and Zstandard block compression. Skip running sessions on stderr;
   resume optimized history directly and append raw blocks during ordinary runs.

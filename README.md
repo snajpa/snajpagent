@@ -423,8 +423,10 @@ tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 Click a session pane for INSERT mode; Escape returns to NORMAL, where `:` opens
 workspace commands. `:new [NAME]` creates a session; `:session ID` resumes one.
 `:workspace detach` saves the layout while agents continue and prints its resume
-command. Restoring a workspace leaves stopped owners stopped. `:q` saves and
-detaches; `:q!` stops controlled sessions and exits, preserving drafts.
+command. Restoring a workspace leaves stopped owners stopped. `:q` and `:q!`
+close the current pane and preserve drafts; closing the last pane detaches.
+`:qa` saves and detaches the whole workspace; `:qa!` stops controlled sessions
+and exits, preserving drafts.
 
 Transcripts support search, selection, yanking and retained reports. The
 [manual](snajpagent.1) covers workspace controls, clipboard policy and `:classic`

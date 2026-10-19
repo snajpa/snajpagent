@@ -1179,8 +1179,11 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
             if (!owned) goto failed;
             memcpy(owned->id, request->owned_session_id, sizeof(owned->id));
         }
-        json_t *catalog = snag_store_catalog(reader->store, owned, request->stored_limit,
-            read_canceled, reader, result->error, sizeof(result->error));
+        json_t *catalog = request->catalog_preview ?
+            snag_store_catalog_preview(reader->store, owned, request->stored_limit,
+                read_canceled, reader, &result->incomplete, result->error, sizeof(result->error)) :
+            snag_store_catalog(reader->store, owned, request->stored_limit,
+                read_canceled, reader, result->error, sizeof(result->error));
         free(owned);
         char *encoded = catalog ? json_dumps(catalog, JSON_COMPACT) : NULL;
         json_decref(catalog);

@@ -2390,10 +2390,10 @@ Exit, suspension and classic terminal handoff restore mouse modes; returning
 to the workspace reapplies the current setting.
 .PP
 .B :w
-saves the workspace. :q, :x and :wq save and detach the workspace, preserving
-its sessions, panes and drafts. :qa is also accepted for detaching the workspace.
-.B :q!
-(or :qa!) saves the layout and drafts, requests normal shutdown of all sessions
+saves the workspace. :qa, :x and :wq save and detach the workspace, preserving
+its sessions, panes and drafts.
+.B :qa!
+saves the layout and drafts, requests normal shutdown of all sessions
 controlled by the workspace, and exits after their acknowledgements. A live
 observed session must first be attached; otherwise shutdown is refused before
 stopping any session. Shutdown waits for the current outgoing owner request
@@ -2404,9 +2404,19 @@ block this command; :session quit! discards that session's drafts and requests
 normal shutdown. :sessions quit and :sessions quit! apply to all controlled
 sessions and exit; the latter preserves workspace drafts for later restoration.
 These commands do not send SIGKILL.
-.B :close
-closes only the window; the last view of a session releases control and preserves
-its owner. Terminal loss also releases control and preserves owners.
+.PP
+The session picker displays cached metadata immediately and verifies changed
+journals in the background. Names, previews and activity order can update as
+verification finishes. A cold, empty picker shows "Preparing session list…"
+until rows are available. R refreshes the list. Cached rows are display hints;
+opening a session verifies its source normally.
+.PP
+.B :q, :q! and :close
+close the focused pane and preserve its drafts. The last view of a session
+releases control and preserves its owner. Closing the last workspace pane saves
+and detaches the workspace; on the Windows backend it returns to the picker
+while the in-process agent remains live. Terminal loss also releases control
+and preserves native owners.
 Detaching after a quit request leaves the wait; the requested shutdown may finish.
 .B :workspace
 shows its name, ID and save status;
@@ -2473,8 +2483,9 @@ Splits share this agent and can also display other stored histories. Closing its
 last window keeps the agent and drafts hidden; :buffers reopens them. Closing the
 last workspace window returns to the picker while the agent remains live.
 .PP
-Use :session quit to stop the agent, or :q! to save the workspace and stop it
-before exiting. :q and :x require the session to be stopped on this backend.
+Use :session quit to stop the agent, or :qa! to save the workspace and stop it
+before exiting. :qa, :x, :wq and :workspace detach require the session to be
+stopped on this backend.
 Workspace switching requires the live agent to finish shutting down first.
 Closing the console or terminating the workspace ends its in-process agent;
 resume the stored session explicitly to continue.
