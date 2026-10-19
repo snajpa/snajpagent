@@ -315,7 +315,9 @@ class RunningCommands(unittest.TestCase):
             owner.submit_wait("Start the attached owner's job.", "RUNNING_DONE")
             self.wait_file(marker, "initial")
             session = journal_paths(self.dotdir)[0].parent.name
-            owner.submit_wait("/s d", "You can resume this session")
+            owner.submit("/s d")
+            owner.wait_dead()
+            self.assertIn("You can resume this session", owner.capture())
             with TmuxTerminal(self.root / "attached", BINARY, self.workspace, self.dotdir,
                     None, 130, 35,
                     args=("--attach", session), environment=self.environment) as attached:
