@@ -3082,7 +3082,8 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
                     "data", "type", "string", "null", "description",
                     "PTY input for write, at most 1048576 UTF-8 bytes.",
                     "eof", "type", "boolean", "null", "description",
-                    "Close stdin after pending input is written; omitted or null means false."))) < 0 ||
+                    "Close stdin after pending input is written; omitted or null means "
+                    "false."))) < 0 ||
         json_array_append_new(tools,
             tool_schema("skills", "action",
                 "Search/list skill metadata, show source, load or unload task guidance. "

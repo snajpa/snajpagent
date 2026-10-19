@@ -1895,8 +1895,9 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
             assert(!item_by_field(ts, "type", openrouter ? "web_search" : "openrouter:web_search"));
             static const char *const unconditional[] = {"view_image", "read_document", "view_video",
                 "listen_audio", "transcribe_audio", "speak_text", "voice_output", "send_file",
-                "download_queue", "exec_command", "write_stdin", "read_tool_output", "running_commands",
-                "read_session_history", "list_goals", "set_command_shell", "apply_patch", "get_cwd",
+                "download_queue", "exec_command", "write_stdin", "read_tool_output",
+                "running_commands", "read_session_history", "list_goals", "set_command_shell",
+                "apply_patch", "get_cwd",
                 "cd", "work_context", "list_files", "read_file", "grep", "write_file",
                 "edit_file", "irc_send",
                 "irc_state", "irc_topic", "irc_nick", "irc_connect", "irc_host", "irc_disconnect",
