@@ -957,12 +957,21 @@ class ContextMeterTests(unittest.TestCase):
         self.command('/model list', 'host-model')
         self.release.set()
 
+        samples = []
+        expected_limits = []
         def respond(handler, request, sequence):
             started = [e['data'] for e in self.owner.events()
                        if e['type'] == 'response_started'][-1]
-            # Exact half-byte density makes both conversion directions independent
-            # of changing request-envelope sizes and integer rounding.
-            tokens = started['model_input_bytes'] * 2
+            sample_bytes = started['model_input_bytes']
+            tokens = sample_bytes * 2
+            previous_bytes, previous_tokens = samples[-1] if samples else (0, 0)
+            samples.append((previous_bytes // 2 + sample_bytes,
+                            previous_tokens // 2 + tokens))
+            if sequence < 3:
+                # Decay rounds each total independently before budget conversion.
+                expected_limits.append(1000 * samples[-1][0] // samples[-1][1])
+            elif sequence == 3:
+                expected_limits.append(1024)
             if sequence == 1:
                 body = self.provider.function_body(sequence, 'emit', 'exec_command', {
                     'command': "printf '%05000d' 0", 'yield_ms': 10000,
@@ -989,7 +998,7 @@ class ContextMeterTests(unittest.TestCase):
                    if e['type'] == 'tool_finished']
         self.assertEqual([r['status'] for r in results], ['succeeded'] * 3)
         # The historical result metadata stores bytes, independently of input units.
-        self.assertEqual([r['max_output_tokens'] for r in results], [500, 500, 1024])
+        self.assertEqual([r['max_output_tokens'] for r in results], expected_limits)
         self.assertEqual(results[0]['stdout']['original_bytes'], 5000)
         calibration = json.loads(path.read_text())['providers'][0]['models'][0][
             'token_calibration']
