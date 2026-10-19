@@ -108,8 +108,8 @@ class SendTests(unittest.TestCase):
         result = self.send(data=(text + '\n').encode())
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.owner.wait_event('input_received')['data']['text'], text)
-        # Drain the real terminal's large prompt echo while the owner runs.
-        self.owner.initial.until(b'semantic-answer', timeout=15)
+        # Mac child-lifetime scans can take 15s while draining this large echo.
+        self.owner.initial.until(b'semantic-answer', timeout=60)
         self.owner.wait_event('turn_completed')
         before = self.owner.journal.read_bytes()
         for data in (b'', b'\xff', b'x\0y', b'x' * (1024 * 1024 + 1)):
