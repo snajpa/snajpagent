@@ -42,7 +42,7 @@ coding models:
 
 - ATX headings;
 - unordered and ordered list markers and block quotes;
-- backtick or tilde fenced code blocks with optional language labels;
+- backtick or tilde fenced code blocks with hidden language labels;
 - conventional leading-pipe tables with a header delimiter row;
 - inline code, emphasis, strong emphasis, and strikethrough; and
 - escapes and inline link destinations, which remain visibly attributable.
@@ -61,8 +61,13 @@ Overlong words hard-wrap through bounded output. Apostrophes are not special
 break markers. When a wrap would otherwise print a separator space as the first
 character on the new row, that one space is omitted. Explicit non-blank source
 line breaks within one paragraph remain unbulleted. Headings,
-list items, block quotes, and fenced code keep their own structural markers
-instead of gaining a redundant paragraph bullet.
+list items and block quotes keep their own structural markers. Fenced code
+displays its literal contents with optional color and no added characters:
+delimiters, language labels, frames and line prefixes stay hidden. Indentation
+and internal blank lines remain copyable as displayed. Code gains no paragraph
+bullet. The parser discards language-label bytes while streaming.
+Standalone terminal output uses soft wrapping for long code lines; prose word
+wrapping cannot insert newlines or discard separator spaces from their contents.
 
 Prompt and lifecycle boundaries use the same physical newline count. Consecutive
 prompts need no gap; all prompts after other content do. Compaction and every

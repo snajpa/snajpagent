@@ -223,7 +223,6 @@ render_origin(const struct snag_render *render, const void *text)
     const struct snag_markdown_state *md = &render->markdown_state;
     struct snag_render_origin regions[] = {render->origin,
         {(const unsigned char *)md->prefix, sizeof(md->prefix), md->prefix_source, NULL},
-        {(const unsigned char *)md->fence_info, sizeof(md->fence_info), md->fence_source, NULL},
         {md->table.data, md->table.len, md->table_source, NULL}, render->sink.source};
     uintptr_t at = (uintptr_t)text;
     for (size_t i = 0u; i < sizeof(regions) / sizeof(regions[0]); ++i) {
@@ -1424,8 +1423,9 @@ flush_wrap_pending(struct snag_render *render)
     if (!len) return 0;
     while (leading < len && (text[leading] == ' ' || text[leading] == '\t')) ++leading;
     width = snag_term_text_width(text, len);
-    columns =
-        render->markdown_measuring || render->sink.logical ? UINT_MAX : render_columns(render);
+    columns = render->markdown_measuring || render->sink.logical || render->markdown_state.fence
+                  ? UINT_MAX
+                  : render_columns(render);
     if (width == SIZE_MAX) return -1;
     if (columns >= 20u && render->public_column == columns && leading == len) {
         snag_buf_reset(&render->wrap_pending);
@@ -1499,7 +1499,9 @@ flush_wrap_pending(struct snag_render *render)
 static int
 write_wrapped(struct snag_render *render, const unsigned char *text, size_t len)
 {
-    unsigned int columns = render->sink.logical ? UINT_MAX : render_columns(render);
+    unsigned int columns = render->sink.logical || render->markdown_state.fence
+                               ? UINT_MAX
+                               : render_columns(render);
     size_t indent =
         render->markdown_rendering && render->markdown_state.prose && render->markdown_prose_bullets
             ? 2u
@@ -2428,7 +2430,6 @@ markdown_code_prefix_literal(struct snag_render *render)
     md->prefix_len = 0u;
     md->line_start = false;
     if (markdown_paragraph(render, false) < 0) return -1;
-    if (markdown_text(render, "│ ", strlen("│ ")) < 0) return -1;
     return markdown_text(render, md->prefix, len);
 }
 
@@ -2445,30 +2446,6 @@ markdown_fence_close(const struct snag_markdown_state *md)
     }
     while (i < md->prefix_len && md->prefix[i] == ' ') ++i;
     return count >= md->fence_len && i == md->prefix_len;
-}
-
-static int
-markdown_open_fence(struct snag_render *render, bool newline)
-{
-    struct snag_markdown_state *md = &render->markdown_state;
-    size_t begin = 0u;
-    size_t end = md->fence_info_len;
-
-    while (begin < end && md->fence_info[begin] == ' ') ++begin;
-    while (end > begin && md->fence_info[end - 1u] == ' ') --end;
-    if ((end - begin == 4u && memcmp(md->fence_info + begin, "text", 4u) == 0) ||
-        (end - begin == 3u && memcmp(md->fence_info + begin, "txt", 3u) == 0) ||
-        (end - begin == 9u && memcmp(md->fence_info + begin, "plaintext", 9u) == 0))
-        end = begin;
-    md->fence_header = false;
-    md->fence_info_len = 0u;
-    if (markdown_text(render, "┌─", strlen("┌─")) < 0 ||
-        (end > begin && (markdown_text(render, " ", 1u) < 0 ||
-                            markdown_text(render, md->fence_info + begin, end - begin) < 0)) ||
-        (newline && markdown_text(render, "\n", 1u) < 0))
-        return -1;
-    md->line_start = newline;
-    return 0;
 }
 
 static int
@@ -2535,6 +2512,7 @@ markdown_line_prefix(struct snag_render *render, const unsigned char *text, size
             md->fence = body[0];
             md->fence_len = (unsigned int)marks;
             md->fence_header = true;
+            md->fence_info = false;
             md->prefix_len = 0u;
             md->line_start = false;
             if (markdown_paragraph(render, false) < 0) return -1;
@@ -2592,11 +2570,14 @@ markdown_newline(struct snag_render *render, const char *newline)
     }
     if (blank) md->prose = false;
 
-    if (md->fence_header) return markdown_open_fence(render, true);
+    if (md->fence_header) {
+        md->fence_header = false;
+        md->line_start = true;
+        return 0;
+    }
     if (md->line_start) {
         if (md->fence && markdown_fence_close(md)) {
             md->prefix_len = 0u;
-            if (markdown_text(render, "└─\n", strlen("└─\n")) < 0) return -1;
             md->fence = '\0';
             md->fence_len = 0u;
             return 0;
@@ -2641,19 +2622,13 @@ markdown_write(struct snag_render *render, const unsigned char *text, size_t len
         } else if (md->table_line) {
             if (snag_buf_append(&md->table, text + i, n) < 0) return -1;
         } else if (md->fence_header) {
-            if (n == 1u && text[i] == (unsigned char)md->fence && md->fence_info_len == 0u) {
+            if (n == 1u && text[i] == (unsigned char)md->fence && !md->fence_info) {
                 if (md->fence_len == UINT_MAX) return snag_errno(EOVERFLOW);
                 ++md->fence_len;
                 i += n;
                 continue;
             }
-            if (md->fence_info_len < sizeof(md->fence_info)) {
-                size_t room = sizeof(md->fence_info) - md->fence_info_len;
-                size_t amount = n < room ? n : room;
-                if (!md->fence_info_len) md->fence_source = render_origin(render, text + i);
-                memcpy(md->fence_info + md->fence_info_len, text + i, amount);
-                md->fence_info_len += amount;
-            }
+            md->fence_info = true;
         } else if (md->line_start) {
             if (markdown_line_prefix(render, text + i, n) < 0) return -1;
         } else {
@@ -2685,11 +2660,10 @@ markdown_finish(struct snag_render *render)
         markdown_table_finish(render) < 0)
         return -1;
     if (md->fence_header) {
-        if (markdown_open_fence(render, false) < 0) return -1;
+        md->fence_header = false;
     } else if (md->line_start && md->prefix_len) {
         if (md->fence && markdown_fence_close(md)) {
             md->prefix_len = 0u;
-            if (markdown_text(render, "└─", strlen("└─")) < 0) return -1;
             md->fence = '\0';
             md->fence_len = 0u;
         } else if ((md->fence ? markdown_code_prefix_literal(render)
@@ -2699,8 +2673,7 @@ markdown_finish(struct snag_render *render)
     }
     if (markdown_inline_tail(render) < 0) return -1;
     if (md->fence && !render->markdown_preserve_fence) {
-        if (!render->public_item_ended_lf && markdown_text(render, "\n", 1u) < 0) return -1;
-        if (markdown_text(render, "└─", strlen("└─")) < 0) return -1;
+        if (flush_wrap_pending(render) < 0) return -1;
         md->fence = '\0';
         md->fence_len = 0u;
     }

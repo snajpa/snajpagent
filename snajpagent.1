@@ -1781,9 +1781,12 @@ provider traffic and durable events keep the original bytes.
 Citation fragments remain buffered across streaming deliveries, including when
 the closing marker arrives on its own.
 .PP
-Plain-text fences labelled text, txt or plaintext omit the language label.
-Other fence labels remain visible.  Indentation and Markdown-looking content
-inside a fence are displayed literally, including pipe tables.
+Fenced blocks display their literal contents with code coloring when enabled.
+Fence delimiters, language labels, frames and line prefixes are hidden, so
+terminal selections copy the contents directly.  Indentation, blank lines and
+Markdown-looking content inside a fence are preserved, including pipe tables.
+Standalone terminal output uses soft wrapping for long code lines while retaining
+their spaces and source line breaks.
 .PP
 Top-level prose paragraphs are bulleted, with one empty row above and below,
 even while a paragraph is streaming.  Adjacent paragraphs share that row;

@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Display fenced code as literal, optionally colored contents. Hide fence
+  labels and decorative frames so terminal selections copy the contents directly.
+
 - Add **New session** as the first workspace session-picker entry. Press Enter
   to create a session; the entry stays available while filtering or loading.
 

@@ -79,11 +79,9 @@ struct snag_render_source {
 
 struct snag_markdown_state {
     char prefix[16];
-    char fence_info[64];
     struct snag_buf table;
-    uint64_t prefix_source, fence_source, table_source;
+    uint64_t prefix_source, table_source;
     size_t prefix_len;
-    size_t fence_info_len;
     size_t delimiter_len;
     size_t table_header_len;
     size_t table_line_start;
@@ -93,6 +91,7 @@ struct snag_markdown_state {
     char delimiter;
     bool line_start;
     bool fence_header;
+    bool fence_info;
     bool heading;
     bool quote;
     bool strong;
