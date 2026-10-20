@@ -536,6 +536,25 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn(b'\x1b[0;1m', screen)
         child.finish('workspace d')
 
+    def test_fenced_code_is_literal_without_copyable_frame_characters(self):
+        body = '## copyable-heading\n\n    **literal-code**\n- [ ] copy-this\n'
+        journal = self.seed_session('```markdown\n' + body + '```\n')
+        original = journal.read_bytes()
+        child = self.start('-N', 'copyable-code', rows=30, columns=100,
+                           extra_env={'NO_COLOR': None})
+        child.command('history ' + journal.parent.name)
+        child.repaint_until(b'copy-this')
+        screen = child.output.rsplit(b'\x1b[2J', 1)[-1]
+        plain = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', screen)
+        self.assertIn(b'## copyable-heading', plain)
+        self.assertIn(b'    **literal-code**', plain)
+        self.assertIn(b'- [ ] copy-this', plain)
+        for decoration in ('┌', '└', '│', '```', 'markdown'):
+            self.assertNotIn(decoration.encode(), plain)
+        self.assertIn(b'\x1b[0;33m', screen)
+        self.assertEqual(journal.read_bytes(), original)
+        child.finish('workspace d')
+
     def test_resize_keeps_background_history_pending(self):
         foreground = self.seed_session('foreground-history-marker')
         other = WorkspaceTests()

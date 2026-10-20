@@ -2150,13 +2150,23 @@ test_markdown_fences(void)
     static const struct {
         const char *source, *expected;
     } cases[] = {
-        {"```text\nplain\n```\n", "┌─\n│ plain\n└─\n"},
-        {"~~~ txt  \nplain\n~~~\n", "┌─\n│ plain\n└─\n"},
-        {"```plaintext\nplain\n```", "┌─\n│ plain\n└─"},
-        {"```c\nint x;\n```\n", "┌─ c\n│ int x;\n└─\n"},
-        {"```text example\nplain\n```\n", "┌─ text example\n│ plain\n└─\n"},
+        {"```text\nplain\n```\n", "plain\n"},
+        {"~~~ txt  \nplain\n~~~\n", "plain\n"},
+        {"```plaintext\nplain\n```", "plain\n"},
+        {"```c\nint x;\n```\n", "int x;\n"},
+        {"```text example\nplain\n```\n", "plain\n"},
         {"```\n    **literal**\n| A |\n| --- |\n| B |\n```\n",
-            "┌─\n│     **literal**\n│ | A |\n│ | --- |\n│ | B |\n└─\n"},
+            "    **literal**\n| A |\n| --- |\n| B |\n"},
+        {"```markdown\n## heading\n\n    **literal**  \n- [ ] café\n```\n",
+            "## heading\n\n    **literal**  \n- [ ] café\n"},
+        {"```c\n    incomplete", "    incomplete"},
+        {"```sh\n    printf '%s' '12345678901234567890'  ",
+            "    printf '%s' '12345678901234567890'  "},
+        {"````c\n```\ncode\n````\n", "```\ncode\n"},
+        {"~~~c\n\n\ncode\n\n~~~", "\n\ncode\n\n"},
+        {"```c\na\n```\n```python\nb\n```\n", "a\nb\n"},
+        {"```sh\n    printf '%s' '12345678901234567890'  \n```\n",
+            "    printf '%s' '12345678901234567890'  \n"},
     };
     char output[2048];
 
@@ -2170,11 +2180,30 @@ test_markdown_fences(void)
             assert(snag_buf_terminate(&delivered) == 0);
             assert(strcmp((const char *)delivered.data, cases[i].source) == 0);
             snag_buf_free(&delivered);
+            assert(capture_markdown(cases[i].source, true, split != 0u, SNAG_COLOR_ALWAYS,
+                       120u, output, sizeof(output), NULL) > 0u);
+            char plain[sizeof(output)];
+            size_t used = 0u;
+            for (size_t at = 0u; output[at]; ++at) {
+                if (output[at] == '\033') {
+                    while (output[at] && output[at] != 'm') ++at;
+                    assert(output[at] == 'm');
+                } else plain[used++] = output[at];
+            }
+            plain[used] = '\0';
+            assert(strcmp(plain, cases[i].expected) == 0);
+            assert(capture_markdown(cases[i].source, true, split != 0u, SNAG_COLOR_NEVER,
+                       20u, output, sizeof(output), NULL) > 0u);
+            assert(strcmp(output, cases[i].expected) == 0);
         }
         assert(capture_markdown(cases[i].source, false, true, SNAG_COLOR_NEVER, 120u, output,
                    sizeof(output), NULL) > 0u);
         assert(strcmp(output, cases[i].source) == 0);
     }
+    assert(capture_markdown("```c\n```\n", true, true, SNAG_COLOR_NEVER, 120u,
+               output, sizeof(output), NULL) == 0u);
+    assert(capture_markdown("```unfinished", true, true, SNAG_COLOR_NEVER, 120u,
+               output, sizeof(output), NULL) == 0u);
 }
 
 static size_t
@@ -2209,7 +2238,7 @@ test_model_prompt_boundaries(void)
         {"- unordered", "• unordered", true},
         {"7. ordered", "7. ordered", true},
         {"> quotation", "│ quotation", true},
-        {"```c\nint x;\n```", "┌─ c\n│ int x;\n└─", true},
+        {"```c\nint x;\n```", "int x;", true},
         {"| A |\n| --- |\n| B |", "┌───┐\n│ A │\n├───┤\n│ B │\n└───┘", true},
         {"**inline**", "\n• inline", true},
         {"- literal", "- literal", false},
@@ -2242,7 +2271,7 @@ test_paragraph_spacing(void)
         {"1. first\none\n2. next", "1. first\n\n• one\n\n2. next"},
         {"> first\n> second\none\n> next", "│ first\n│ second\n\n• one\n\n│ next"},
         {"one\n```c\na\n\n\nb\n```\nsecond",
-            "\n• one\n\n┌─ c\n│ a\n│ \n│ \n│ b\n└─\n\n• second\n\n"},
+            "\n• one\n\na\n\n\nb\n\n• second\n\n"},
         {"one\n| A |\n| --- |\n| B |\nsecond",
             "\n• one\n\n┌───┐\n│ A │\n├───┤\n│ B │\n└───┘\n\n• second\n\n"},
         {"one\n \n  \nsecond", "\n• one\n\n• second\n\n"},
@@ -4133,8 +4162,8 @@ main(int argc, char **argv)
         "Live Markdown\n"
         "• item with code and [docs] <https://example.test>\n"
         "│ old new\n"
-        "┌─ c\n│ int main(void) { return 0; }\n└─\n"
-        "┌─\n│ tilde fence\n└─\n"
+        "int main(void) { return 0; }\n"
+        "tilde fence\n"
         "\n• First prose line\n  continued prose\n\n• second paragraph\n\n";
     char output[4096];
     struct snag_render render;
@@ -4221,9 +4250,9 @@ main(int argc, char **argv)
     assert(strstr(output, "00:00:01 agent › answer and code\n") != NULL);
     assert(strstr(output, "00:00:01 agent › • actual list item\n") != NULL);
     assert(strstr(output, "@operator › **literal operator**\n") != NULL);
-    assert(strstr(output, "remote › ┌─ c\n") != NULL);
-    assert(strstr(output, "remote › │ int value = 1;\n") != NULL);
-    assert(strstr(output, "remote › └─\n") != NULL);
+    assert(strstr(output, "remote › ┌─") == NULL);
+    assert(strstr(output, "remote › int value = 1;\n") != NULL);
+    assert(strstr(output, "remote › └─") == NULL);
     assert(strstr(output, "00:00:01 -remote - **literal notice**\n") != NULL);
     assert(strstr(output, "remote › plain after quit\n") != NULL);
     assert(strstr(output, "remote › │ plain after quit\n") == NULL);
