@@ -176,6 +176,79 @@ class ModelFallbackTests(unittest.TestCase):
         self.assertEqual(requests[1]['hard_input_tokens'], 90000)
         self.assertIsNone(requests[0]['hard_input_tokens'])
 
+    def fallback_call(self, model='two-model', repeat=False):
+        self.command('/context 60000', 'selected=60000')
+        self.command(f'/fallback fake/{model}/medium:100000')
+        fixture = self.owner.root / 'fallback-input.txt'
+        fixture.write_text('fallback-tool-result')
+
+        def respond(handler, request, sequence):
+            if sequence == 1 or (repeat and sequence == 3):
+                return self.deny(handler, sequence)
+            if sequence == 2 or (repeat and sequence == 4):
+                body = self.provider.function_body(sequence, f'fallback_read_{sequence}',
+                                                   'read_file', {'path': str(fixture)})
+            else:
+                self.entered.set()
+                self.release.wait(10)
+                body = self.provider.response_body(sequence, 'primary-finished')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        peer = None if session.OMITTED else self.owner.view()
+        os.write(self.owner.initial.master, b'per-call fallback fixture\r')
+        self.assertTrue(self.entered.wait(8), self.models())
+        expected = ['host-model', model, 'host-model']
+        if repeat:
+            expected += [model, 'host-model']
+        self.assertEqual(self.models(), expected)
+        if peer:
+            peer.until('state', lambda message:
+                       message['state']['prompt']['values'][1:3] == ['host-model', 'medium'])
+        requests = [e['data'] for e in self.owner.events() if e['type'] == 'response_started']
+        self.assertEqual([r['hard_input_tokens'] for r in requests],
+                         [54000, 90000, 54000, 90000, 54000] if repeat
+                         else [54000, 90000, 54000])
+        results = [item['output'] for item in self.provider.requests[-1]['body']['input']
+                   if item.get('type') == 'function_call_output']
+        self.assertEqual(sum('fallback-tool-result' in result for result in results),
+                         2 if repeat else 1)
+        self.release.set()
+        self.completed()
+        events = self.owner.events()
+        self.assertEqual(sum(e['type'] == 'turn_started' for e in events), 1)
+        self.assertEqual(sum(e['type'] == 'turn_fallback_started' for e in events),
+                         2 if repeat else 1)
+        self.assertEqual(sum(e['type'] == 'tool_started' for e in events),
+                         2 if repeat else 1)
+
+    def test_fallback_tool_continuation_uses_primary_in_same_turn(self):
+        self.fallback_call()
+
+    def test_same_identity_fallback_restores_primary_context_in_same_turn(self):
+        self.fallback_call('host-model')
+
+    def test_separate_failed_calls_can_fallback_in_same_turn(self):
+        self.fallback_call(repeat=True)
+
+    def test_fallback_policy_clarification_uses_primary(self):
+        self.command('/fallback fake/two-model/high')
+
+        def respond(handler, request, sequence):
+            if sequence == 1:
+                return self.deny(handler, sequence)
+            if sequence == 2:
+                return self.deny(handler, sequence, yellow=True)
+            self.provider.reply(handler, self.provider.response_body(sequence, 'corrected').encode(),
+                                close_header=True)
+
+        self.provider.runtime_handler = respond
+        os.write(self.owner.initial.master, b'fallback correction fixture\r')
+        self.completed()
+        self.assertEqual(self.models(), ['host-model', 'two-model', 'host-model'])
+        self.assertEqual(sum(e['type'] == 'response_output_correction'
+                             for e in self.owner.events()), 1)
+
     def explicit_selection(self, command, notice):
         self.command('/context 60000', 'selected=60000')
         self.command('/fallback fake/host-model/medium:100000')
@@ -350,19 +423,19 @@ class ModelFallbackTests(unittest.TestCase):
                         if resumed.process.poll() is None else None)
         resumed.until(b'resumed-fallback')
         self.completed()
-        self.assertEqual(self.models(), ['host-model', 'two-model', 'two-model'])
+        self.assertEqual(self.models(), ['host-model', 'two-model', 'host-model'])
         os.write(resumed.master, b'next primary turn\r')
         self.completed(2)
         self.assertEqual(self.models()[-1], 'host-model')
         self.owner.finish(resumed, b'/exit')
 
-    def test_unfinished_fallback_survives_native_checkpoint_resume(self):
+    def test_unfinished_fallback_returns_to_primary_on_native_checkpoint_resume(self):
         self.resume_fallback()
 
-    def test_unfinished_fallback_survives_resume_legacy(self):
+    def test_unfinished_fallback_returns_to_primary_on_resume_legacy(self):
         self.resume_fallback()
 
-    def test_off_during_fallback_retains_serving_turn_and_disables_next_switch(self):
+    def test_off_during_fallback_retains_serving_call_and_disables_next_switch(self):
         self.command('/fallback fake/two-model/high')
 
         def respond(handler, request, sequence):
