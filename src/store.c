@@ -1773,7 +1773,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
         const char *effort = snag_json_string(data, "effort");
         enum snag_context_mode mode;
         uint64_t tokens;
-        if (!session->active_turn || session->response_open || session->turn_fallback_used ||
+        if (!session->active_turn || session->response_open || session->turn_fallback_active ||
             session->response_terminal != SNAG_RESPONSE_TERMINAL_FAILED ||
             !turn || strcmp(turn, session->active_turn_id) ||
             !snag_json_exact_keys(

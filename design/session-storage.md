@@ -1834,9 +1834,14 @@ choice. Writers retain an older layout when no newer state is present; older
 readers reject unsupported records/blocks. `fallback_changed` (kind19) stores the
 session selector; `turn_fallback_started` (kind20) stores the turn ID, active
 provider/model/effort and context choice. The reducer requires an active turn,
-a closed response and an unused fallback latch. Primary model/context preferences
-stay unchanged. The selector survives completed turns; active override/latch state
-survives recovery and clears on completed/cancelled turns. Legacy JSON checkpoints
+a closed failed response and no active fallback override. Primary model/context
+preferences stay unchanged. `turn_model_changed` ends the override before the next
+API call, including after resume. The used flag records earlier fallback in the
+turn without preventing another primary call from falling back. The selector
+survives completed turns; completed/cancelled turns clear override/used state.
+Readers with the old once-per-turn guard cannot replay multiple fallback starts
+in one turn; use a per-call-aware binary for these sessions. The record and
+checkpoint layouts stay unchanged. Legacy JSON checkpoints
 accept absent fallback fields as their original disabled/default state.
 Each version consumes its exact layout and reserved control bits fail validation.
 `control_flags` defines the

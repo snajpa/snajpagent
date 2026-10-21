@@ -387,7 +387,8 @@ startup/resume overrides. Restored or refreshed invalid settings retain unfinish
 work in the existing interactive recovery loop. This wait accepts corrective
 commands without timed retries or provider calls; one-shot execution returns2.
 Validation uses the next selected primary model, while an active fallback keeps
-its own model/context until explicitly replaced. The request boundary records
+its own model/context for its API call. The next call returns to the primary
+choice, including after resume. The request boundary records
 the model transition before sending. No stored-state format changes are needed.
 
 The provider setting `auto_compact_input_tokens` defaults to `auto`: proactive

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Limit automatic model fallback to the failed API call. Return to the primary
+  model and context window for the next call, including tool continuations in
+  the same turn and resume. Separate primary calls can fall back independently.
+
 - Display fenced code as literal, optionally colored contents. Hide fence
   labels and decorative frames so terminal selections copy the contents directly.
 

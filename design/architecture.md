@@ -366,16 +366,18 @@ unexecuted local calls are discarded. Hosted/unknown activity and unsupported
 failed output snapshots stop this clarification path. The original task scope
 and the provider's policy error remain intact.
 At a terminal cyber-policy failure, a configured `/fallback` selects one
-alternative for the remaining turn. `response_failed` retains the public prefix
+alternative for the failed API call. `response_failed` retains the public prefix
 and error provenance, then `turn_fallback_started` changes active selection and
 context without changing primary preferences. A crash between those commits
 recovers the failed primary response before choosing fallback again. Once the
-fallback-start event commits, the once-per-turn latch and serving selection
-survive recovery; subsequent failures retain ordinary retry/policy-stop behavior.
-Explicit model/effort/context selection ends the serving override but retains that latch.
-Completed/cancelled turns clear it, restoring primary preferences for the next
-turn. The shared prompt refreshes at the same request boundary as credentials,
-capacity and provider selection. No alternate transport or credential path exists.
+fallback-start event commits, the loop retains that selection through preparation
+and consumes the override at `response_started`. Before the next call,
+`turn_model_changed` restores primary preferences, including when model identities
+match but context windows differ. Resume also restores primary before sending.
+Fallback failures retain ordinary retry/policy-stop behavior; each separate
+primary call can select fallback again. The shared prompt refreshes at the same
+request boundary as credentials, capacity and provider selection. No alternate
+transport or credential path exists.
 
 A request projection exceeding the 32 MiB wire bound returns `E2BIG` before
 provider counting. The projector also reports reconstruction of history from an

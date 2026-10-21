@@ -1688,7 +1688,7 @@ render_status(struct app_state *app)
                                                                   : "OFF (provider default)",
             snag_app_retry_allowed(app) ? "ON" : "OFF",
             app->session.retry_auto ? "session override" : "configuration", fallback_model(app),
-            app->session.turn_fallback_active ? " (serving this turn)" : "", app->session.cwd,
+            app->session.turn_fallback_active ? " (serving this API call)" : "", app->session.cwd,
             (unsigned long long)app->session.turn_count, app->session.pending_queue_count,
             app->session.pending_queue_count && !app->session.queue_armed ? " paused" : "",
             snag_ui_verbosity(&app->ui), snag_capacity_source_name(capacity.source)) < 0 ||
@@ -2693,7 +2693,7 @@ change_fallback(struct app_state *app, const char *argument)
 
     if (!argument)
         return app_textf(app, SNAG_UI_HOST, "Fallback: %s%s", fallback_model(app),
-            app->session.turn_fallback_active ? " (serving this turn)" : "");
+            app->session.turn_fallback_active ? " (serving this API call)" : "");
     if (!snag_strcpy(copy, sizeof(copy), argument))
         return app_error(app, "fallback selector is too long");
     char *selector = trim_selector_part(copy);
@@ -5208,7 +5208,7 @@ start_turn_fallback(struct app_state *app, struct turn_retry *retry, const char 
     const char *response_id, unsigned int cycle, unsigned int retry_count,
     const struct snag_provider_failure *failure, char *error, size_t error_size)
 {
-    if (app->session.turn_fallback_used || failure->new_input || app->interrupt_requested ||
+    if (app->session.turn_fallback_active || failure->new_input || app->interrupt_requested ||
         app->input_closed || app->model_switch_requested || app->control_requested ||
         (strcmp(failure->code, "cyber_policy") && strcmp(failure->type, "cyber_policy")) ||
         !strcmp(fallback_model(app), "off")) return 0;
@@ -5231,7 +5231,7 @@ start_turn_fallback(struct app_state *app, struct turn_retry *retry, const char 
                 selected.effort, "context_mode", snag_context_mode_name(selected.context.mode),
                 "context_tokens", (json_int_t)selected.context.tokens), error, error_size) < 0)
         return -1;
-    if (app_textf(app, SNAG_UI_HOST, "Fallback for this turn: %s/%s/%s (cyber_policy)",
+    if (app_textf(app, SNAG_UI_HOST, "Fallback for this API call: %s/%s/%s (cyber_policy)",
             selected.provider->name, selected.model, selected.effort) < 0) return -1;
     return 1;
 }
@@ -6081,7 +6081,8 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         app->provider_request_ready = false;
         bool selected_new_model =
             app->session.active_turn &&
-            (!app->session.turn_fallback_active || app->model_switch_requested) &&
+            (!app->session.turn_fallback_active || app->model_switch_requested ||
+                !fallback_started) &&
             (app->session.turn_fallback_active ||
                 strcmp(app->session.active_turn_provider, app->session.default_provider) != 0 ||
                 strcmp(app->session.active_turn_model, app->session.default_model) != 0 ||
@@ -6100,7 +6101,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             strcmp(app->turn_model, app->session.active_turn_model) ||
             strcmp(app->turn_effort, app->session.active_turn_effort);
         app->model_switch_requested = false;
-        fallback_started = false;
         if (settings_changed) {
             if (prepare_turn_settings(app, error, sizeof(error)) < 0) {
                 retry->settings_invalid = true;
@@ -6330,6 +6330,9 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             report_message = error[0] ? error : "response setup could not be persisted";
             goto fail;
         }
+        /* Preparation can loop before sending; consume the override only here.
+         * Subsequent calls, including recovery in a new run_turn, use primary. */
+        fallback_started = false;
         app->history_orientation = SNAG_HISTORY_ORIENTATION_NONE;
         app->history_recovery_rebase = false;
         json_decref(projection.count_request.value);

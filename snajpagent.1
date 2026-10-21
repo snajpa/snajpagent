@@ -3261,23 +3261,25 @@ to disable future automatic switches, or
 to save that default.
 .sp
 The primary model keeps its yellow clarification attempts. A terminal red
-cyber-policy failure switches once to the configured fallback for the rest of
-that turn. Completed tool results and retained conversation continue with it;
+cyber-policy failure retries only the failed API call on the configured fallback.
+The next API call uses the primary model and context window, including tool-result
+continuations in the same turn and calls after resume.
+Completed tool results and retained conversation continue with the retry;
 unexecuted calls from the failed response are discarded. The prompt and
 .B /status
-show the serving model. The next turn returns to the primary. An unfinished
-fallback turn resumes on the fallback. Explicit /model, /effort or /context selection
-replaces the turn override; /fallback off leaves an already serving fallback
-in place until that turn ends. Cancellation ends the override.
+show the serving model. Explicit /model, /effort or /context selection
+replaces the call override; /fallback off leaves an already serving fallback
+in place until that call ends. Cancellation ends the override.
 .sp
 The fallback uses its selected context window, or its own configured/catalog
 default when the suffix is omitted. The primary context choice is preserved.
 Automatic fallback operates independently of /retry auto. Transport errors,
 other policy codes, and ordinary refusal text retain their existing behavior.
 A fallback error follows normal recovery or policy-stop handling, without
-another automatic model switch in that turn. Each selected provider uses its
+recursively falling back. A separate primary API call can fall back again in the
+same turn. Each selected provider uses its
 configured credentials and access rules. Sessions using this feature require
-a binary with fallback support for replay and resume.
+a binary with per-call fallback support for replay and resume.
 .TP
 .BR /fast " [on|off|status]"
 Show the current fast-service state as Fast mode: ON or Fast mode: OFF. The optional
