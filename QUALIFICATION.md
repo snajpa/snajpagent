@@ -116,6 +116,17 @@ escape-sequence emission. These results establish lifecycle/input behavior, not
 native Windows desktop rendering. Broader Windows/base-suite qualification remains open;
 the Wine base run stops in an unrelated command-quoting assertion.
 
+The stored-login CLI fixture reproduces the credential-privacy error from
+[issue 1](https://github.com/snajpa/snajpagent/issues/1) with the original Windows
+state-directory handle. The corrected reduced-feature Windows x64 build passes
+under Wine 9, including a Unicode profile path, an absent auth directory,
+legacy and method-specific credential files, saved-login reuse and logout.
+The fixture also checks expired credentials, endpoint binding and invalid token
+contents without provider requests. Linux coverage verifies rejection of
+nonprivate state, auth-directory and credential-file modes. These checks do not
+qualify native Windows 11 desktop behavior or the report's live-provider execution
+wait.
+
 Actual SSH/Mosh × Screen/tmux reconnect cases preserve the same workspace/owner,
 two panes and a newer draft after transport loss. An explicit upload retry
 retains exact UTF-8 file bytes and submits one prompt with its attachment.

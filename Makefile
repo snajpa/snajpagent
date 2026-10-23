@@ -528,6 +528,7 @@ endif
 	./tests/test_provider_transport
 	python3 tests/test_native_context_frames.py ./tests/snajpagent-transport
 	python3 tests/test_access_token.py ./tests/snajpagent-transport
+	python3 tests/test_login_storage.py ./$(BIN)
 	python3 tests/test_codex_compaction.py ./tests/snajpagent-transport
 	python3 tests/test_native_compact_api.py ./tests/snajpagent-transport
 	python3 tests/test_projection_overflow.py ./$(BIN)
