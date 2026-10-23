@@ -51,9 +51,13 @@ compile_state 'all modalities off' \
 compile_state 'commanded Office, others off' \
 	WITH_AV=0 WITH_PDF=0 WITH_AUDIO_DEVICE=0 WITH_OFFICE=0 WITH_OFFICE_COMMANDS=1
 
+units=ui
+compile_state 'workspace off' \
+	WITH_VM=0 WITH_AV=0 WITH_PDF=0 WITH_AUDIO_DEVICE=0 WITH_OFFICE=0
+
 if [ "$fails" -ne 0 ]; then
 	printf 'test_lean_build: %s of %s compiles failed\n' "$fails" "$((fails + ok))"
 	exit 1
 fi
-printf 'test_lean_build: ok (%s units x 2 off states compiled)\n' "$ok"
+printf 'test_lean_build: ok (%s off-state compiles)\n' "$ok"
 exit 0

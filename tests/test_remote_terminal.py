@@ -378,15 +378,18 @@ class RemoteStartupTests(unittest.TestCase):
             frames = root / "data-frames"
             child = RemoteProcess(home, [sys.executable, "-u", str(SCREEN_FIXTURE),
                                          str(PRODUCT), "--dotdir", str(root / "agent")],
-                                  extra_env={"SCREEN_FIXTURE_DATA_FRAMES": str(frames)})
+                                  extra_env={"SCREEN_FIXTURE_DATA_FRAMES": str(frames),
+                                             "SCREEN_FIXTURE_INPUT_DELAY_MS": "100"})
             try:
                 child.until("›".encode(), 10)
                 os.write(child.master, f"/send {source}\r".encode())
                 target = home / "Downloads" / source.name
                 output = child.until(str(target).encode(), 30)
                 self.assertEqual(target.read_bytes(), source.read_bytes())
-                wait_file(frames)
-                self.assertLessEqual(int(frames.read_text()), 48)
+                self.wait_file(frames)
+                # 48 payload titles plus six protocol-metadata titles. The old
+                # 256-byte source blocks need 64 payload titles alone.
+                self.assertLessEqual(int(frames.read_text()), 54)
                 self.assertNotIn(b"SNAJPAGENT-SCREEN/1", output)
                 self.assertNotIn(b"#DATA:", output)
                 os.write(child.master, b"ping\r")
@@ -1116,7 +1119,7 @@ class RemoteStartupTests(unittest.TestCase):
                 try:
                     child.until(b"READY", 8)
                     data = (b"\x1b[200~ordinary #DATA:1 SNAJPAGENT-SCREEN/1:DATA:"
-                            b"literal text\x1b[201~" if form == "text" else
+                            b"literal text\r\nsecond line\n\x1b[201~" if form == "text" else
                             b"\x1b[200~" + str(source).encode() + b"\x1b[201~")
                     os.write(child.master, data)
                     output = child.until(data.hex().encode(), 8)

@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import termios
+import time
 import tty
 
 
@@ -155,6 +156,7 @@ def main():
                              preexec_fn=setup)
     os.close(slave)
     output = OutputFilter()
+    input_delay = float(os.getenv("SCREEN_FIXTURE_INPUT_DELAY_MS", "0")) / 1000
     try:
         while True:
             ready, _, _ = select.select([0, master], [], [], 0.2)
@@ -172,6 +174,8 @@ def main():
                 received = os.read(0, 8192)
                 if not received:
                     break
+                if input_delay:
+                    time.sleep(input_delay)
                 os.write(master, received)
             if child.poll() is not None and not ready:
                 break
