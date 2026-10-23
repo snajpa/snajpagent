@@ -7,15 +7,106 @@ A **session** is one agent run, with its own owner, model context and history. A
 conversations. A **pane/window** is a view, so two panes can share one session.
 Session and workspace names, IDs, lists and detach/resume operations are separate.
 
-Pane interaction: every session pane renders its persistent prompt and draft
-through the standalone composer. Owner view snapshots optionally carry the
+## Attached terminal panes
+
+The ordinary terminal editor and retained-history composer share one delta undo
+implementation. Ctrl-_ undoes in the ordinary editor; workspace NORMAL u and
+Ctrl-R route undo and redo to that editor. Explicit checkpoints close an edit
+group and carry its history across pane authority transfers. Streaming draft
+notifications omit history; mirrored frames carry it only before pending input
+acquires authority. Submission, cancellation and draft adoption clear history.
+Mirror draft refreshes reuse acknowledged owner state and retain the ordinary
+prompt readiness boundary. Initial synchronization, owner-state changes, binding
+or authority resets and pending audio presentation still send complete state.
+Prompt-history recall and rejected-input restoration start a fresh history for
+both focused and inactive drafts. Movement closes an edit group; each bracketed
+paste forms its own group. A default-room draft gaining its first exact route
+transfers its history with its text and cursor.
+
+Native mouse dragging selects painted cells. Copy borrows their complete glyphs
+and continuation metadata so soft wraps remain joined and hard breaks remain.
+The ordinary renderer's explicit wrapping and indentation remain in the copy.
+The existing workspace register owns the copied bytes. Paste enters the shared
+editor through bracketed input. Escape cancels the selection without replacing
+the register; y without a selection retains it. Highlight boundaries include the
+complete wide glyph. Typing and clicking preserve HOLD; i/I/a/A resume FOLLOW.
+
+Unrouted chat drafts stay in their original frontend across Escape. Window
+commands refuse to replace that frontend until its draft is cleared or its
+session is explicitly discarded. Recovery follows the originating window's
+retained submission and restores its frozen recipient after a nickname change.
+
+Editor checkpoints wait for captured frontend feedback independently of owner
+receipts. The controller connection retains ordered feedback through detach.
+Frontend frame acknowledgements and editor snapshots remain readable while an
+older submission waits for reconciliation. Captured input actions wait in FIFO
+order while the same channel continues carrying feedback and editor snapshots.
+Workspace snapshots retain unforwarded action text with each pane's private input.
+After restart, :recover returns it as unsent text for review, without replaying
+commands or control keys. Queued actions retain a closed pane until recovery and
+prevent classic handoff or owner shutdown from discarding them.
+A renamed conversation's pending result follows its originating window.
+Editor checkpoints carry the frontend's actual verbosity into its saved window
+state. Local /verbose changes affect future output in that frontend; existing
+terminal rows remain intact. Focus changes preserve the ordinary prompt's colors.
+Retained-history rendering walks each visible row from the preceding row instead
+of repeatedly seeking from the sparse index. Forced-frame test polling uses elapsed
+time so ready output cannot trigger an unbounded stream of resize signals.
+Pointer routing sends a cursor-relative terminal coordinate to the shared editor.
+The editor maps it through its actual wrapping and Unicode source boundaries.
+
+Whole-terminal handoffs retain each pane's frontend and output position while
+the parent releases its controller. On return, the frontend reads retained
+terminal output and adopts the current owner draft. Explicit detach checkpoints
+the editor before removing its frontend. Final shutdown checkpoints controlled
+editors before releasing their owners.
+
+Attached POSIX sessions use one lease-free standalone UI subprocess per window.
+The workspace holds one exclusive controller connection per session. Frontends
+consume owner-certified retained presentation and ordinary editor snapshots.
+The shared UI supplies prompts, Markdown, colors, captions and activity frames.
+Vim owns rectangles, focus, navigation/input routing and frontend lifetime.
+Mirrors retain independent terminal dimensions and transfer the current shared
+editor before accepting input. Editor checkpoints also report the actual selected
+conversation. Same-owner command selections run through the shared UI after the
+owner advertises the conversation in its catalog. A receipt checkpoints newer
+source typing before changing a pane; a failed checkpoint leaves the pane intact.
+Windows retains its existing direct-session path;
+the native terminal subprocess implementation remains open there.
+
+Audio activation requires two presentation receipts. The ordinary frontend first
+writes its prompt and an ordered frame marker to the PTY. Vim consumes that marker,
+flushes those cells to the outer terminal, then acknowledges the owner audio epoch.
+The owner waits for the matching epoch before opening the device. A semantic
+controller without that initial visible-frontend receipt cannot activate capture.
+Enter and Esc dictation actions retain their input capture and controller generation.
+A failed or disconnected receipt clears the pending audio prompt and refuses device
+start. Frontend loss releases the controller generation while preserving the owner
+and its acknowledged draft. Reattachment requires an explicit command. Actual
+physical-device behavior remains unqualified by these UI and lifecycle fixtures.
+
+Primary terminal history retains complete glyphs, attributes and continuation
+metadata. NORMAL gg/G, row/page navigation and generic wheel input select terminal
+rows. Incoming output, typing and clicking preserve a held position; i/I/a/A
+resume the live screen. Applications that request mouse input receive mouse events.
+The separately built terminal parser reflows history across width changes. A redraw at
+unchanged dimensions preserves an active mouse drag; a geometry change cancels it.
+Native history supports painted-cell selection; search opens retained semantic
+history. Whole-platform and whole-interface qualification remain ongoing.
+
+## Semantic history and existing composer paths
+
+This section describes retained-history panes and the semantic composer paths.
+Attached native panes use the ordinary frontend described above.
+Retained-history panes render their persistent prompt and draft
+through the shared composer. Owner view snapshots optionally carry the
 configured template, values, captured clock and spinner state. Earlier owners
 retain model/active-state compatibility with unknown count fields. The shared
 terminal animation state renders frames and schedules the next visible
 change in both interfaces; idle prompts add no polling. Earlier owners with only
 an active flag receive the configured provider activity indicator. Draft cursor,
 mouse hits and wrapped editor motions use the same formatted frame and source
-mapping. Clicking an attached writable pane enters INSERT immediately, including
+mapping. Clicking a writable semantic pane enters INSERT immediately, including
 empty panes. Prompt clicks also position the draft cursor; body clicks
 use its remembered position. Transcript drags enter VISUAL; read-only history and
 report clicks retain source navigation. NORMAL
@@ -39,6 +130,10 @@ history stays in its routed view. Transcript-only restore skips the global sessi
 catalogue until a picker is opened. Names lead the workspace form of each session prompt.
 Older journals retain their stored content; prompt clock/template snapshots and
 transient terminal-only notices were never recorded and cannot be recovered.
+Standalone attachments and pane frontends restore recent rollout commands and
+cancelled edits from the same bounded presentation page after the last model
+submission. Private-route output stays in its conversation. Complete earlier
+command output remains available through the retained reports.
 
 Input checkpoint: bracketed paste uses the terminal editor's literal insertion
 operation in both interfaces. It normalizes CR to LF, rejects invalid UTF-8 and
@@ -528,10 +623,10 @@ The main decisions are:
   journals or contacting owner sockets. A cold picker shows preparation text
   below the new-session entry. Session attachment and history opening retain
   source verification.
-- The workspace renders semantic history. It does not reconstruct history by
-  interpreting the current terminal byte stream.
-- A new private semantic attachment shares controller ownership with the
-  existing terminal attachment. Existing owners and terminal clients remain
+- Retained-history views render semantic journal content. Attached native panes
+  display the ordinary frontend's terminal cells at their own dimensions.
+- The private attachment protocol shares exclusive controller ownership with
+  the existing terminal attachment. Existing owners and terminal clients remain
   usable throughout the transition.
 - All retained journal history is addressable. RAM contains working pages and
   visible layouts; cache eviction never deletes history.
@@ -1624,10 +1719,13 @@ backends must keep the workspace alive until their session stops. A report's
 
 ## 9. Screen rendering and terminal correctness
 
-Extract reusable typed text/style formatting from the current fd-writing
-renderer. Keep the existing streaming sink and add a grid-layout sink. The shared
-formatting policy controls labels, redaction and verbosity; each sink controls
-placement. Avoid a VT emulator between the old renderer and the workspace.
+Attached panes run the ordinary frontend in their own pseudoterminals. The
+workspace consumes those terminal bytes through the separately built
+snajpagent-vterm dependency and places the resulting cells in each pane.
+DEPENDENCIES.md records its upstream source, patch and private ABI. The frontend owns application formatting, prompts, editing,
+colors and animation. The workspace owns pane geometry, focus and terminal-cell
+selection. Retained-history views use the shared typed formatting and grid-layout
+path; they do not reconstruct the attached application's live interface.
 
 The workspace builds a complete back grid for the current screen. Each cell
 contains a grapheme reference, width/continuation flag and style. Diff it against

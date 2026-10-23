@@ -325,13 +325,15 @@ in {
   inherit sdk target compiler tools cflags ldflags jansson tls curl av pdf xml archive iconv zlib;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
-    pkgs.stdenvNoCC.mkDerivation {
+    let vterm = cmakeLibrary (import ./libvterm-source.nix { inherit pkgs; })
+      [ "-DSNAG_UNICODE_HEADER=${source}/src/unicode.h" ] [];
+    in pkgs.stdenvNoCC.mkDerivation {
       pname = "${packageName}-macos-${arch}";
       inherit version;
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ libyaml jansson curl av pdf png freetype expat fontconfig jpeg openjpeg xml archive ] ++ voiceRtc.dependencies ++ networkLibraries;
+      buildInputs = [ vterm libyaml jansson curl av pdf png freetype expat fontconfig jpeg openjpeg xml archive ] ++ voiceRtc.dependencies ++ networkLibraries;
       enableParallelBuilding = true;
       dontConfigure = true;
       dontStrip = true;
@@ -356,6 +358,8 @@ in {
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_DARWIN_C_SOURCE -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
           'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer -Werror=unguarded-availability" else cflags + " -flto"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=${ldflags}${lib.optionalString legacyLoader " -Wl,-lto_library,${llvm.llvm.lib}/lib/libLTO.so"} ${lib.optionalString (!debug) "-flto -Wl,-object_path_lto,build/app-lto.o -Wl,-dead_strip -Wl,-dead_strip_dylibs"} -Wl,-pie'
+          "VTERM_CFLAGS=-I${vterm}/include"
+          "VTERM_LIBS=${vterm}/lib/libsnajpagent-vterm.a"
           "YAML_CFLAGS=-I${libyaml}/include"
           "YAML_LIBS=${libyaml}/lib/libyaml.a"
           "ZSTD_CFLAGS=-I${zstd}/include"

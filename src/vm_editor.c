@@ -10,23 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct snag_vm_undo {
-    struct snag_vm_undo *next;
-    size_t begin, before_size, after_size, before_cursor, after_cursor;
-    unsigned char text[];
-};
-
-static void
-undo_free(struct snag_vm_undo *undo)
-{
-    while (undo) {
-        struct snag_vm_undo *next = undo->next;
-        memset(undo->text, 0, undo->before_size + undo->after_size);
-        free(undo);
-        undo = next;
-    }
-}
-
 void
 snag_vm_editor_reset(struct snag_vm_editor *editor)
 {
@@ -34,62 +17,20 @@ snag_vm_editor_reset(struct snag_vm_editor *editor)
         snag_term_close(editor->input);
         free(editor->input);
     }
-    undo_free(editor->undo);
-    undo_free(editor->redo);
-    if (editor->original.data) memset(editor->original.data, 0, editor->original.len);
-    snag_buf_free(&editor->original);
+    snag_edit_history_free(&editor->history);
     memset(editor, 0, sizeof(*editor));
 }
 
 int
 snag_vm_editor_begin(struct snag_vm_buffer *buffer)
 {
-    struct snag_vm_editor *editor = &buffer->editor;
-    if (editor->grouping) return 0;
-    editor->original.max = SNAG_MAX_DIRECT_PROMPT + 1u;
-    snag_buf_reset(&editor->original);
-    if (snag_buf_append(&editor->original, buffer->draft.data, buffer->draft.len) < 0)
-        return -1;
-    editor->original_cursor = buffer->cursor;
-    editor->grouping = true;
-    return 0;
+    return snag_edit_begin(&buffer->editor.history, &buffer->draft, buffer->cursor);
 }
 
 int
 snag_vm_editor_end(struct snag_vm_buffer *buffer)
 {
-    struct snag_vm_editor *editor = &buffer->editor;
-    if (!editor->grouping) return 0;
-    const unsigned char *before = editor->original.data;
-    const unsigned char *after = buffer->draft.data;
-    size_t old_size = editor->original.len, new_size = buffer->draft.len;
-    size_t prefix = 0u, suffix = 0u;
-    while (prefix < old_size && prefix < new_size && before[prefix] == after[prefix]) ++prefix;
-    if (prefix != old_size || prefix != new_size) {
-        /* Delta edges need UTF-8 boundaries, even when a changed codepoint
-         * shares leading bytes or joins a neighboring grapheme. */
-        while (prefix && prefix < old_size && (before[prefix] & 0xc0u) == 0x80u) --prefix;
-        while (suffix < old_size - prefix && suffix < new_size - prefix &&
-            before[old_size - suffix - 1u] == after[new_size - suffix - 1u]) ++suffix;
-        while (suffix && (before[old_size - suffix] & 0xc0u) == 0x80u) --suffix;
-        size_t old_length = old_size - prefix - suffix;
-        size_t new_length = new_size - prefix - suffix;
-        /* Each side is bounded by the existing maximum draft size. */
-        struct snag_vm_undo *undo = malloc(sizeof(*undo) + old_length + new_length);
-        if (!undo) return -1;
-        *undo = (struct snag_vm_undo){.next = editor->undo, .begin = prefix,
-            .before_size = old_length, .after_size = new_length,
-            .before_cursor = editor->original_cursor, .after_cursor = buffer->cursor};
-        if (old_length) memcpy(undo->text, before + prefix, old_length);
-        if (new_length) memcpy(undo->text + old_length, after + prefix, new_length);
-        editor->undo = undo;
-        undo_free(editor->redo);
-        editor->redo = NULL;
-    }
-    if (editor->original.data) memset(editor->original.data, 0, editor->original.len);
-    snag_buf_reset(&editor->original);
-    editor->grouping = false;
-    return 0;
+    return snag_edit_end(&buffer->editor.history, &buffer->draft, buffer->cursor);
 }
 
 int
@@ -104,23 +45,11 @@ snag_vm_editor_replace(struct snag_vm_buffer *buffer, size_t begin, size_t end,
 int
 snag_vm_editor_undo(struct snag_vm_buffer *buffer, bool redo, size_t count)
 {
-    struct snag_vm_editor *editor = &buffer->editor;
-    if (snag_vm_editor_end(buffer) < 0) return -1;
-    struct snag_vm_undo **from = redo ? &editor->redo : &editor->undo;
-    struct snag_vm_undo **to = redo ? &editor->undo : &editor->redo;
-    while (count-- && *from) {
-        struct snag_vm_undo *undo = *from;
-        size_t remove = redo ? undo->before_size : undo->after_size;
-        size_t insert = redo ? undo->after_size : undo->before_size;
-        const unsigned char *text = undo->text + (redo ? undo->before_size : 0u);
-        if (snag_vm_draft_replace(buffer, undo->begin, undo->begin + remove,
-            text, insert) < 0) return -1;
-        snag_vm_draft_cursor(buffer, redo ? undo->after_cursor : undo->before_cursor);
-        *from = undo->next;
-        undo->next = *to;
-        *to = undo;
-    }
-    editor->column_valid = false;
+    if (snag_edit_undo(&buffer->editor.history, &buffer->draft, &buffer->cursor,
+        redo, count) < 0) return -1;
+    buffer->draft_dirty = true;
+    ++buffer->connection->revision;
+    buffer->editor.column_valid = false;
     return 0;
 }
 

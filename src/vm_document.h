@@ -20,6 +20,8 @@ void snag_vm_document_free(struct snag_vm_document *);
 size_t snag_vm_document_rows(const struct snag_vm_document *);
 unsigned int snag_vm_document_columns(const struct snag_vm_document *);
 int snag_vm_document_row(const struct snag_vm_document *, size_t, struct snag_vm_document_row *);
+/* Continue a visible range without seeking from its sparse checkpoint again. */
+int snag_vm_document_row_next(const struct snag_vm_document *, struct snag_vm_document_row *);
 const json_t *snag_vm_document_block(const struct snag_vm_document *, size_t);
 const char *snag_vm_document_text(const struct snag_vm_document *,
     const struct snag_vm_document_row *);

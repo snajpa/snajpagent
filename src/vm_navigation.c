@@ -196,15 +196,6 @@ unit(struct snag_vm_navigation *nav)
     return 0;
 }
 
-static bool
-hit(const struct snag_vm_navigation *nav, const json_t *block, bool heading,
-    uint64_t start_byte, uint64_t begin, uint64_t end)
-{
-    const struct snag_vm_anchor *start = &nav->request.start;
-    return start->heading == heading && !strcmp(start->key, snag_json_string(block, "key")) &&
-        start_byte >= begin && (start_byte < end || (begin == end && start_byte == begin));
-}
-
 static int
 field(struct snag_vm_navigation *nav, const json_t *block, bool heading,
     bool (*cancel)(void *), void *opaque)
@@ -221,6 +212,12 @@ field(struct snag_vm_navigation *nav, const json_t *block, bool heading,
         json_array_get(map, json_array_size(map) - 1u), 1u)) : length;
     uint64_t start_byte = heading ? nav->request.start.byte :
         snag_vm_source_position(block, nav->request.start.byte, false);
+    struct snag_vm_anchor anchor = {
+        .seq = (uint64_t)json_integer_value(json_object_get(block, "seq")),
+        .order = snag_vm_search_order(block), .heading = heading};
+    (void)snprintf(anchor.key, sizeof(anchor.key), "%s", snag_json_string(block, "key"));
+    bool start_field = nav->request.start.heading == heading &&
+        !strcmp(nav->request.start.key, anchor.key);
     for (size_t at = 0u; at < length && !nav->done && !nav->retry;) {
         if (cancel && cancel(opaque)) return snag_errno(ECANCELED);
         uint32_t cp;
@@ -254,16 +251,13 @@ field(struct snag_vm_navigation *nav, const json_t *block, bool heading,
                 shown += glyph.bytes;
             } while (shown < length && snag_vm_source_mapped(block, shown) &&
                 snag_vm_source_position(block, shown, true) == begin);
-            nav->unit = (struct snag_vm_anchor){
-                .seq = (uint64_t)json_integer_value(json_object_get(block, "seq")),
-                .byte = begin, .order = snag_vm_search_order(block)};
-            (void)snprintf(nav->unit.key, sizeof(nav->unit.key), "%s",
-                snag_json_string(block, "key"));
+            nav->unit = anchor;
+            nav->unit.byte = begin;
             nav->unit_columns = (unsigned int)width;
             nav->unit_kind = 2u;
             nav->unit_newline = false;
             nav->unit_pending = true;
-            nav->unit_start = hit(nav, block, false, start_byte, at, shown);
+            nav->unit_start = start_field && start_byte >= at && start_byte < shown;
             nav->boundary = (struct snag_grapheme_state){0};
             at = shown;
             continue;
@@ -271,28 +265,21 @@ field(struct snag_vm_navigation *nav, const json_t *block, bool heading,
         if (snag_grapheme_feed(&nav->boundary, cp)) {
             if (unit(nav) < 0) return -1;
             if (nav->done || nav->retry) break;
-            nav->unit = (struct snag_vm_anchor){
-                .seq = (uint64_t)json_integer_value(json_object_get(block, "seq")),
-                .byte = heading ? at : snag_vm_source_position(block, at, true),
-                .order = snag_vm_search_order(block), .heading = heading};
-            (void)snprintf(nav->unit.key, sizeof(nav->unit.key), "%s",
-                snag_json_string(block, "key"));
+            nav->unit = anchor;
+            nav->unit.byte = begin;
             nav->unit_kind = snag_unicode_word_class(cp);
             nav->unit_newline = cp == '\n';
             nav->unit_pending = true;
         }
-        nav->unit_start = nav->unit_start || hit(nav, block, heading, start_byte, at, at + bytes);
+        nav->unit_start = nav->unit_start ||
+            (start_field && start_byte >= at && start_byte < at + bytes);
         struct snag_vm_glyph glyph = snag_vm_glyph(text + at, bytes, nav->column, false);
         if (glyph.escaped[0] || glyph.tab) nav->unit_columns = glyph.columns;
         else if (!glyph.newline && snag_grapheme_cells_feed(&nav->cells, cp, false) < 0) return -1;
         at += bytes;
     }
-    nav->field_end = (struct snag_vm_anchor){
-        .seq = (uint64_t)json_integer_value(json_object_get(block, "seq")),
-        .byte = heading ? length : snag_vm_source_position(block, length, true),
-        .order = snag_vm_search_order(block), .heading = heading};
-    (void)snprintf(nav->field_end.key, sizeof(nav->field_end.key), "%s",
-        snag_json_string(block, "key"));
+    nav->field_end = anchor;
+    nav->field_end.byte = heading ? length : snag_vm_source_position(block, length, true);
     return 0;
 }
 
@@ -319,6 +306,8 @@ snag_vm_navigation_block(struct snag_vm_navigation *nav, const json_t *block,
     bool (*cancel)(void *), void *opaque)
 {
     if (nav->done || nav->retry) return 1;
+    struct snag_vm_navigation checkpoint = *nav;
+retry:;
     const char *key = snag_json_string(block, "key"), *handle = snag_json_string(block, "handle");
     uint64_t begin, end;
     if (!key || strlen(key) >= sizeof(nav->key) ||
@@ -333,6 +322,15 @@ snag_vm_navigation_block(struct snag_vm_navigation *nav, const json_t *block,
         if (field(nav, block, true, cancel, opaque) < 0 || finish_field(nav) < 0) return -1;
     }
     if (!nav->done && !nav->retry && field(nav, block, false, cancel, opaque) < 0) return -1;
+    if (nav->retry && nav->target_kind == TARGET_GLYPH && nav->target >= checkpoint.glyph) {
+        uint64_t target = nav->target, line = nav->target_line;
+        *nav = checkpoint;
+        nav->target_kind = TARGET_GLYPH;
+        nav->target = target;
+        nav->target_line = line;
+        nav->fixed = nav->found_start = true;
+        goto retry;
+    }
     (void)snprintf(nav->key, sizeof(nav->key), "%s", key);
     (void)snprintf(nav->handle, sizeof(nav->handle), "%s", handle ? handle : "");
     nav->source_end = end;

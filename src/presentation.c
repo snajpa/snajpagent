@@ -172,6 +172,10 @@ snag_presentation_encode(const struct snag_ui_command *command, json_t **out)
         json_decref(record);
         return -1;
     }
+    if (command->origin && json_object_set(record, "origin", (json_t *)command->origin) < 0) {
+        json_decref(record);
+        return -1;
+    }
     *out = record;
     return 0;
 }

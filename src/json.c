@@ -33,19 +33,41 @@ snag_json_document_set(struct snag_json_document *document, json_t *value, size_
 }
 
 static int
-encode_string(struct snag_buf *out, const char *s, size_t len)
+encode_string(struct snag_buf *out, const char *s, size_t len, bool ascii)
 {
     static const char hex[] = "0123456789abcdef";
+    static const unsigned char short_escape[32] = {
+        ['\b'] = 'b', ['\t'] = 't', ['\n'] = 'n', ['\f'] = 'f', ['\r'] = 'r'};
 
     if (snag_buf_putc(out, '"') < 0) return -1;
     size_t start = 0u;
     for (size_t i = 0; i < len;) {
         unsigned char c = (unsigned char)s[i];
-        if (!c) return snag_errno(EILSEQ);
+        if (!c && !ascii) return snag_errno(EILSEQ);
         if (c >= 0x80u) {
-            size_t n = snag_utf8_size(c);
-            if (!n || n > len - i || !snag_utf8_valid((const unsigned char *)s + i, n, true))
-                return snag_errno(EILSEQ);
+            uint32_t cp;
+            size_t n = snag_utf8_decode((const unsigned char *)s + i, len - i, &cp);
+            if (!n) return snag_errno(EILSEQ);
+            if (ascii) {
+                if (i > start && snag_buf_append(out, s + start, i - start) < 0) return -1;
+                uint32_t units[2] = {cp, 0u};
+                size_t count = 1u;
+                if (cp > 0xffffu) {
+                    cp -= 0x10000u;
+                    units[0] = 0xd800u + (cp >> 10);
+                    units[1] = 0xdc00u + (cp & 0x3ffu);
+                    count = 2u;
+                }
+                for (size_t j = 0u; j < count; ++j) {
+                    uint32_t unit = units[j];
+                    unsigned char escaped[6] = {'\\', 'u',
+                        (unsigned char)hex[(unit >> 12) & 15u],
+                        (unsigned char)hex[(unit >> 8) & 15u],
+                        (unsigned char)hex[(unit >> 4) & 15u], (unsigned char)hex[unit & 15u]};
+                    if (snag_buf_append(out, escaped, sizeof(escaped)) < 0) return -1;
+                }
+                start = i + n;
+            }
             i += n;
             continue;
         }
@@ -59,7 +81,12 @@ encode_string(struct snag_buf *out, const char *s, size_t len)
         } else if (c <= 0x1fu) {
             unsigned char escaped[6] = {
                 '\\', 'u', '0', '0', (unsigned char)hex[c >> 4], (unsigned char)hex[c & 15u]};
-            if (snag_buf_append(out, escaped, sizeof(escaped)) < 0) return -1;
+            size_t length = sizeof(escaped);
+            if (ascii && short_escape[c]) {
+                escaped[1] = short_escape[c];
+                length = 2u;
+            }
+            if (snag_buf_append(out, escaped, length) < 0) return -1;
         }
         start = ++i;
     }
@@ -67,22 +94,27 @@ encode_string(struct snag_buf *out, const char *s, size_t len)
     return snag_buf_putc(out, '"');
 }
 
+enum json_encoding { ENCODE_CANONICAL, ENCODE_DIAGNOSTIC, ENCODE_MESSAGE, ENCODE_ASCII };
+
 static int encode_value(
-    const json_t *value, struct snag_buf *out, unsigned int depth, bool allow_real);
+    const json_t *value, struct snag_buf *out, unsigned int depth, enum json_encoding encoding);
 
 static int
-encode_object(const json_t *value, struct snag_buf *out, unsigned int depth, bool allow_real)
+encode_object(
+    const json_t *value, struct snag_buf *out, unsigned int depth, enum json_encoding encoding)
 {
     size_t count = json_object_size(value);
+    struct snag_key_ref local_keys[16];
     struct snag_key_ref *keys = NULL;
     void *iter;
     size_t i = 0;
     int rc = -1;
     bool sorted = true;
+    bool ordered = encoding != ENCODE_MESSAGE && encoding != ENCODE_ASCII;
     struct snag_key_ref previous = {0};
 
     iter = json_object_iter((json_t *)value);
-    while (iter) {
+    while (ordered && iter) {
         if (i >= count) goto out;
         struct snag_key_ref key = {.name = json_object_iter_key(iter),
             .len = json_object_iter_key_len(iter)};
@@ -93,12 +125,14 @@ encode_object(const json_t *value, struct snag_buf *out, unsigned int depth, boo
         ++i;
         iter = json_object_iter_next((json_t *)value, iter);
     }
-    if (i != count) goto out;
+    if (ordered && i != count) goto out;
     /* Loaded canonical objects already have sorted insertion order. Borrow
      * their keys instead of allocating and copying an identical sort array. */
     if (!sorted) {
         if (count > SIZE_MAX / sizeof(*keys)) return snag_errno(EOVERFLOW);
-        keys = calloc(count, sizeof(*keys));
+        /* Small protocol objects need at most 256 bytes of sort scratch. */
+        keys = count <= sizeof(local_keys) / sizeof(local_keys[0]) ? local_keys :
+            calloc(count, sizeof(*keys));
         if (!keys) return -1;
         iter = json_object_iter((json_t *)value);
         for (i = 0u; i < count; ++i) {
@@ -106,7 +140,17 @@ encode_object(const json_t *value, struct snag_buf *out, unsigned int depth, boo
             keys[i].len = json_object_iter_key_len(iter);
             iter = json_object_iter_next((json_t *)value, iter);
         }
-        qsort(keys, count, sizeof(*keys), snag_key_ref_compare);
+        if (keys == local_keys) {
+            for (i = 1u; i < count; ++i) {
+                struct snag_key_ref key = keys[i];
+                size_t at = i;
+                while (at && snag_key_ref_compare(keys + at - 1u, &key) > 0) {
+                    keys[at] = keys[at - 1u];
+                    --at;
+                }
+                keys[at] = key;
+            }
+        } else qsort(keys, count, sizeof(*keys), snag_key_ref_compare);
     }
     if (snag_buf_putc(out, '{') < 0) goto out;
     iter = json_object_iter((json_t *)value);
@@ -116,20 +160,22 @@ encode_object(const json_t *value, struct snag_buf *out, unsigned int depth, boo
         json_t *member = keys ? json_object_getn(value, name, length) :
             json_object_iter_value(iter);
         if ((i && snag_buf_putc(out, ',') < 0) ||
-            encode_string(out, name, length) < 0 || snag_buf_putc(out, ':') < 0 ||
-            !member || encode_value(member, out, depth + 1u, allow_real) < 0)
+            encode_string(out, name, length, encoding == ENCODE_ASCII) < 0 ||
+            snag_buf_putc(out, ':') < 0 ||
+            !member || encode_value(member, out, depth + 1u, encoding) < 0)
             goto out;
         if (!keys) iter = json_object_iter_next((json_t *)value, iter);
     }
     if (snag_buf_putc(out, '}') < 0) goto out;
     rc = 0;
 out:
-    free(keys);
+    if (keys != local_keys) free(keys);
     return rc;
 }
 
 static int
-encode_array(const json_t *value, struct snag_buf *out, unsigned int depth, bool allow_real)
+encode_array(
+    const json_t *value, struct snag_buf *out, unsigned int depth, enum json_encoding encoding)
 {
     size_t count = json_array_size(value);
 
@@ -137,14 +183,15 @@ encode_array(const json_t *value, struct snag_buf *out, unsigned int depth, bool
     for (size_t i = 0; i < count; ++i) {
         json_t *member = json_array_get(value, i);
         if ((i && snag_buf_putc(out, ',') < 0) || !member ||
-            encode_value(member, out, depth + 1u, allow_real) < 0)
+            encode_value(member, out, depth + 1u, encoding) < 0)
             return -1;
     }
     return snag_buf_putc(out, ']');
 }
 
 static int
-encode_value(const json_t *value, struct snag_buf *out, unsigned int depth, bool allow_real)
+encode_value(
+    const json_t *value, struct snag_buf *out, unsigned int depth, enum json_encoding encoding)
 {
     char number[64];
     int n;
@@ -152,14 +199,24 @@ encode_value(const json_t *value, struct snag_buf *out, unsigned int depth, bool
     if (!value || depth > 48u) return snag_errno(EOVERFLOW);
     switch (json_typeof(value)) {
     case JSON_OBJECT:
-        return encode_object(value, out, depth, allow_real);
+        return encode_object(value, out, depth, encoding);
     case JSON_ARRAY:
-        return encode_array(value, out, depth, allow_real);
+        return encode_array(value, out, depth, encoding);
     case JSON_STRING:
-        return encode_string(out, json_string_value(value), json_string_length(value));
-    case JSON_INTEGER:
-        n = snprintf(number, sizeof(number), "%lld", (long long)json_integer_value(value));
-        break;
+        return encode_string(out, json_string_value(value), json_string_length(value),
+            encoding == ENCODE_ASCII);
+    case JSON_INTEGER: {
+        json_int_t integer = json_integer_value(value);
+        unsigned long long magnitude = (unsigned long long)integer;
+        if (integer < 0) magnitude = 0u - magnitude;
+        char *at = number + sizeof(number);
+        do {
+            *--at = (char)('0' + magnitude % 10u);
+            magnitude /= 10u;
+        } while (magnitude);
+        if (integer < 0) *--at = '-';
+        return snag_buf_append(out, at, (size_t)(number + sizeof(number) - at));
+    }
     case JSON_TRUE:
         return snag_buf_append(out, "true", 4u);
     case JSON_FALSE:
@@ -167,8 +224,13 @@ encode_value(const json_t *value, struct snag_buf *out, unsigned int depth, bool
     case JSON_NULL:
         return snag_buf_append(out, "null", 4u);
     case JSON_REAL:
-        if (allow_real) {
+        if (encoding != ENCODE_CANONICAL) {
             n = snprintf(number, sizeof(number), "%.17g", json_real_value(value));
+            if (n > 0 && (size_t)n < sizeof(number) - 2u &&
+                !strpbrk(number, ".eE")) {
+                number[n++] = '.';
+                number[n++] = '0';
+            }
             break;
         }
         /* Durable canonical values must never contain floating point. */
@@ -184,14 +246,26 @@ int
 snag_json_canonical(const json_t *value, struct snag_buf *out)
 {
     snag_buf_reset(out);
-    return encode_value(value, out, 0u, false);
+    return encode_value(value, out, 0u, ENCODE_CANONICAL);
 }
 
 int
 snag_json_diagnostic(const json_t *value, struct snag_buf *out)
 {
     snag_buf_reset(out);
-    return encode_value(value, out, 0u, true);
+    return encode_value(value, out, 0u, ENCODE_DIAGNOSTIC);
+}
+
+int
+snag_json_append(const json_t *value, struct snag_buf *out)
+{
+    return encode_value(value, out, 0u, ENCODE_MESSAGE);
+}
+
+int
+snag_json_append_ascii(const json_t *value, struct snag_buf *out)
+{
+    return encode_value(value, out, 0u, ENCODE_ASCII);
 }
 
 static int
@@ -199,7 +273,7 @@ inspect_value(const json_t *value, struct snag_buf *out, unsigned int depth)
 {
     if (!value || depth > 48u) return snag_errno(EOVERFLOW);
     if (!json_is_object(value) && !json_is_array(value)) {
-        if (encode_value(value, out, depth, true) < 0) return -1;
+        if (encode_value(value, out, depth, ENCODE_DIAGNOSTIC) < 0) return -1;
         return snag_buf_putc(out, '\n');
     }
     bool object = json_is_object(value);
@@ -212,7 +286,8 @@ inspect_value(const json_t *value, struct snag_buf *out, unsigned int depth)
         json_t *child;
         if (object) {
             if (encode_string(out, json_object_iter_key(iterator),
-                json_object_iter_key_len(iterator)) < 0 || snag_buf_append(out, ": ", 2u) < 0)
+                json_object_iter_key_len(iterator), false) < 0 ||
+                snag_buf_append(out, ": ", 2u) < 0)
                 return -1;
             child = json_object_iter_value(iterator);
             iterator = json_object_iter_next((json_t *)value, iterator);

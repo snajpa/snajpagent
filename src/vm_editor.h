@@ -3,21 +3,20 @@
 #define SNAJPAGENT_VM_EDITOR_H
 
 #include "vm_input.h"
+#include "edit_history.h"
 #include "vm_selection.h"
 
 struct snag_vm_buffer;
-struct snag_vm_undo;
 struct snag_term;
 
 /* History belongs to a conversation draft; the unnamed register belongs to the
  * workspace and can be pasted into any composer. Neither enters model context. */
 struct snag_vm_editor {
     struct snag_term *input;
-    struct snag_vm_undo *undo, *redo;
-    struct snag_buf original;
-    size_t original_cursor, count, operator_count, column;
+    struct snag_edit_history history;
+    size_t count, operator_count, column;
     unsigned int operator, prefix;
-    bool grouping, column_valid, column_display, upload_directory;
+    bool column_valid, column_display, upload_directory;
 };
 
 struct snag_vm_motion {

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Validate runtime libraries, or prove that an ELF executable is fully static.
+"""Validate runtime libraries or the absence of third-party runtime libraries.
 
 Dynamic builds require resolved libcurl and Jansson dependencies. Static ELF
-builds have no runtime library closure; provider capability is exercised by the
-provider fixture suite.
+builds have no runtime library closure. Mach-O executables may link third-party
+libraries statically while retaining macOS system libraries. Provider capability
+is exercised separately by the provider fixture suite.
 """
 
 from __future__ import annotations
@@ -149,13 +150,21 @@ def macos_closure(binary: Path) -> dict[str, Any]:
             continue
         path = line.split(" ", 1)[0]
         deps.append({"name": basename(path), "path": path})
+    header = run([tool_path("otool"), "-hv", str(binary)])
+    system_only = (not header.returncode and bool(re.search(r"\bEXECUTE\b", header.stdout))
+                   and bool(deps) and all(macos_system_library(dep["path"]) for dep in deps))
     return {
         "platform_tool": "otool -L",
-        "linkage": "dynamic",
+        "linkage": "system" if system_only else "dynamic",
         "dependencies": deps,
         "unresolved": [],
         "direct_needed": [],
     }
+
+
+def macos_system_library(path: str) -> bool:
+    return (path == os.path.normpath(path)
+            and path.startswith(("/usr/lib/", "/System/Library/Frameworks/")))
 
 
 def optional_cmd(argv: list[str]) -> list[str]:
@@ -184,6 +193,11 @@ def validate(report: dict[str, Any]) -> None:
     if report.get("linkage") == "static":
         if deps or report.get("direct_needed"):
             die("static executable has runtime dependencies")
+        return
+    if report.get("linkage") == "system":
+        if (report["platform"]["system"] != "Darwin" or not deps
+                or not all(macos_system_library(dep["path"]) for dep in deps)):
+            die("system-linked executable has non-system runtime dependencies")
         return
     if not has_dep(deps, "libcurl"):
         die("dynamic closure does not include libcurl")
@@ -256,6 +270,9 @@ def main() -> int:
     classified = report["classified_backends"]
     if report.get("linkage") == "static":
         print("depclosurecheck: ok (static ELF; no runtime library dependencies)")
+        return 0
+    if report.get("linkage") == "system":
+        print("depclosurecheck: ok (Mach-O executable; macOS system libraries only)")
         return 0
     print(
         "depclosurecheck: ok "

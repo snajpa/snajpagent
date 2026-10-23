@@ -16,7 +16,7 @@ struct snag_view_channel {
     unsigned int local_side;
     bool verified;
     struct snag_session_packet incoming, outgoing;
-    struct snag_buf input;
+    struct snag_buf input, encoded;
     uint64_t total, read_deadline, write_deadline;
     char *output;
     size_t output_len, output_offset;
@@ -50,14 +50,20 @@ const char *snag_view_conversation_name(const json_t *);
 struct snag_view_server;
 struct snag_view_callbacks {
     /* All callbacks run on the presentation owner, never on the engine. */
-    void (*bound)(void *, uint64_t generation);
+    /* Bound returns -1 on failure, or 1 when terminal drafts lack exact routes. */
+    int (*bound)(void *, uint64_t generation);
     /* Generation zero is an independent send, never a controller attachment. */
     int (*submit)(void *, const char *id, const char *text, const json_t *route,
-        uint64_t generation, bool terminal, bool queued, int verbosity);
+        uint64_t generation, bool terminal, bool queued, int verbosity, bool echoed, bool local,
+        const json_t *capture);
     int (*control)(void *, bool quit);
     void *opaque;
     int (*feedback)(void *, const json_t *route, enum snag_term_feedback,
-        const char *label, const char *text);
+        const char *label, const char *text, const json_t *origin);
+    /* Retain acknowledged semantic edits in the ordinary terminal editor. */
+    int (*draft)(void *, const json_t *route, const char *text, size_t cursor);
+    int (*input_control)(void *, enum snag_term_action, const json_t *capture);
+    int (*presented)(void *, uint64_t audio_epoch);
 };
 
 #if SNAJPAGENT_VM
@@ -82,6 +88,11 @@ int snag_view_server_result(struct snag_view_server *, const char *id,
 int snag_view_server_command_result(struct snag_view_server *, const json_t *);
 int snag_view_server_report(struct snag_view_server *, const json_t *, const char *error);
 bool snag_view_server_attached(const struct snag_view_server *);
+/* Snapshot already synchronized ordinary drafts without taking a controller lease. */
+json_t *snag_view_server_drafts(const struct snag_view_server *);
+/* Transfer an ordinary terminal draft before binding a semantic controller. */
+int snag_view_server_draft(struct snag_view_server *, const json_t *route,
+    const struct snag_buf *, size_t cursor);
 /* Called only for the bound terminal peer, after its repaint barrier. */
 int snag_view_server_terminal(struct snag_view_server *, const unsigned char *reference);
 int snag_view_server_terminal_generation(struct snag_view_server *, const char *, uint64_t *);
@@ -152,6 +163,13 @@ static inline void
 snag_view_server_step(struct snag_view_server *server)
 {
     (void)server;
+}
+
+static inline json_t *
+snag_view_server_drafts(const struct snag_view_server *server)
+{
+    (void)server;
+    return NULL;
 }
 
 static inline void

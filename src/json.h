@@ -20,6 +20,10 @@ int snag_json_document_measure(struct snag_json_document *document, size_t max);
 int snag_json_canonical(const json_t *value, struct snag_buf *out);
 /* Diagnostic JSON accepts real numbers; durable canonical JSON does not. */
 int snag_json_diagnostic(const json_t *value, struct snag_buf *out);
+/* Append compact JSON in insertion order, retaining real types and the buffer bound. */
+int snag_json_append(const json_t *value, struct snag_buf *out);
+/* Terminal-control payloads retain ASCII-only JSON escaping. */
+int snag_json_append_ascii(const json_t *value, struct snag_buf *out);
 /* Append a human-readable tree, preserving scalar types and escaped strings. */
 int snag_json_inspect(const json_t *value, struct snag_buf *out);
 json_t *snag_json_load_strict(

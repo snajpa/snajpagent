@@ -6,15 +6,19 @@
 
 enum snag_vm_style {
     SNAG_VM_BOLD = 1u, SNAG_VM_DIM = 2u, SNAG_VM_UNDERLINE = 4u, SNAG_VM_REVERSE = 8u,
-    SNAG_VM_ITALIC = 256u,
+    SNAG_VM_ITALIC = 256u, SNAG_VM_NATIVE = 16384u,
+    SNAG_VM_BLINK = 32768u, SNAG_VM_CONCEAL = 65536u, SNAG_VM_STRIKE = 131072u,
+    SNAG_VM_DOUBLE_UNDERLINE = 262144u,
     SNAG_VM_RED = 32u, SNAG_VM_GREEN = 48u, SNAG_VM_YELLOW = 64u,
     SNAG_VM_BLUE = 80u, SNAG_VM_MAGENTA = 96u, SNAG_VM_CYAN = 112u
 };
 
 struct snag_vm_cell {
     size_t offset, length;
-    unsigned int style, width;
-    bool continuation;
+    unsigned int width;
+    unsigned int style : 31;
+    unsigned int continuation : 1;
+    uint32_t foreground, background;
 };
 
 struct snag_vm_frame {
@@ -41,6 +45,11 @@ int snag_vm_grid_text(struct snag_vm_grid *, size_t row, size_t column, size_t w
 /* Keep the logical tab column when drawing a wrapped continuation. */
 int snag_vm_grid_text_column(struct snag_vm_grid *, size_t row, size_t column, size_t width,
     const char *, size_t length, unsigned int style, size_t logical_column);
+/* Terminal cells borrow validated Unicode scalars and original palette/RGB colors.
+ * Color zero means default; 1..256 are palette entries; bit24 marks RGB. */
+int snag_vm_grid_terminal_cell(struct snag_vm_grid *, size_t row, size_t column,
+    const uint32_t *, size_t count, unsigned int width, unsigned int style,
+    uint32_t foreground, uint32_t background);
 /* A failed emit invalidates the physical frame; the next flush repaints fully.
  * An unchanged frame and cursor emit nothing. Cursor coordinates are zero-based. */
 int snag_vm_grid_flush(struct snag_vm_grid *, size_t cursor_row, size_t cursor_column,

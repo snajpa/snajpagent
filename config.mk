@@ -37,6 +37,8 @@ $(error WITH_VM must be 1 or 0)
 endif
 endif
 override CPPFLAGS += -DSNAJPAGENT_VM=$(WITH_VM)
+VTERM_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags snajpagent-vterm)
+VTERM_LIBS ?= $(shell $(PKG_CONFIG) --libs snajpagent-vterm)
 WITH_AV ?= 1
 ifeq ($(WITH_AV),1)
 AV_CFLAGS ?= $(shell pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)

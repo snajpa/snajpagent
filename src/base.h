@@ -68,8 +68,10 @@ struct snag_command_line {
 /* NUL-separated commands; slash input requires /, colon input is already Ex. */
 int snag_command_line_parse(const char *, size_t, char, struct snag_command_line *);
 bool snag_command_chained(const char *, size_t);
+const char *snag_workspace_search(const char *, size_t);
 size_t snag_command_start(const char *, size_t);
 bool snag_verbosity_input(const char *, size_t);
+bool snag_frontend_local_input(const char *, size_t);
 
 struct snag_key_ref {
     const char *name;

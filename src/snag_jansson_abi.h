@@ -50,7 +50,11 @@ typedef struct json_error_t {
 } json_error_t;
 
 size_t json_dumpb(const json_t *, char *, size_t, size_t);
+char *json_dumps(const json_t *, size_t);
+typedef int (*json_dump_callback_t)(const char *, size_t, void *);
+int json_dump_callback(const json_t *, json_dump_callback_t, void *, size_t);
 #define JSON_COMPACT 0x20
+#define JSON_ENSURE_ASCII 0x40
 #define JSON_ENCODE_ANY 0x200
 
 json_t *json_pack(const char *fmt, ...);
@@ -61,6 +65,7 @@ json_t *json_object(void);
 json_t *json_array(void);
 json_t *json_string(const char *value);
 json_t *json_stringn(const char *value, size_t len);
+json_t *json_stringn_nocheck(const char *value, size_t len);
 json_t *json_integer(json_int_t value);
 json_t *json_real(double value);
 json_t *json_true(void);
@@ -71,12 +76,15 @@ json_t *json_null(void);
 void json_delete(json_t *json);
 static inline json_t *json_incref(json_t *json)
 {
-    if (json && json->refcount != (size_t)-1) ++json->refcount;
+    if (json && __atomic_load_n(&json->refcount, __ATOMIC_RELAXED) != (size_t)-1)
+        (void)__atomic_add_fetch(&json->refcount, 1u, __ATOMIC_RELAXED);
     return json;
 }
 static inline void json_decref(json_t *json)
 {
-    if (json && json->refcount != (size_t)-1 && --json->refcount == 0) json_delete(json);
+    if (json && __atomic_load_n(&json->refcount, __ATOMIC_RELAXED) != (size_t)-1 &&
+        __atomic_sub_fetch(&json->refcount, 1u, __ATOMIC_ACQ_REL) == 0u)
+        json_delete(json);
 }
 
 size_t json_object_size(const json_t *object);
@@ -133,6 +141,11 @@ json_t *json_deep_copy(const json_t *value);
 #define JSON_ALLOW_NUL          0x10
 
 json_t *json_loadb(const char *buffer, size_t buflen, size_t flags, json_error_t *error);
+
+typedef void *(*json_malloc_t)(size_t);
+typedef void (*json_free_t)(void *);
+void json_set_alloc_funcs(json_malloc_t allocate, json_free_t release);
+void json_get_alloc_funcs(json_malloc_t *allocate, json_free_t *release);
 
 #ifdef __cplusplus
 }

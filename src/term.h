@@ -2,6 +2,7 @@
 #ifndef SNAJPAGENT_TERM_H
 #define SNAJPAGENT_TERM_H
 #include "wake.h"
+#include "edit_history.h"
 
 #include "base.h"
 #include "history.h"
@@ -70,7 +71,10 @@ enum snag_term_action {
     SNAG_TERM_DICTATE_DONE,
     SNAG_TERM_DICTATE_CANCEL,
     SNAG_TERM_UPLOAD,
-    SNAG_TERM_REMOTE_READY
+    SNAG_TERM_REMOTE_READY,
+    SNAG_TERM_CHECKPOINT,
+    SNAG_TERM_EDITORS,
+    SNAG_TERM_FEEDBACK
 };
 
 struct snag_term_command {
@@ -78,7 +82,9 @@ struct snag_term_command {
     const char *description;
 };
 
-enum snag_term_feedback { SNAG_TERM_CHOICES, SNAG_TERM_CANCELLED };
+enum snag_term_feedback {
+    SNAG_TERM_CHOICES, SNAG_TERM_CANCELLED, SNAG_TERM_ECHO, SNAG_TERM_LOCAL_FEEDBACK
+};
 
 struct snag_term {
     /* A thread-local rendering target for generated reports. */
@@ -87,15 +93,17 @@ struct snag_term {
     void *input_opaque;
     int (*feedback)(void *, enum snag_term_feedback, const char *label, const char *text);
     void *feedback_opaque;
+    bool feedback_yield; /* Finish this input slice after an ordered feedback event. */
     int (*suspend)(void *);
     void *suspend_opaque;
     int output_fd[2];
-    bool input_only, cancel_pending, interrupt_pending, dictating;
+    bool input_only, redraw_pending, cancel_pending, interrupt_pending, dictating;
     char audio_label[64];
     char caption[2][384]; /* Display-only recent text, never composer input. */
     struct snag_term_host host;
     struct snag_terminal_profile backend;
     struct snag_buf draft;
+    struct snag_edit_history edits;
     struct snag_buf search_label;
     struct snag_buf search_query;
     struct snag_buf output_cell;
@@ -147,11 +155,12 @@ struct snag_term {
     bool draft_clamped;
     uint32_t typing_pause_ms;
     uint64_t last_input_ms;
+    uint64_t input_revision;
     uint64_t ctrl_c_since_ms;
     unsigned int ctrl_c_count;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
-    unsigned char escape[16];
+    unsigned char escape[32];
     size_t escape_len;
     unsigned char input[256];
     size_t input_pos;
@@ -272,7 +281,8 @@ int snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
 int snag_term_history_set(
     struct snag_term *term, struct snag_history_snapshot *snapshot, bool refresh);
 int snag_term_restore_draft(struct snag_term *term, const char *text);
-int snag_term_swap_draft(struct snag_term *, struct snag_buf *, size_t *);
+int snag_term_swap_draft(struct snag_term *, struct snag_buf *, size_t *,
+    struct snag_edit_history *);
 int snag_term_insert_draft(struct snag_term *, const char *);
 int snag_term_audio(struct snag_term *, const char *, bool);
 int snag_term_caption(struct snag_term *, unsigned int speaker, const char *);

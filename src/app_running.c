@@ -300,6 +300,7 @@ snag_app_running_tool(struct app_state *app, const struct snag_response_item *ca
     if (!job) goto refused;
     id = snag_json_string(job, "id");
     if (!strcmp(action, "show")) {
+        if (snag_tools_pinned_flush(id, error, size) < 0) return -1;
         json_t *state = job_state(app, job);
         struct snag_buf output = {.max = 8192u};
         struct snag_buf encoded = {.max = 16384u};

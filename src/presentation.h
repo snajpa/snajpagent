@@ -28,6 +28,11 @@ void snag_presentation_writer_close(struct snag_presentation_writer *);
  * historical prefix. Existing streams retain their original boundary. */
 int snag_presentation_start(struct snag_presentation_writer *, uint64_t next_sequence);
 json_t *snag_presentation_snapshot(const struct snag_presentation_writer *);
+/* Replay recent rollout commands and cancellations omitted by model history.
+ * Replayed output is not appended to the retained presentation stream. */
+int snag_presentation_local(struct snag_presentation_writer *, struct snag_render *);
+int snag_presentation_local_records(int fd, const char *id,
+    const struct snag_binary_anchor *bound, json_t **records);
 int snag_presentation_bound(const json_t *, uint64_t *, struct snag_binary_anchor *);
 int snag_presentation_append(struct snag_presentation_writer *, const struct snag_ui_command *);
 int snag_presentation_origin(int fd, const struct snag_binary_anchor *tail,

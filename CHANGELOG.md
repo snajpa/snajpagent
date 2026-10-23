@@ -8,9 +8,49 @@
   directory with permission to query its owner and ACL. Keep credential privacy
   checks intact, including for Unicode profile paths.
 
+- Keep a live native session visible in session lists while its owner appends
+  verified journal entries. Publish cached list metadata only after a stable read.
+
 - Limit automatic model fallback to the failed API call. Return to the primary
   model and context window for the next call, including tool continuations in
   the same turn and resume. Separate primary calls can fall back independently.
+
+- Allow a model switch to continue after one proactive compaction in a long
+  turn instead of compacting the same rebuilt request repeatedly. Reset that
+  request boundary only after a provider response completes.
+
+- Preserve unrouted chat drafts when leaving INSERT and refuse navigation that
+  would discard their frontend. Recover rejected private messages to their
+  frozen recipient after a nickname change. Keep rejection feedback
+  visible in the originating pane. Allow Escape while local command feedback waits
+  for its paused owner, preserving ordered receipts and subsequent typeahead.
+  Position clicked Unicode drafts through the shared terminal editor. Preserve
+  saved pane verbosity and held-history state; keep history scans responsive
+  while another pane streams output.
+
+- Run each attached POSIX workspace pane through its own ordinary terminal
+  frontend, with one controller connection per session. Retain each command echo
+  once and preserve local `/verbose` settings across subsequent owner frames.
+  Retain the input-time prompt, view and exact destination through owner admission.
+  Capture the addressed owner's connection scopes for cross-session commands.
+  Preserve typing sent with a new split and restore refused command-chain drafts.
+  Retain pane output across whole-terminal handoffs and share its current draft
+  with the ordinary terminal. Save editor drafts before explicit detach and exit.
+  Keep refused attachments idle until explicit retry; retain captured input for tool yield.
+  Retain dictation controls and captions; acknowledge the painted capture prompt before audio.
+  Preserve the standalone prompt,
+  editor and rendering inside the pane; use `:history` for retained transcript
+  navigation and selection. Checkpoint ordinary editor drafts on workspace writes
+  and autosave, preserving the previous file when the frontend cannot reply.
+  Retain cancelled drafts across reattachment and wait for owner receipts before
+  detaching. Report uncertain feedback after a connection failure.
+  Retain startup input across workspace saves and recover it as unsent text.
+  Keep private-query selection in the ordinary frontend, save its actual route,
+  and preserve newer source typing when a command receipt selects a conversation.
+  Read terminal scrollback with gg/G, row/page motions and the mouse wheel;
+  keep the displayed rows in place while new output arrives.
+  Share draft undo across split frontends; clear undo at submission and adoption.
+  Copy dragged terminal cells with complete Unicode graphemes and soft-wrap joins.
 
 - Display fenced code as literal, optionally colored contents. Hide fence
   labels and decorative frames so terminal selections copy the contents directly.

@@ -1514,6 +1514,10 @@ prompt; Down at the end selects one newer prompt. History visits the session's
 entries newest first, then the global archive newest first. Returning to the
 newest local boundary restores the unsent draft.
 .TP
+.B Ctrl-_
+Undo the current edit group. Submitting, cancelling or adopting another draft
+clears its undo history. Prompt-history recall starts a fresh edit history.
+.TP
 .BR Ctrl-P , " Ctrl-N"
 Move directly through prompt history, including from inside a multiline draft.
 .TP
@@ -2120,35 +2124,60 @@ editing, owner creation/resumption and persistent split layouts.
 Workspace browsing does not start model turns or IRC connections.
 Runtime activation is explicit; ordinary startup retains its terminal interface.
 .PP
-Transcript panes use the standalone Markdown and tool formatter at the pane's
-width: prose bullets, emphasis, code, tables and tool detail follow the same
-presentation settings. New transcript and conversation views start at verbosity0;
-saved views retain their selected level. Use /verbose inside a controlled pane
-or :verbosity in workspace command mode to change it.
-IRC traffic appears in its channel or query view, separately from the rollout.
-Workspace colors follow [ui] color and NO_COLOR. Split separators identify pane
-boundaries. Each session's prompt carries its status and conversation. The focused
-prompt uses the terminal's normal reverse colors; other prompts use light blue
-when color is enabled. Session panes have no separate status bar.
-Resizing reflows text to the available width. FOLLOW fills the available height
-with recent history, reading across journal pages as needed; HOLD preserves the
-selected source position.
-Pending history loads in other panes continue after resize or catalogue refresh.
-Scrolling stops at the first or last visible output. Pages containing only
-hidden bookkeeping preserve the visible transcript while extending its known boundary.
-Transcript-only restore reads the displayed sessions; opening :sessions loads the
-session catalogue. Pane status begins with the session name when available.
-Each session pane keeps its normal prompt visible, including an empty draft.
-In FOLLOW, the focused pane places the cursor at its prompt immediately,
-including after restore, pane navigation and resize. Moving through history or
-selecting transcript text puts the cursor at that source position; G returns
-to FOLLOW and the prompt.
-Current owners supply their configured prompt, timestamp, effective model,
-context meter and activity state. Prompt colors, word wrapping, multiline
-indentation and mouse hit positions share the standalone composer.
-Older running owners use the workspace configuration and available model state;
-unavailable context and queue counts appear as ?. Updating the installed binary
-preserves running owners; their next normal restart enables the full prompt state.
+On POSIX hosts, an attached session runs the ordinary terminal frontend in a
+pseudoterminal sized to its pane. The frontend renders its configured prompt,
+editor, Markdown, colors and activity indicators. Use its ordinary slash commands,
+including /verbose, while in INSERT. Escape returns to workspace navigation;
+i returns to terminal input. Split separators and the workspace command/status
+line belong to the window manager.
+.PP
+In an attached pane's NORMAL mode, gg/Home reads the oldest retained terminal
+rows and G/End returns to live output. j/k or arrows move by rows; Ctrl-B/F and
+Page Up/Down move by a window, and Ctrl-U/D by half a window. Reading older rows
+holds that position as new output arrives. Entering INSERT returns to live output.
+The mouse wheel scrolls terminal history unless the application has requested
+mouse input; applications that request it receive the wheel events.
+.PP
+Each attached pane has its own terminal frontend and dimensions. Panes displaying
+the same session share one controller connection and draft. Focus transfers the
+current editor state before input reaches the newly focused frontend.
+Private-query selection and Tab use the ordinary frontend's conversation tabs.
+Input entered while a stopped session starts waits for its frontend, including
+Enter and bracketed paste. Escape returns to navigation while that input remains
+retained. Reopening the pane restores its unsent editor; startup does not send
+an unfinished draft.
+Workspace saves retain the frontend's selected route as well as each draft.
+A command receipt preserves newer typing in its source pane; an unavailable editor
+checkpoint leaves that pane unchanged.
+An existing terminal attachment retains its exclusive controller: :attach reports
+the refusal and waits for an explicit :attach after the other terminal detaches. A frontend
+failure leaves its session owner running; :attach starts a replacement frontend.
+Commands echo once when submitted. A local /verbose setting changes subsequent
+output in that pane. Workspace saves retain its current level; the session owner
+also retains the setting for later ordinary attachments.
+Submission retains the editor's prompt label, view, destination and connection
+lifetime from the moment of input. A later owner refresh cannot retarget that
+input. Destination selection and completion use the owner's current catalogue.
+The priority /yield path keeps that same captured input context while a tool is waiting.
+Dictation and voice use the ordinary audio prompt and captions. Capture starts
+only after the frontend's prompt write and the workspace's screen write have
+been acknowledged. Enter finishes dictation; Escape cancels it before returning
+to workspace navigation. A missing presentation acknowledgement refuses capture.
+A failed frontend releases its controller attachment so capture stops; its session
+owner continues running. Use :attach to open a replacement frontend.
+Cancelled drafts are retained by the owner before a pane detaches. Repeated
+cancellations remain separate history entries. If a feedback receipt is missing
+for five seconds, the connection closes with \[lq]Feedback receipt unknown\[rq].
+Inspect history before deciding whether to repeat an action, then use :attach
+to reconnect. A timeout leaves the session owner running.
+.PP
+Use :history to open the retained, read-only transcript for workspace search,
+navigation and selection. History views use the Markdown and tool formatter at
+the pane's width. New history views start at verbosity0; saved views retain their
+selected level. :verbosity changes the historical view. FOLLOW fills its height
+with recent history; HOLD preserves the selected source position. Pending reads
+continue after resize or catalogue refresh. Transcript-only restore reads the
+displayed sessions; :sessions loads the session catalogue.
 .PP
 .B vm -N NAME
 creates a named workspace.
@@ -2164,8 +2193,10 @@ On supported POSIX hosts,
 or
 .B :workspace d
 saves the workspace layout and drafts, releases all agent controllers and
-returns to the shell. Running agents continue. Exit waits for owner draft and
-detach acknowledgements; the shell displays a copyable workspace resume command.
+returns to the shell. Running agents continue. Each terminal frontend flushes its
+queued input before detaching. If it fails to acknowledge within five seconds,
+the workspace reports that final input may be incomplete and closes that
+frontend. The shell displays a copyable workspace resume command.
 Use :session detach, :session d or :detach to release only the focused session
 and keep the workspace open. Earlier development builds used :session detach
 for the whole workspace; that operation is now :workspace detach.
@@ -2217,7 +2248,10 @@ If an owner notification temporarily trails an already displayed snapshot,
 that snapshot remains visible until the owner catches up.
 Current owners retain submitted prompt labels, command output and notices with
 their ordered display operations. Workspace panes replay them through the session
-renderer at the selected verbosity and width. Earlier owners supply their retained
+renderer at the selected verbosity and width. A terminal attachment or live pane
+also restores recent rollout commands and cancelled edits after the last model
+submission. This catch-up uses the most recent retained page; :reports opens
+earlier complete command output. Earlier owners supply their retained
 model history. After a display-retention write failure, the last complete output
 remains available and the workspace reports the cause; session input continues.
 Correct the reported storage problem before restarting the session to restore
@@ -2370,9 +2404,14 @@ Ctrl-W in INSERT retains Vim's delete-word behavior. Ctrl-W also interrupts
 pending history navigation so focus can move immediately.
 Ctrl-W = equalizes proportions, +/- changes height and >/< changes width.
 Terminal shrink temporarily hides windows while preserving their layout.
+Escape checkpoints the frontend editor and returns to window navigation.
+Local command feedback can remain queued while its session owner is paused;
+the workspace retains that feedback until the owner acknowledges it.
+.PP
 Mouse reporting is enabled inside the workspace. Click an attached, writable
 session pane to focus it and enter INSERT. A click on its prompt also positions
-the draft cursor; a body or status click uses the remembered draft position.
+the draft cursor through the shared terminal editor, including wrapped Unicode
+text; a body or status click uses the remembered draft position.
 Clicking preserves FOLLOW or HOLD. Scrolling and dragging text select HOLD.
 Dragging transcript text enters VISUAL selection. Read-only history and report
 clicks place the source cursor. Hits on a wide character,
@@ -2410,6 +2449,11 @@ normal shutdown. :sessions quit and :sessions quit! apply to all controlled
 sessions and exit; the latter preserves workspace drafts for later restoration.
 These commands do not send SIGKILL.
 .PP
+An unsent chat draft without an exact recipient stays in its original frontend.
+Escape returns to window management; commands that would replace that frontend
+are refused. Press i to edit or clear the draft, or use :session quit! to discard
+it and stop its owner.
+.PP
 The session picker's first entry, "New session", creates a session when Enter
 is pressed. This entry remains available when filtering or while the list loads.
 Existing sessions follow it. The picker displays cached metadata immediately and
@@ -2440,12 +2484,24 @@ any nondefault --dotdir.
 Snapshots are private files under $DOTDIR/workspaces/WORKSPACE_ID/workspace.json.
 They retain the layout, focus, selection, filters, transcript source anchors,
 verbosity, FOLLOW/HOLD, per-conversation drafts, command transcript references
-and unresolved submissions, including queued-turn intent. Version14 snapshots read
-earlier workspace versions; older binaries cannot resume a newly saved version14 workspace.
+and unresolved submissions, including queued-turn intent. Version16 snapshots read
+earlier workspace versions; older binaries cannot resume a newly saved version16 workspace.
+Pending frontend input retains its originating window as well as its session.
+Captured commands waiting for owner receipts stay ordered while editor feedback
+and workspace navigation continue. A saved workspace also retains those commands.
+Use :recover in the originating window to restore retained input as unsent text;
+restoring a workspace does not replay an Enter key or send a message. Return keys
+become newlines in the recovered draft. Review that draft before submitting it.
 Unsent classic-attachment input retains its destination session too.
-Restoring a controlled view attempts to reattach its existing owner; a busy or
-unavailable owner leaves the draft intact. Other transcript views read history
-without taking control; FOLLOW restores at the current tail.
+Restoring a native pane reconciles its saved drafts with the existing owner before
+opening the standalone frontend. A busy or unavailable owner leaves the draft intact.
+If both copies changed, use :draft local or :draft owner, then :attach to reopen
+the frontend with the selected text. If an older owner cannot supply the frontend
+state, :attach reports the missing support and preserves the owner and saved
+text. Use :classic to interact with that owner's terminal. A normal session quit
+also requires owner support for inspecting its terminal drafts; quit! discards them.
+Other controlled views attempt to reattach their existing owner. Read-only
+transcript views read history without taking control; FOLLOW restores at the current tail.
 Corrupt or newer unsupported
 state is reported and preserved. Bracketed paste inserts literal text in command
 or filter input; it cannot execute a command by itself. Escape returns to normal
@@ -2539,7 +2595,10 @@ text, literal bracketed paste, arrows, Home/End and Backspace/Delete.
 In FOLLOW, the prompt follows the displayed output. Multiline drafts use the
 same visible range as standalone sessions and keep the editing cursor visible.
 The standalone input editor supplies these controls. Ctrl-U clears the whole draft;
-Ctrl-W deletes the preceding word. Ctrl-P/Ctrl-N navigate prompt history and
+Ctrl-W deletes the preceding word. Ctrl-_ undoes the current edit group.
+In NORMAL, u undoes and Ctrl-R redoes the shared draft; submitting, cancelling
+or adopting another draft clears its undo history. Split focus transfers that
+history with the draft. Ctrl-P/Ctrl-N navigate prompt history and
 Ctrl-R starts reverse history search; Ctrl-G restores the draft before that search.
 Tab completes slash command names or a conversation's @nickname. For an active
 rollout draft that has no completion, Tab queues a future turn. An older owner
@@ -2550,8 +2609,8 @@ and appends the prompt or command and its output to the transcript. Commands
 keep the composer in INSERT, including /query and /chat selections of a writable
 conversation; :report and :reports open retained command output
 explicitly. Background control completions join the originating transcript too.
-Escape and Ctrl-[ leave INSERT,
-preserve the draft and place the cursor on the preceding grapheme within the line.
+Escape and Ctrl-[ leave INSERT and preserve the draft and ordinary editor cursor.
+The legacy composer places the cursor on the preceding grapheme within the line.
 In NORMAL, Tab switches transcript/composer focus.
 Escape followed immediately by text or a control key leaves INSERT or command
 input before interpreting the next key in NORMAL, including fast Escape-colon
@@ -2560,7 +2619,15 @@ Navigation typed while a report or history view first loads is retained in order
 Escape cancels pending navigation; pane switching and composer entry remain available.
 Drafts wrap within the window and survive split changes, detach and workspace resume.
 .PP
-Composer NORMAL controls:
+Live frontend panes support i/I/a/A, shared undo/redo and p/P at the ordinary
+editor cursor. Drag across painted terminal cells to select text; y copies the
+selection to the workspace register and clipboard. h/j/k/l or arrows adjust its
+endpoint; 0/$ move to the displayed row's first/last cell. Escape cancels it.
+Copy preserves whole Unicode graphemes and joins terminal soft wraps. Explicit
+line breaks and indentation from the standalone renderer remain in the copy.
+Typing and clicking preserve HOLD; returning to INSERT with i/I/a/A resumes FOLLOW.
+.PP
+Legacy composer NORMAL controls:
 .TP
 .B h j k l, w b e, 0 ^ $, gg G
 Move by grapheme, logical line or word, to line boundaries or to the first/last
@@ -2589,6 +2656,24 @@ saved draft text remains available through workspace resume.
 .PP
 Unsupported composer commands report a message and leave text unchanged.
 Mouse focus changes cancel pending counts and operators.
+.PP
+Live POSIX panes checkpoint the ordinary editor through its frontend. Workspace
+writes and autosave include text and cursor positions after preceding input.
+Autosave waits for an unfinished bracketed paste to end. If the frontend cannot
+acknowledge a checkpoint, the previous workspace file remains in place and a
+message reports the failure; reconnect with
+.B :attach
+and retry
+.BR :w .
+Older owners without checkpoint support require detaching the pane before saving.
+.PP
+Input typed while a frontend is starting stays with that session until attachment
+completes. Workspace saves also retain undelivered input. After a workspace resume,
+.B :recover
+appends that input to the session's unsent rollout draft. Enter becomes a newline;
+other control bytes become visible escape text. Review the draft before
+.BR :attach .
+Resolve retained input before classic attachment or stopping its owner.
 .PP
 Owners advertising draft support retain an acknowledged copy while detached.
 On attachment, the workspace compares both copies with their last shared text.
@@ -2622,6 +2707,9 @@ with an empty draft to recover its text if needed. A refused submission also
 remains recoverable. Each conversation retains its own pending submission and
 frozen recipient. A nick or connection change preserves the old draft and rejects
 sending it to a different recipient.
+If a nickname change selects the renamed conversation, :recover follows the
+window's retained submission back to its original recipient. Recovery requires
+an empty draft and refuses an ambiguous choice between retained submissions.
 .SS "IRC connection and conversation windows"
 Open a known connection with :buffer SESSION/ENDPOINT/ or :vsp SESSION/ENDPOINT/.
 The trailing slash selects status and server notices for both local identities.
@@ -2771,13 +2859,14 @@ requests produce one completion report for the operation they share.
 /fast confirms ON or OFF in its report; an attached transcript also shows FAST
 when the owner selects priority service. With a supporting owner, commands needing
 terminal interaction automatically open its whole terminal and execute there.
-Both the workspace draft and the classic prompt's existing draft remain intact.
+The pane and ordinary terminal share the session's draft. Returning to the
+workspace restores the current draft and retains output from both interfaces.
 /config, /send, /receive and /attach return automatically after their editor,
 transfer or file preparation finishes. Their receipt remains pending until
 completion; /config's report includes the deferred configuration result.
 A replacement terminal attachment remains open
 when an earlier command finishes. Other terminal commands use /s d to return.
-New typing in the workspace before the handoff remains saved in its draft.
+Typing queued before the handoff remains unsent when the workspace returns.
 .PP
 Use /receive in a rollout composer to upload workstation files through
 snajpagent remote, or /attach PATH for a file on the owner's host. The whole
@@ -2821,7 +2910,7 @@ layout and drafts remain, and visible views reconnect with their previous
 control or observation choice. A stopped or busy owner reports the failure;
 this command never starts another owner.
 .PP
-The classic prompt and workspace composer currently keep separate drafts.
+The classic prompt and workspace pane share the current session draft.
 Keys already read after the :classic command's Enter reach that owner after
 attachment completes, before later terminal input.
 Input remains raw during both directions of the terminal handoff.
@@ -2935,7 +3024,9 @@ does not invoke a shell or provide conditional operators.
 In a workspace, a chain belongs to one session; choose its pane before entering
 it. A first addressed command may select that session, while a later command
 addressing another session is refused before effects. Use the pane-local /search
-separately from owner commands. A chain requiring a whole-terminal command hands
+separately from owner commands. A refused cross-session or pane-search chain
+returns to the same editable prompt; correct it before submitting again.
+A chain requiring a whole-terminal command hands
 off its complete line before any native command runs.
 Owners advertise command-chain support; an older
 owner retains the draft and requests an ordinary exit and resume with the new binary.
@@ -3495,12 +3586,13 @@ feedback, never chat or model input. Input remains available when a level change
 arrives while earlier command output is finishing. The current level is saved on
 orderly exit
 and restored on resume unless explicit -v flags select another level.
-In a workspace, the command shows or changes the submitting pane's level and
-reformats its retained transcript, preserving the reading position. Other panes
-retain their levels. The change follows its original pane if focus moves while
-waiting for the owner. Older owners apply explicit /verbose N to both their
-standalone display and the pane; their argumentless query reports the owner's
-level. Use :verbosity for independent view changes with these owners.
+In an attached workspace pane, the command shows or changes that frontend's
+level for subsequent output. A new pane inherits the owner's current standalone
+level; a restored pane keeps its saved local level, including zero.
+Its existing terminal rows stay unchanged. Other
+panes retain their levels. Feedback follows the submitting pane if focus moves
+while waiting for the owner. Use :verbosity in a retained-history view to
+reformat earlier output at another level while preserving the reading position.
 .TP
 .B /compact
 Compact model context at idle or at a safe active-turn request boundary.
@@ -4305,7 +4397,7 @@ restores archived history. Request-body byte limits apply independently.
 when provider source, model, effort or compaction no longer matches, and
 context-selection advice uses that compatibility check.
 The percentage can fall after a completed
-compaction; each new attempt announces itself.  A long turn can compact again after a completed response and later
+compaction; each new attempt announces itself.  During one rebuilt request, a successful proactive or hard-budget compaction is not repeated before the provider can make progress, including after a model switch.  A long turn can compact again after a completed response and later
 tool progress when its next request exceeds the hard budget.  A recovery rebase clears the
 previous usage measurement while a fresh display estimate remains available.
 Native compaction is used when enabled. Direct ChatGPT/Codex sends a compaction
@@ -7768,10 +7860,12 @@ stages both paths without installing on the host.
 .SS Source builds
 Use GNU make for this Makefile. On the BSDs, install GNU make
 and use gmake for every make invocation in this manual; the base BSD make does
-not parse this Makefile. Install a compiler, pkg-config, libcurl and Jansson
-development files through your platform's package tools. For non-default
-library prefixes, set the Makefile's JANSSON_CFLAGS/JANSSON_LIBS and
-CURL_CFLAGS/CURL_LIBS as needed. The pinned standalone recipes
+not parse this Makefile. Install a compiler, pkg-config and development files for
+libcurl, Jansson, libyaml and Zstandard through your platform's package tools.
+Vim mode also needs the patched snajpagent-vterm library; DEPENDENCIES.md describes
+its separate native build. Configure rejects incompatible terminal headers.
+For non-default prefixes, set the matching dependency CFLAGS/LIBS variables;
+VTERM_CFLAGS and VTERM_LIBS select the terminal library. The pinned standalone recipes
 below provide the separate native Windows build route.
 .PP
 Build from a Git checkout with a C11/POSIX compiler and pthreads. These

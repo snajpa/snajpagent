@@ -406,13 +406,15 @@ in {
   inherit sdk target compiler tools cflags ldflags jansson tls curl av miniaudio regex unistring xml archive iconv zlib cxx pdf png freetype expat fontconfig jpeg openjpeg;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
-    pkgs.stdenvNoCC.mkDerivation {
+    let vterm = cmakeLibrary (import ./libvterm-source.nix { inherit pkgs; })
+      [ "-DSNAG_UNICODE_HEADER=${source}/src/unicode.h" ] [];
+    in pkgs.stdenvNoCC.mkDerivation {
       pname = "${packageName}-freebsd-amd64";
       inherit version;
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ libyaml jansson curl av xml archive ] ++ voiceRtc.dependencies ++ networkLibraries ++ lib.optional early regex
+      buildInputs = [ vterm libyaml jansson curl av xml archive ] ++ voiceRtc.dependencies ++ networkLibraries ++ lib.optional early regex
         ++ [ pdf cxx png freetype expat fontconfig jpeg openjpeg ];
       enableParallelBuilding = true;
       dontConfigure = true;
@@ -439,6 +441,8 @@ in {
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${lib.optionalString early " -DSNAJPAGENT_LEGACY_BSD_JOIN -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include"}'
           'CFLAGS=-std=c11 ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic${lib.optionalString early " -Wl,--wrap=pthread_join"}'
+          "VTERM_CFLAGS=-I${vterm}/include"
+          "VTERM_LIBS=${vterm}/lib/libsnajpagent-vterm.a"
           "YAML_CFLAGS=-I${libyaml}/include"
           "YAML_LIBS=${libyaml}/lib/libyaml.a"
           "ZSTD_CFLAGS=-I${zstd}/include"

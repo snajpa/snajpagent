@@ -100,7 +100,13 @@ snag_binary_wire_decode(struct snag_buf *out, const void *data, size_t size)
         staged.len += chunk - 1u;
         position += chunk;
     }
-    rc = snag_buf_append(out, staged.data, staged.len);
+    if (!out->len && out->cap < staged.len && staged.len <= out->max) {
+        struct snag_buf previous = *out;
+        *out = staged;
+        out->max = previous.max;
+        staged = previous;
+        rc = 0;
+    } else rc = snag_buf_append(out, staged.data, staged.len);
 done:
     snag_buf_free(&staged);
     return rc;

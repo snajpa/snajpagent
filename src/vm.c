@@ -12,6 +12,7 @@
 #include "snajpagent.h"
 #include "term_host.h"
 #include "tmux.h"
+#include "ui.h"
 #include "unicode.h"
 #include "vm_connection.h"
 #include "vm_editor.h"
@@ -22,6 +23,7 @@
 #include "vm_report.h"
 #include "vm_source.h"
 #include "vm_text.h"
+#include "vm_terminal.h"
 #include "vm_workspace.h"
 
 #include <ctype.h>
@@ -37,6 +39,7 @@
 
 #ifndef _WIN32
 #include <poll.h>
+#include <sys/socket.h>
 #endif
 
 #if SNAJPAGENT_VM
@@ -113,7 +116,11 @@ struct vm_window {
     bool anchor_heading, anchor_source, incomplete, best_effort, follow, source_failed;
     uint64_t follow_at;
     unsigned int verbosity;
+    bool verbosity_set;
     enum history_load load;
+    bool native;
+    size_t native_offset, native_anchor, native_cursor, native_width;
+    bool native_select;
     struct snag_vm_cursor begin, end, tail;
 };
 
@@ -126,6 +133,20 @@ struct vm_launch {
     struct snag_app_direct *direct;
     struct snag_view_channel channel;
     bool ready;
+};
+
+struct vm_native {
+    struct vm_native *next;
+    struct snag_vm_terminal *terminal;
+    struct snag_buf pending_input;
+    json_t *selection, *pending_actions;
+    bool recover_input, pending_paste, authoritative, ready, unrouted;
+    uint64_t window, serial, acknowledged, revision, state_revision, feedback_sequence;
+    uint64_t audio_sent, audio_ready, audio_forwarded, audio_generation;
+    char frontend_id[SNAG_ID_HEX_LEN + 1u], audio_instance[SNAG_ID_HEX_LEN + 1u];
+    struct snag_view_channel channel;
+    char session[SNAG_ID_HEX_LEN + 1u];
+    enum { NATIVE_TERMINAL, NATIVE_RECONCILE, NATIVE_READY } phase;
 };
 
 struct vm_pending_input {
@@ -172,6 +193,7 @@ struct vm {
     struct vm_read page, scan;
     struct snag_vm_connection *connections;
     struct vm_launch *launches;
+    struct vm_native *native;
     char *program;
     const char *start_session;
     uint64_t next_launch;
@@ -183,6 +205,10 @@ struct vm {
     struct snag_term_host terminal;
     struct snag_vm_grid grid;
     struct snag_vm_input input;
+#ifndef _WIN32
+    struct pollfd *pollfds;
+    size_t pollfd_capacity;
+#endif
     struct snag_buf command, paste;
     struct snag_vm_register reg;
     struct vm_clipboard clipboard;
@@ -193,7 +219,7 @@ struct vm {
     char mode, prefix;
     char *search_query;
     const char *search_finish;
-    bool searching, copying, navigating, motion_loading, input_drained;
+    bool searching, copying, navigating, motion_loading, input_drained, reading_input;
     bool search_reverse, search_command, ignorecase;
     struct vm_motion_origin motion_origin;
     struct vm_pending_input *pending_input, *pending_input_tail;
@@ -216,7 +242,53 @@ static json_t *selected_row(struct vm *, const struct vm_window *);
 static int buffer_catalog(struct vm *);
 static bool matches(const struct vm_window *, const json_t *);
 static int clipboard_step(struct vm *);
+static int emit(void *, const void *, size_t);
 static void clipboard_settle(struct vm *);
+static int native_broker_step(struct vm *, struct vm_native *);
+static void native_reconcile_step(struct vm *);
+static void attach(struct vm *, const char *);
+static int draw(struct vm *);
+
+static struct snag_vm_terminal *
+native_for(struct vm *vm, const struct vm_window *window)
+{
+    if (!window->native) return NULL;
+    for (struct vm_native *native = vm->native; native; native = native->next)
+        if (native->window == window->id && !strcmp(native->session, window->session_id))
+            return native->terminal;
+    return NULL;
+}
+
+static void
+native_free(struct vm_native *native)
+{
+    json_decref(native->selection);
+    json_decref(native->pending_actions);
+    snag_view_channel_close(&native->channel);
+    snag_vm_terminal_free(native->terminal);
+    snag_buf_free(&native->pending_input);
+    free(native);
+}
+
+static void
+native_unused(struct vm *vm)
+{
+    struct vm_native **link = &vm->native;
+    while (*link) {
+        struct vm_native *native = *link;
+        bool used = false;
+        for (size_t i = 0u; i < vm->count; ++i)
+            if (vm->windows[i].native && vm->windows[i].id == native->window &&
+                !strcmp(vm->windows[i].session_id, native->session))
+                used = true;
+        if (used || native->pending_input.len || json_array_size(native->pending_actions)) {
+            link = &native->next;
+            continue;
+        }
+        *link = native->next;
+        native_free(native);
+    }
+}
 
 static void
 stop_signal(int number)
@@ -322,6 +394,7 @@ connection_visible(const struct vm *vm, const struct snag_vm_connection *c)
 static void
 detach_unused(struct vm *vm)
 {
+    native_unused(vm);
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         if (c->direct || connection_visible(vm, c)) continue;
         c->control = false;
@@ -464,6 +537,7 @@ cancel_search(struct vm *vm)
 static void
 queue_history(struct vm *vm, struct vm_window *window, enum history_load load)
 {
+    if (window->native) return;
     if (load == LOAD_KEEP && (window->load || window->source_failed)) return;
     if (load != LOAD_POLL && load != LOAD_KEEP &&
         !(vm->motion_loading && vm->motion_origin.window == window->id))
@@ -479,6 +553,24 @@ queue_history(struct vm *vm, struct vm_window *window, enum history_load load)
     vm->dirty = true;
 }
 
+/* Captured actions not yet sent to an owner become reviewable unsent text on
+ * restart. Reusing private-input recovery prevents automatic command replay. */
+static int
+native_pending_text(const struct vm_native *native, struct snag_buf *text)
+{
+    for (size_t i = 0u; i < json_array_size(native->pending_actions); ++i) {
+        const json_t *message = json_array_get(native->pending_actions, i);
+        const json_t *value = json_object_get(message, "text");
+        const char *bytes = json_string_value(value);
+        if (!bytes || snag_buf_append(text, bytes, json_string_length(value)) < 0) return -1;
+        uint64_t action;
+        if (snag_json_integer_u64(message, "action", &action) < 0) return -1;
+        if ((action == SNAG_TERM_SUBMIT || action == SNAG_TERM_QUEUE) &&
+            snag_buf_putc(text, '\r') < 0) return -1;
+    }
+    return snag_buf_append(text, native->pending_input.data, native->pending_input.len);
+}
+
 static json_t *
 state_snapshot(const struct vm *vm)
 {
@@ -490,6 +582,10 @@ state_snapshot(const struct vm *vm)
             "kind", view_names[window->kind], "selected", window->selected_id,
             "top", (json_int_t)window->top, "row", (json_int_t)window->selected,
             "filter", window->filter ? window->filter : "");
+        if (row && json_object_set_new(row, "native", json_boolean(window->native)) < 0) {
+            json_decref(row);
+            row = NULL;
+        }
         if (row && window->kind == VIEW_TRANSCRIPT) {
             json_t *history = json_pack("{s:s,s:s,s:I,s:I,s:b,s:i,s:b,s:b,s:O}",
                 "session", window->session_id, "key", window->anchor_key,
@@ -529,7 +625,7 @@ state_snapshot(const struct vm *vm)
         json_decref(windows);
         return NULL;
     }
-    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 14,
+    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 16,
         "focus", (json_int_t)vm->windows[vm->focus].id, "layout", layout,
         "windows", windows, "buffers", buffers);
     json_t *classic = json_null();
@@ -544,6 +640,40 @@ state_snapshot(const struct vm *vm)
         json_decref(result);
         return NULL;
     }
+    json_t *input = json_array();
+    if (!input) { json_decref(result); return NULL; }
+    for (const struct vm_native *native = vm->native; native; native = native->next) {
+        if (!native->pending_input.len && !json_array_size(native->pending_actions)) continue;
+        struct snag_buf encoded = {.max = SIZE_MAX};
+        struct snag_buf held = {.max = SIZE_MAX};
+        const struct snag_buf *bytes = &native->pending_input;
+        int rc = 0;
+        if (json_array_size(native->pending_actions)) {
+            rc = native_pending_text(native, &held);
+            bytes = &held;
+        }
+        if (!rc && !bytes->len) {
+            snag_buf_free(&held);
+            continue;
+        }
+        json_t *row = rc < 0 || snag_base64_append(&encoded, bytes->data,
+            bytes->len) < 0 ? NULL : json_pack("{s:s,s:I,s:o}",
+                "session", native->session, "window", (json_int_t)native->window, "input",
+                json_stringn((const char *)encoded.data, encoded.len));
+        snag_buf_free(&held);
+        snag_buf_free(&encoded);
+        if (!row || json_array_append_new(input, row) < 0) {
+            json_decref(input);
+            json_decref(result);
+            return NULL;
+        }
+    }
+    if (json_array_size(input)) {
+        if (json_object_set_new(result, "native_input", input) < 0) {
+            json_decref(result);
+            return NULL;
+        }
+    } else json_decref(input);
     return result;
 }
 
@@ -553,13 +683,17 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     struct snag_vm_layout *layout = NULL;
     struct vm_window *windows = NULL;
     struct snag_vm_connection *connections = NULL;
+    struct vm_native *native_input = NULL;
     struct snag_session_typeahead classic = {.bytes.max = SNAG_MAX_DIRECT_PROMPT};
     uint64_t focus_id = 0u, next = 0u;
     json_int_t version = json_integer_value(json_object_get(state, "v"));
     size_t count = json_array_size(json_object_get(state, "windows")), focus = SIZE_MAX;
-    if (!snag_json_exact_keys(state, version >= 5 ? "v focus layout windows buffers classic" :
+    const json_t *saved_input = json_object_get(state, "native_input");
+    if (!snag_json_exact_keys(state, saved_input && version >= 15 ?
+        "v focus layout windows buffers classic native_input" :
+        version >= 5 ? "v focus layout windows buffers classic" :
         version >= 3 ? "v focus layout windows buffers" :
-        "v focus layout windows") || (version < 1 || version > 14) || !count ||
+        "v focus layout windows") || (version < 1 || version > 16) || !count ||
         (version >= 3 &&
          snag_vm_connections_load(json_object_get(state, "buffers"), &connections) < 0) ||
         snag_json_integer_u64(state, "focus", &focus_id) < 0 ||
@@ -587,12 +721,17 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
         bool history = kind && !strcmp(kind, "transcript") && version >= 2;
         bool report = kind && !strcmp(kind, "report") && version >= 6;
         bool reports = kind && !strcmp(kind, "reports") && version >= 6;
-        if (!snag_json_exact_keys(row, report && version >= 7 ?
+        const char *fields = report && version >= 7 ?
             "id kind selected top row filter session report byte source" : report ?
             "id kind selected top row filter session report byte" :
             reports ? "id kind selected top row filter session" :
             history ? "id kind selected top row filter history" :
-            "id kind selected top row filter") ||
+            "id kind selected top row filter";
+        char keys[128];
+        (void)snprintf(keys, sizeof(keys), "%s%s", fields, version >= 15 ? " native" : "");
+        if (!snag_json_exact_keys(row, keys) ||
+            (version >= 15 && (!json_is_boolean(json_object_get(row, "native")) ||
+                (json_is_true(json_object_get(row, "native")) && !history))) ||
             snag_json_integer_u64(row, "id", &window->id) < 0 ||
             !snag_vm_layout_contains(layout, window->id) || !kind || !selected || !filter ||
             strlen(filter) != json_string_length(json_object_get(row, "filter")) ||
@@ -644,7 +783,9 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
             window->anchor_heading = json_is_true(json_object_get(saved, "heading"));
             window->anchor_source = json_is_true(json_object_get(saved, "source"));
             window->verbosity = (unsigned int)level;
+            window->verbosity_set = true;
             window->follow = json_is_true(json_object_get(saved, "follow"));
+            window->native = json_is_true(json_object_get(row, "native"));
             json_t *route = json_object_get(saved, "route");
             if (version >= 8 && !json_is_null(route)) {
                 struct snag_irc_conversation_target target;
@@ -686,6 +827,62 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
             if (!strcmp(c->session, windows[i].session_id)) break;
         if (!c || !snag_vm_buffer_get(c, windows[i].route, true)) goto invalid;
     }
+    if (saved_input) {
+        if (!json_is_array(saved_input)) goto invalid;
+        for (size_t i = 0u; i < json_array_size(saved_input); ++i) {
+            const json_t *row = json_array_get(saved_input, i);
+            const char *session = snag_json_bounded_string(
+                json_object_get(row, "session"), SNAG_ID_HEX_LEN);
+            const char *encoded = snag_json_bounded_string(
+                json_object_get(row, "input"), SNAG_MAX_EVENT_LINE);
+            uint64_t window = 0u;
+            if (!snag_json_exact_keys(row, version >= 16 ? "session window input" :
+                    "session input") || !session || strlen(session) != SNAG_ID_HEX_LEN ||
+                !snag_hex_is_lower(session, SNAG_ID_HEX_LEN) || !encoded) goto invalid;
+            if (version >= 16) {
+                if (snag_json_integer_u64(row, "window", &window) < 0 || !window ||
+                    window >= INT64_MAX) goto invalid;
+                for (size_t j = 0u; j < count; ++j)
+                    if (windows[j].id == window && strcmp(windows[j].session_id, session))
+                        goto invalid;
+            } else {
+                for (size_t j = 0u; j < count; ++j)
+                    if (!strcmp(windows[j].session_id, session)) { window = windows[j].id; break; }
+                if (!window) {
+                    if (next >= INT64_MAX - 1u) goto invalid;
+                    window = ++next;
+                }
+            }
+            for (struct vm_native *n = native_input; n; n = n->next)
+                if (n->window == window || (version < 16 && !strcmp(session, n->session)))
+                    goto invalid;
+            if (window > next) next = window;
+            struct snag_vm_connection *connection = connections;
+            while (connection && strcmp(connection->session, session))
+                connection = connection->next;
+            if (!connection) goto invalid;
+            struct vm_native *native = calloc(1u, sizeof(*native));
+            if (!native) goto invalid;
+            snag_view_channel_init(&native->channel, -1);
+            native->next = native_input;
+            native_input = native;
+            native->pending_input.max = SNAG_MAX_EVENT_LINE;
+            if (snag_base64_decode(&native->pending_input, encoded) < 0 ||
+                !native->pending_input.len) goto invalid;
+            native->pending_input.max = SIZE_MAX;
+            memcpy(native->session, session, sizeof(native->session));
+            native->recover_input = true;
+            native->window = window;
+            for (size_t j = 0u; j < count; ++j)
+                if (windows[j].id == window) windows[j].native = false;
+        }
+    }
+    while (vm->native) {
+        struct vm_native *native = vm->native;
+        vm->native = native->next;
+        native_free(native);
+    }
+    vm->native = native_input;
     snag_vm_connections_free(vm->connections);
     vm->connections = connections;
     snag_buf_free(&vm->classic.bytes);
@@ -710,6 +907,11 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     vm->dirty = true;
     return 0;
 invalid:
+    while (native_input) {
+        struct vm_native *native = native_input;
+        native_input = native->next;
+        native_free(native);
+    }
     snag_buf_free(&classic.bytes);
     snag_vm_connections_free(connections);
     windows_free(windows, windows ? count : 0u);
@@ -718,9 +920,193 @@ invalid:
 }
 
 static int
-save(struct vm *vm, const char *name)
+native_step(struct vm *vm, struct vm_native *native)
 {
-    if (!vm->meaningful && !name) return 0;
+    /* A forwarded terminal sequence can wait for outer-terminal output. Its
+     * progress callback must not decode a close command and free this parser. */
+    bool reading = vm->reading_input;
+    vm->reading_input = true;
+    size_t before = snag_vm_terminal_history_rows(native->terminal);
+    int progress = snag_vm_terminal_step(native->terminal);
+    size_t after = snag_vm_terminal_history_rows(native->terminal);
+    vm->reading_input = reading;
+    if (before == after) return progress;
+    for (size_t i = 0u; i < vm->count; ++i) {
+        struct vm_window *window = &vm->windows[i];
+        if (window->follow || native_for(vm, window) != native->terminal) continue;
+        size_t offset = window->native_offset < before ? window->native_offset : before;
+        window->native_offset = after >= before ? offset + (after - before) :
+            offset < after ? offset : after;
+    }
+    return progress;
+}
+
+static int
+native_drafts(struct vm *vm, struct vm_native *native,
+    struct snag_vm_connection *c, const json_t *snapshot)
+{
+    json_t *drafts = json_object_get(snapshot, "drafts");
+    if (!json_is_true(json_object_get(snapshot, "frontend")) || !json_is_array(drafts) ||
+        !json_is_boolean(json_object_get(snapshot, "unrouted"))) return snag_errno(EINVAL);
+    uint64_t verbosity = 0u;
+    bool level = json_object_get(snapshot, "verbosity") != NULL;
+    if (level && (snag_json_integer_u64(snapshot, "verbosity", &verbosity) < 0 ||
+        verbosity > SNAG_VERBOSITY_MAX)) return snag_errno(EINVAL);
+    for (size_t i = 0u; i < json_array_size(drafts); ++i) {
+        json_t *row = json_array_get(drafts, i);
+        const json_t *route = json_object_get(row, "route");
+        const json_t *value = json_object_get(row, "text");
+        const char *text = json_string_value(value);
+        size_t length = json_string_length(value);
+        if (!text || length > SNAG_MAX_DIRECT_PROMPT || strlen(text) != length ||
+            !snag_utf8_valid((const unsigned char *)text, length, true)) return snag_errno(EINVAL);
+        uint64_t cursor;
+        if (snag_json_integer_u64(row, "cursor", &cursor) < 0 ||
+            cursor > length) return snag_errno(EINVAL);
+        struct snag_vm_buffer *buffer = snag_vm_buffer_get(c, route, true);
+        if (!buffer || buffer->draft_conflict) return snag_errno(EINVAL);
+        bool equal = buffer->draft.len == length &&
+            (!length || !memcmp(buffer->draft.data, text, length));
+        if (!equal && snag_vm_draft_replace(buffer, 0u, buffer->draft.len, text, length) < 0)
+            return snag_errno(EINVAL);
+        snag_vm_draft_cursor(buffer, (size_t)cursor);
+        json_t *history = json_object_get(row, "history");
+        if (history) {
+            if (!json_is_object(history)) return snag_errno(EINVAL);
+            json_decref(buffer->native_history);
+            buffer->native_history = json_incref(history);
+        }
+    }
+    const json_t *route = json_object_get(snapshot, "route");
+    if (route) {
+        if (!json_is_null(route) && (!json_is_object(route) ||
+            !snag_vm_buffer_get(c, route, true))) return snag_errno(EINVAL);
+        for (size_t i = 0u; i < vm->count; ++i) {
+            struct vm_window *window = &vm->windows[i];
+            if (!window->native || window->id != native->window ||
+                strcmp(window->session_id, native->session)) continue;
+            json_decref(window->route);
+            window->route = json_is_null(route) ? NULL : json_incref((json_t *)route);
+            if (level) {
+                window->verbosity = (unsigned int)verbosity;
+                window->verbosity_set = true;
+            }
+        }
+    }
+    native->unrouted = json_is_true(json_object_get(snapshot, "unrouted"));
+    return native->unrouted ? 1 : 0;
+}
+
+static int
+native_checkpoint(struct vm *vm, struct vm_native *native, bool wait)
+{
+#ifndef _WIN32
+    struct snag_vm_connection *c = connection_for(vm, native->session, true);
+    if (!c) return -1;
+    if (!snag_view_channel_opened(&c->channel) &&
+        snag_vm_connection_open(c, &vm->store, false) < 0) return -1;
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    /* Escape may arrive with the first keystrokes, before the outer loop has
+     * created this frontend. Preserve the editor before a view can replace it. */
+    while (!native->terminal) {
+        if (!wait) return snag_errno(EAGAIN);
+        if ((stopped && !vm->quit) || snag_monotonic_ms() >= deadline)
+            return snag_errno(stopped ? EINTR : ETIMEDOUT);
+        snag_vm_connection_step(c);
+        native_reconcile_step(vm);
+        if (native->phase == NATIVE_READY) attach(vm, "");
+        if (native->terminal) break;
+        if (native->phase != NATIVE_RECONCILE) return snag_errno(EPIPE);
+        struct pollfd fd = {.fd = c->channel.fd, .events = POLLIN |
+            (c->channel.output ? POLLOUT : 0)};
+        if (poll(&fd, 1u, 10) < 0 && errno != EINTR) return -1;
+    }
+    while (!c->hello && snag_view_channel_opened(&c->channel) && (!stopped || vm->quit) &&
+        snag_monotonic_ms() < deadline) {
+        if (!wait) return snag_errno(EAGAIN);
+        snag_vm_connection_step(c);
+        if (native_step(vm, native) < 0) return -1;
+        struct pollfd fd = {.fd = c->channel.fd, .events = POLLIN |
+            (c->channel.output ? POLLOUT : 0)};
+        if (poll(&fd, 1u, 10) < 0 && errno != EINTR) return -1;
+    }
+    /* Finish an in-flight frame and its retained input before ordering the
+     * checkpoint. Unknown private input must not reach an older editor. */
+    while (!native->ready || native->pending_input.len) {
+        if (!wait) return snag_errno(EAGAIN);
+        if ((stopped && !vm->quit) || snag_monotonic_ms() >= deadline)
+            return snag_errno(stopped ? EINTR : ETIMEDOUT);
+        if (!c->bound || !snag_view_channel_opened(&native->channel))
+            return snag_errno(EPIPE);
+        snag_vm_connection_step(c);
+        if (native_broker_step(vm, native) < 0 || native_step(vm, native) < 0) return -1;
+        /* Retained input waits for an actual first paint, including its audio
+         * acknowledgement. Keep that paint progressing during this checkpoint. */
+        if (native->ready && native->pending_input.len && c->frontend_audio &&
+            !native->audio_forwarded && draw(vm) < 0) return -1;
+        struct pollfd fd[] = {{c->channel.fd, POLLIN |
+            (c->channel.output ? POLLOUT : 0), 0}, {native->channel.fd, POLLIN |
+            (native->channel.output ? POLLOUT : 0), 0},
+            {snag_vm_terminal_fd(native->terminal), POLLIN |
+            (snag_vm_terminal_writing(native->terminal) ? POLLOUT : 0), 0}};
+        if (poll(fd, 3u, 10) < 0 && errno != EINTR) return -1;
+    }
+    if (snag_vm_terminal_checkpoint(native->terminal, wait) < 0) return -1;
+    json_t *snapshot = NULL;
+    while ((!stopped || vm->quit) && snag_monotonic_ms() < deadline) {
+        snag_vm_connection_step(c);
+        if (native_broker_step(vm, native) < 0) return -1;
+        int progress = native_step(vm, native);
+        if (progress < 0) return -1;
+        snapshot = snag_vm_terminal_checkpoint_snapshot(native->terminal);
+        if (snapshot) break;
+        if (!wait) return snag_errno(EAGAIN);
+        if (progress) continue;
+        struct pollfd fd[] = {{c->channel.fd, POLLIN |
+            (c->channel.output ? POLLOUT : 0), 0}, {native->channel.fd, POLLIN |
+            (native->channel.output ? POLLOUT : 0), 0},
+            {snag_vm_terminal_fd(native->terminal), POLLIN |
+            (snag_vm_terminal_writing(native->terminal) ? POLLOUT : 0), 0}};
+        if (fd[2].fd < 0) return snag_errno(EPIPE);
+        if (poll(fd, 3u, 20) < 0 && errno != EINTR) return -1;
+    }
+    if (!snapshot) return snag_errno(stopped ? EINTR : ETIMEDOUT);
+    int rc = native_drafts(vm, native, c, snapshot);
+    const json_t *feedback = json_object_get(snapshot, "feedback");
+    const char *id = snag_json_string(feedback, "frontend");
+    uint64_t event = 0u;
+    if (rc >= 0 && (!id || strlen(id) != SNAG_ID_HEX_LEN ||
+        !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
+        snag_json_integer_u64(feedback, "event", &event) < 0)) rc = -1;
+    /* Navigation needs the frontend's captured feedback, not the owner's
+     * receipt. The connection keeps its ordered feedback through detach. */
+    while (rc >= 0 && native->feedback_sequence < event) {
+        if (!c->bound || !snag_view_channel_opened(&native->channel)) { rc = -1; break; }
+        if (!wait) { rc = snag_errno(EAGAIN); break; }
+        if ((stopped && !vm->quit) || snag_monotonic_ms() >= deadline) {
+            rc = snag_errno(stopped ? EINTR : ETIMEDOUT); break;
+        }
+        snag_vm_connection_step(c);
+        if (native_step(vm, native) < 0 || native_broker_step(vm, native) < 0) {
+            rc = -1; break;
+        }
+        struct pollfd fd[] = {{c->channel.fd, POLLIN |
+            (c->channel.output ? POLLOUT : 0), 0}, {native->channel.fd, POLLIN |
+            (native->channel.output ? POLLOUT : 0), 0}};
+        if (poll(fd, 2u, 10) < 0 && errno != EINTR) { rc = -1; break; }
+    }
+    if (rc >= 0 && event && strcmp(id, native->frontend_id)) rc = snag_errno(ESTALE);
+    json_decref(snapshot);
+    return rc > 0 ? snag_errno(ENOTSUP) : rc;
+#else
+    (void)vm; (void)native; (void)wait;
+    return snag_errno(ENOTSUP);
+#endif
+}
+
+static int
+save_snapshot(struct vm *vm, const char *name)
+{
     json_t *state = state_snapshot(vm);
     char error[256] = "cannot save workspace";
     int rc = -1;
@@ -740,6 +1126,43 @@ save(struct vm *vm, const char *name)
     /* Failed storage stays visible; retry on another edit or explicit save. */
     vm->save_at = 0u;
     return rc;
+}
+
+static int
+save_checkpoint(struct vm *vm, const char *name, bool wait)
+{
+    if (!vm->meaningful && !name) return 0;
+    for (struct vm_native *native = vm->native; native; native = native->next) {
+        if (native->pending_input.len || !native->terminal || !native->authoritative) continue;
+        struct snag_vm_connection *connection = connection_for(vm, native->session, false);
+        /* Shutdown already checkpointed every editor before stopping any owner.
+         * Its final snapshot cannot reopen the endpoint of an exited owner. */
+        if (connection && connection->exited) continue;
+        if (native_checkpoint(vm, native, wait) < 0) {
+            if (errno == EAGAIN && !wait) {
+                vm->save_at = snag_monotonic_ms() + 20u;
+                return -1;
+            }
+            char message[256];
+            if (errno == ENOTSUP)
+                (void)snag_strcpy(message, sizeof(message),
+                    "Unsent draft without an exact chat route; workspace was not saved");
+            else
+                (void)snprintf(message, sizeof(message),
+                    "Frontend draft checkpoint unavailable (%s); workspace was not saved",
+                    strerror(errno));
+            command_error(vm, message);
+            vm->save_at = 0u;
+            return -1;
+        }
+    }
+    return save_snapshot(vm, name);
+}
+
+static int
+save(struct vm *vm, const char *name)
+{
+    return save_checkpoint(vm, name, true);
 }
 
 static uint64_t
@@ -819,6 +1242,23 @@ search(struct vm *vm, const char *query, bool reverse, bool command_input)
 {
     struct vm_window *window = &vm->windows[vm->focus];
     if (!document_view(window)) { notice(vm, "Search needs a transcript or report"); return; }
+    if (window->native) {
+        for (struct vm_native *native = vm->native; native; native = native->next) {
+            if (native->window != window->id ||
+                strcmp(native->session, window->session_id)) continue;
+            if (native_checkpoint(vm, native, true) < 0) {
+                notice(vm, "Cannot inspect editor before searching retained history");
+                return;
+            }
+            break;
+        }
+        /* Search navigates the retained document, not the live terminal grid.
+         * Keep the owner and selected route; INSERT reopens its actual frontend. */
+        window->native = false;
+        window->follow = false;
+        vm->composer = vm->insert = false;
+        native_unused(vm);
+    }
     if (query && *query) {
         char *copy = snag_strdup_checked(query, SNAG_MAX_DIRECT_PROMPT);
         if (!copy) { notice(vm, "Cannot retain search text"); return; }
@@ -906,7 +1346,8 @@ install_workspace(struct vm *vm, struct snag_vm_workspace *next)
     vm->workspace = next;
     vm->meaningful = true;
     vm->save_dirty = false;
-    notice(vm, vm->classic_uncertain ?
+    notice(vm, vm->native ? "Retained frontend input; :recover restores unsent text" :
+        vm->classic_uncertain ?
         "Saved classic input has an uncertain outcome; inspect history, then :recover" :
         "Workspace restored");
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
@@ -930,6 +1371,11 @@ restore_workspace(struct vm *vm, const char *selector)
     int rc = snag_vm_workspace_open(next, &vm->store, selector, error, sizeof(error));
     if (!rc) rc = state_restore(&checked, json_object_get(next->snapshot, "state"),
         error, sizeof(error));
+    while (checked.native) {
+        struct vm_native *native = checked.native;
+        checked.native = native->next;
+        native_free(native);
+    }
     snag_vm_connections_free(checked.connections);
     snag_buf_free(&checked.classic.bytes);
     windows_free(checked.windows, checked.count);
@@ -956,6 +1402,13 @@ static void
 split(struct vm *vm, enum snag_vm_split axis)
 {
     cancel_search(vm);
+    for (struct vm_native *n = vm->native; n; n = n->next) {
+        if (n->window == vm->windows[vm->focus].id && n->authoritative &&
+            native_checkpoint(vm, n, true) < 0) {
+            command_error(vm, "Cannot split before preserving the frontend editor");
+            return;
+        }
+    }
     if (vm->count == SIZE_MAX / sizeof(*vm->windows) || vm->next_window > INT64_MAX) {
         command_error(vm, "Cannot add another window");
         return;
@@ -992,6 +1445,16 @@ split(struct vm *vm, enum snag_vm_split axis)
 
 static void view(struct vm *vm, enum view_kind kind);
 
+static bool
+native_receiving(const struct snag_vm_connection *connection)
+{
+    if (!connection || !connection->bound || !connection->state ||
+        json_array_size(connection->feedback) || connection->feedback_deadline) return false;
+    for (const struct snag_vm_buffer *buffer = connection->buffers; buffer; buffer = buffer->next)
+        if (buffer->pending) return false;
+    return true;
+}
+
 static void
 detach_workspace(struct vm *vm)
 {
@@ -1002,6 +1465,38 @@ detach_workspace(struct vm *vm)
     }
     cancel_search(vm);
     if (save(vm, NULL) < 0) return;
+#ifndef _WIN32
+    /* Feedback can display a local command before its owner admission. Drain
+     * captured actions before releasing that controller; retain any remainder
+     * if the owner is unavailable, just as on a failed connection. */
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    for (struct vm_native *native = vm->native; native; native = native->next) {
+        if (!native->terminal || !snag_view_channel_opened(&native->channel)) continue;
+        struct snag_vm_connection *c = connection_for(vm, native->session, false);
+        while (c && c->bound && snag_view_channel_opened(&c->channel) &&
+            snag_monotonic_ms() < deadline) {
+            bool admitting = json_array_size(native->pending_actions) || c->inflight;
+            for (const struct snag_vm_buffer *b = c->buffers; b; b = b->next)
+                admitting |= b->send_pending;
+            /* An unresolved retained receipt is not an active admission. */
+            if (!admitting) break;
+            snag_vm_connection_step(c);
+            if (native_step(vm, native) < 0 || native_broker_step(vm, native) < 0) break;
+            struct pollfd fd[] = {{c->channel.fd, POLLIN |
+                (c->channel.output ? POLLOUT : 0), 0}, {native->channel.fd, POLLIN |
+                (native->channel.output ? POLLOUT : 0), 0}};
+            if (poll(fd, 2u, 10) < 0 && errno != EINTR) break;
+        }
+    }
+#endif
+    /* The checkpoint is ordered after final editor input. Stop the frontend
+     * before closing observers so the exit save cannot request another reply. */
+    for (struct vm_native *native = vm->native; native; native = native->next) {
+        snag_vm_terminal_free(native->terminal);
+        native->terminal = NULL;
+        snag_view_channel_close(&native->channel);
+    }
+    /* Keep undelivered input through the final save. */
     vm->detach_exit = true;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
         snag_vm_connection_detach(c);
@@ -1011,6 +1506,14 @@ detach_workspace(struct vm *vm)
 static void
 close_window(struct vm *vm)
 {
+    for (struct vm_native *n = vm->native; n; n = n->next) {
+        if (n->window != vm->windows[vm->focus].id || !n->authoritative || !n->terminal)
+            continue;
+        if (native_checkpoint(vm, n, true) < 0) {
+            command_error(vm, "Cannot close before preserving the frontend editor");
+            return;
+        }
+    }
     cancel_search(vm);
     if (vm->count == 1u) {
         if (direct_session(vm)) {
@@ -1054,6 +1557,7 @@ view(struct vm *vm, enum view_kind kind)
     window->report_catalog = window->report_open_pending = false;
     window->report_selector[0] = '\0';
     window->load = LOAD_NONE;
+    window->native = false;
     window->visual.kind = SNAG_VM_SELECT_NONE;
     window->yank_motion = window->yank_after_load = false;
     window->follow = window->source_failed = false;
@@ -1088,6 +1592,7 @@ open_history(struct vm *vm, const char *selector)
         struct vm_window *window = &vm->windows[vm->focus];
         memcpy(window->session_id, location.id, sizeof(window->session_id));
         window->verbosity = 0u;
+        window->verbosity_set = false;
         window->follow = true;
         window->best_effort = true;
         struct snag_vm_connection *c = connection_for(vm, location.id, true);
@@ -1112,6 +1617,7 @@ open_conversation(struct vm *vm, struct snag_vm_buffer *buffer)
     memcpy(window->session_id, buffer->connection->session, sizeof(window->session_id));
     window->route = route;
     window->verbosity = 0u;
+    window->verbosity_set = false;
     window->follow = true;
     window->best_effort = true;
     queue_history(vm, window, LOAD_LAST);
@@ -1481,6 +1987,102 @@ attach(struct vm *vm, const char *selector)
         command_error(vm, "Use :attach SESSION or Enter in the session picker");
         return;
     }
+    if (snag_session_host_supported()) {
+        window->native = true;
+        struct vm_native *native = vm->native;
+        while (native && (native->window != window->id ||
+            strcmp(native->session, window->session_id))) native = native->next;
+        if (!native) {
+            native = calloc(1u, sizeof(*native));
+            if (!native) {
+                window->native = false;
+                command_error(vm, "Cannot allocate pane");
+                return;
+            }
+            snag_view_channel_init(&native->channel, -1);
+            native->window = window->id;
+            native->pending_input.max = SIZE_MAX;
+            memcpy(native->session, window->session_id, sizeof(native->session));
+            native->next = vm->native;
+            vm->native = native;
+        }
+        if (native->recover_input) {
+            window->native = false;
+            command_error(vm,
+                "Retained frontend input; :recover restores unsent text before :attach");
+            return;
+        }
+        if (window->launch) {
+            native->phase = NATIVE_RECONCILE;
+            vm->composer = vm->insert = true;
+            notice(vm, "Starting owner; frontend input is retained until it is ready");
+            changed(vm);
+            return;
+        }
+        struct snag_vm_connection *c = connection_for(vm, window->session_id, true);
+        if (!c) { command_error(vm, "Cannot retain session controller"); return; }
+        if ((!c->control || !snag_view_channel_opened(&c->channel) ||
+                (c->hello && !c->bound && !c->deadline)) &&
+            snag_vm_connection_open(c, &vm->store, true) < 0) {
+            window->native = false;
+            command_error(vm, c->message);
+            return;
+        }
+        if (native->terminal && (snag_vm_terminal_fd(native->terminal) < 0 ||
+            !snag_view_channel_opened(&native->channel))) {
+            snag_view_channel_close(&native->channel);
+            snag_vm_terminal_free(native->terminal);
+            native->terminal = NULL;
+            native->ready = native->authoritative = false;
+            native->serial = native->acknowledged = 0u;
+            native->revision = native->feedback_sequence = 0u;
+            native->frontend_id[0] = 0;
+            native->phase = NATIVE_READY;
+        }
+        if (!native->terminal && native->phase != NATIVE_READY) {
+            native->phase = NATIVE_RECONCILE;
+            vm->composer = vm->insert = true;
+            notice(vm, "Reconciling saved drafts before opening the frontend");
+            changed(vm);
+            return;
+        }
+        if (!native->terminal) {
+#ifndef _WIN32
+            int pair[2];
+            if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) < 0) {
+                command_error(vm, "Cannot open frontend channel");
+                return;
+            }
+            if (snag_fd_cloexec(pair[0]) < 0 || snag_fd_cloexec(pair[1]) < 0 ||
+                fcntl(pair[0], F_SETFL, O_NONBLOCK) < 0) {
+                (void)close(pair[0]); (void)close(pair[1]);
+                command_error(vm, "Cannot configure frontend channel");
+                return;
+            }
+            unsigned int rows = window->rectangle.rows ? window->rectangle.rows : 24u;
+            unsigned int columns = window->rectangle.columns ? window->rectangle.columns : 80u;
+            native->terminal = snag_vm_terminal_frontend(vm->program, pair[1], rows,
+                columns, emit, vm);
+            (void)close(pair[1]);
+            if (!native->terminal) {
+                (void)close(pair[0]);
+                window->native = false;
+                command_error(vm, "Cannot start standalone frontend");
+                return;
+            }
+            snag_view_channel_init(&native->channel, pair[0]);
+            native->phase = NATIVE_TERMINAL;
+#else
+            command_error(vm, "Private frontend unavailable on this platform");
+            return;
+#endif
+        }
+        window->load = LOAD_NONE;
+        vm->composer = vm->insert = true;
+        notice(vm, "INSERT  Esc: window navigation; :close detaches this frontend");
+        changed(vm);
+        return;
+    }
     struct snag_vm_connection *c = connection_for(vm, window->session_id, true);
     if (!c) { command_error(vm, "Cannot retain session connection"); return; }
     if (!snag_session_host_supported() && !c->direct) {
@@ -1573,11 +2175,12 @@ launch_result(struct vm *vm, struct vm_launch *job, const char *id, const char *
         if (!id) continue;
         size_t focus = vm->focus;
         bool composer = vm->composer, insert = vm->insert;
+        bool editing = vm->windows[i].native;
         vm->focus = i;
         if (job->direct) (void)open_history(vm, id);
         else attach(vm, id);
         vm->focus = focus;
-        if (focus != i) {
+        if (focus != i || editing) {
             vm->composer = composer;
             vm->insert = insert;
         }
@@ -1685,6 +2288,11 @@ classic_request(struct vm *vm, const char *selector)
         command_error(vm, "Classic attachment is unavailable on this host");
         return;
     }
+    for (struct vm_native *native = vm->native; native; native = native->next)
+        if (native->pending_input.len || json_array_size(native->pending_actions)) {
+            command_error(vm, "Retained frontend input; :recover before classic attachment");
+            return;
+        }
     if (vm->classic_uncertain && vm->classic.bytes.len) {
         command_error(vm,
             "Saved classic input has an uncertain outcome; inspect history, then :recover");
@@ -1694,7 +2302,7 @@ classic_request(struct vm *vm, const char *selector)
     if (!*selector) selector = vm->classic.bytes.len ? vm->classic.session :
         window->session_id[0] ? window->session_id :
         window->kind == VIEW_SESSIONS ? snag_json_string(selected_row(vm, window), "id") : "";
-    if (!*selector) {
+    if (!selector || !*selector) {
         command_error(vm, "Use :classic SESSION_ID or select a session");
         return;
     }
@@ -1712,6 +2320,12 @@ classic_request(struct vm *vm, const char *selector)
         command_error(vm, "Queued classic input belongs to another session; :recover it first");
         return;
     }
+    for (struct vm_native *native = vm->native; native; native = native->next)
+        if (native->terminal && native->authoritative &&
+            native_checkpoint(vm, native, true) < 0) {
+            command_error(vm, "Cannot checkpoint frontend before classic attachment");
+            return;
+        }
     memset(vm->classic.command, 0, sizeof(vm->classic.command));
     struct snag_vm_connection *source = connection_for(vm, id, false);
     if (source && source->terminal_commands && source->rollout->terminal_result &&
@@ -1724,10 +2338,88 @@ classic_request(struct vm *vm, const char *selector)
     memcpy(vm->classic.session, id, sizeof(id));
     vm->classic_pending = true;
     vm->classic_ready = false;
+    /* Frontends hold no controller lease. Keep their screen and presentation
+     * cursor while the ordinary attachment temporarily owns the terminal. */
+    for (struct vm_native *native = vm->native; native; native = native->next)
+        native->authoritative = false;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
         snag_vm_connection_detach(c);
     notice(vm, "Saving owner drafts before classic attachment; /s d returns here");
     changed(vm);
+}
+
+static bool
+native_recover(struct vm *vm)
+{
+    const struct vm_window *window = &vm->windows[vm->focus];
+    struct vm_native *native = NULL;
+    for (struct vm_native *n = vm->native; n; n = n->next) {
+        if ((!n->pending_input.len && !json_array_size(n->pending_actions)) ||
+            strcmp(n->session, window->session_id)) continue;
+        if (n->window == window->id) { native = n; break; }
+        bool present = false;
+        for (size_t i = 0u; i < vm->count; ++i)
+            present |= vm->windows[i].id == n->window;
+        if (present) continue;
+        if (native) {
+            command_error(vm, "Multiple closed-pane inputs remain; inspect their workspace");
+            return true;
+        }
+        native = n;
+    }
+    if (!native) return false;
+    if (json_array_size(native->pending_actions) &&
+        snag_view_channel_opened(&native->channel)) {
+        command_error(vm, "Frontend commands still await owner receipts");
+        return true;
+    }
+    struct snag_buf held = {.max = SIZE_MAX};
+    const struct snag_buf *input = &native->pending_input;
+    if (json_array_size(native->pending_actions)) {
+        if (native_pending_text(native, &held) < 0) {
+            snag_buf_free(&held);
+            command_error(vm, "Cannot recover queued input; original input remains saved");
+            return true;
+        }
+        input = &held;
+    }
+    struct snag_buf text = {.max = SNAG_MAX_DIRECT_PROMPT};
+    for (size_t i = 0u; i < input->len;) {
+        const unsigned char *bytes = input->data + i;
+        uint32_t cp;
+        size_t count = snag_utf8_decode(bytes, input->len - i, &cp);
+        int rc;
+        if (*bytes == '\r') { count = 1u; rc = snag_buf_putc(&text, '\n'); }
+        else if (!count || (*bytes < 32u && *bytes != '\n' && *bytes != '\t') || *bytes == 127u) {
+            count = 1u;
+            rc = snag_buf_printf(&text, "\\x%02x", *bytes);
+        } else rc = snag_buf_append(&text, bytes, count);
+        if (rc < 0) {
+            command_error(vm, "Cannot recover queued input; original bytes remain saved");
+            snag_buf_free(&held);
+            snag_buf_free(&text);
+            return true;
+        }
+        i += count;
+    }
+    snag_buf_free(&held);
+    struct snag_vm_connection *connection = connection_for(vm, native->session, true);
+    struct snag_vm_buffer *buffer = connection ? connection->rollout : NULL;
+    if (!buffer || snag_vm_draft_replace(buffer, buffer->draft.len, buffer->draft.len,
+        (const char *)text.data, text.len) < 0) {
+        command_error(vm, "Cannot recover queued input; original bytes remain saved");
+    } else {
+        snag_buf_reset(&native->pending_input);
+        json_decref(native->pending_actions);
+        native->pending_actions = NULL;
+        native->recover_input = false;
+        vm->composer = vm->insert = true;
+        changed(vm);
+        if (save(vm, NULL) == 0)
+            notice(vm, "Frontend input recovered as unsent text; review before :attach");
+    }
+    snag_buf_free(&text);
+    return true;
 }
 
 static bool
@@ -1779,6 +2471,26 @@ quit_sessions(struct vm *vm, bool all, bool force)
     struct snag_vm_connection *focused = focused_connection(vm);
     struct vm_launch *direct = direct_session(vm);
     bool any = false;
+    for (struct vm_native *native = vm->native; native; native = native->next)
+        if ((native->pending_input.len || json_array_size(native->pending_actions)) &&
+            (all || (focused && !strcmp(native->session, focused->session)))) {
+            command_error(vm, "Retained frontend input; :recover before stopping its owner");
+            return;
+        }
+    /* Frontends own editors; this process retains the single controller lease. */
+    if (!force || all) {
+        for (struct vm_native *native = vm->native; native; native = native->next) {
+            if (!native->terminal || !native->authoritative ||
+                (!all && (!focused || strcmp(native->session, focused->session)))) continue;
+            if (native_checkpoint(vm, native, true) < 0) {
+                command_error(vm, errno == ENOTSUP ?
+                    "Unsent draft without an exact chat route; :session quit! discards it" :
+                    "Cannot inspect frontend draft or exact chat route; "
+                    ":close preserves it, :session quit! discards it");
+                return;
+            }
+        }
+    }
     if (all) {
         for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
             if ((!c->bound || c->detaching) && !c->exited && !c->direct &&
@@ -1809,6 +2521,13 @@ quit_sessions(struct vm *vm, bool all, bool force)
             (!all && c != focused)) continue;
         if (c->detaching) {
             command_error(vm, "Session is detaching; :attach it before requesting shutdown");
+            return;
+        }
+        if (!force && (!c->terminal_drafts || c->terminal_unrouted)) {
+            command_error(vm, !c->terminal_drafts ?
+                "Owner cannot inspect terminal drafts; :classic to inspect, "
+                ":close preserves them, :session quit! discards" :
+                "Unsent owner draft without an exact chat route; :classic to inspect it");
             return;
         }
         if (!force && snag_vm_connection_unsaved(c)) {
@@ -1857,6 +2576,9 @@ load_history(struct vm *vm)
 {
     for (size_t i = 0u; i < vm->count; ++i) {
         struct vm_window *window = &vm->windows[(vm->focus + i) % vm->count];
+        /* The standalone frontend owns live presentation. Only an explicit
+         * report request needs a catalogue read before leaving that frontend. */
+        if (window->native && !window->report_catalog) continue;
         if (vm->scan.window == window->id) continue;
         if (window->report_catalog && window->rectangle.visible) {
             if (vm->page.generation && (i || !vm->page.window)) return;
@@ -1949,6 +2671,20 @@ detach_session(struct vm *vm)
             ":close hides it, :session quit stops it");
         return;
     }
+    for (struct vm_native *native = vm->native; native; native = native->next)
+        if (native->terminal && native->authoritative &&
+            !strcmp(native->session, connection->session) &&
+            native_checkpoint(vm, native, true) < 0) {
+            command_error(vm, "Cannot preserve frontend draft before detach");
+            return;
+        }
+    for (size_t i = 0u; i < vm->count; ++i) {
+        struct vm_window *window = &vm->windows[i];
+        if (!window->native || strcmp(window->session_id, connection->session)) continue;
+        window->native = false;
+        queue_history(vm, window, LOAD_LAST);
+    }
+    native_unused(vm);
     connection->control = false;
     snag_vm_connection_detach(connection);
     vm->composer = vm->insert = false;
@@ -1966,6 +2702,7 @@ window_verbosity(struct vm *vm, struct vm_window *window, unsigned int level)
     window->visual.kind = SNAG_VM_SELECT_NONE;
     window->yank_motion = window->yank_after_load = false;
     window->verbosity = level;
+    window->verbosity_set = true;
     queue_history(vm, window, LOAD_KEEP);
     changed(vm);
 }
@@ -1977,6 +2714,16 @@ command_single(struct vm *vm, const char *text)
     const char *rest;
     if (snag_irc_address_operand(text, &word, &rest, error, sizeof(error)) < 0) {
         command_error(vm, error);
+        return;
+    }
+    for (struct vm_native *native = vm->native; native; native = native->next) {
+        if (native->window != vm->windows[vm->focus].id || !native->unrouted) continue;
+        /* An unrouted draft can only stay in its original frontend. Leave it
+         * alive until its editor clears it or the user discards the session. */
+        if (!strcmp(word, "session") && snag_string_in(rest, "quit quit!")) break;
+        command_error(vm, "Unsent draft without an exact chat route; "
+            "i to edit it, :session quit! discards it");
+        free(word);
         return;
     }
     if (!strcmp(word, "workspace")) {
@@ -2097,16 +2844,43 @@ command_single(struct vm *vm, const char *text)
     }
     else if (!strcmp(word, "detach")) {
         detach_session(vm);
+    } else if (!strcmp(word, "recover") && native_recover(vm)) {
+        /* Saved terminal controls become unsent text, never input replay. */
     } else if (!strcmp(word, "recover") && classic_recover(vm)) {
         /* The original destination owns recovered input. */
     } else if (!strcmp(word, "recover")) {
         struct snag_vm_buffer *c = focused_buffer(vm);
         struct snag_vm_buffer *pending = submission_from(vm, c);
+        if (!pending && c && !c->draft.len) {
+            for (struct snag_vm_connection *owner = vm->connections; owner; owner = owner->next) {
+                for (struct snag_vm_buffer *b = owner->buffers; b; b = b->next) {
+                    struct snag_vm_buffer *source = submission_source(vm, b);
+                    if (!b->pending || b->request_window != vm->windows[vm->focus].id ||
+                        !source || source->connection != c->connection) continue;
+                    if (pending) {
+                        command_error(vm, "Multiple submissions belong to this window; "
+                            "select the original conversation to recover");
+                        free(word);
+                        return;
+                    }
+                    pending = b;
+                }
+            }
+            if (pending) c = submission_source(vm, pending);
+        }
         if (!pending || snag_vm_buffer_recover(pending, c) < 0)
             command_error(vm,
                 "Recovery needs an empty draft and a resolved or disconnected submission");
         else {
-            vm->composer = true;
+            struct vm_window *window = &vm->windows[vm->focus];
+            json_decref(window->route);
+            window->route = json_is_string(c->route) ? NULL : json_incref(c->route);
+            for (struct vm_native *native = vm->native; native; native = native->next) {
+                if (native->window != window->id) continue;
+                native->authoritative = native->ready = false;
+                native->revision = UINT64_MAX;
+            }
+            vm->composer = !window->native;
             notice(vm, c->message);
             changed(vm);
         }
@@ -2448,16 +3222,12 @@ submit_draft(struct vm *vm, bool queued)
         notice(vm, "Connection text needs an explicit target; use /query, /chat or /msg");
         return;
     }
-    const char *local = text;
-    while (isspace((unsigned char)*local)) ++local;
-    if (!snag_command_chained(local, strlen(local)) &&
-        !strncmp(local, "/search", 7u) && (!local[7] || isspace((unsigned char)local[7]))) {
+    const char *query = snag_workspace_search(text, strlen(text));
+    if (query) {
         if (c->pending || c->draft_conflict) {
             notice(vm, "Resolve the retained submission or draft conflict first");
             return;
         }
-        const char *query = local + 7u;
-        while (isspace((unsigned char)*query)) ++query;
         bool entry = !*query;
         if (!entry) search(vm, query, false, true);
         if (!entry && !vm->searching) return;
@@ -2483,7 +3253,7 @@ submit_draft(struct vm *vm, bool queued)
         return;
     }
     if (snag_vm_buffer_prepare(target, c, vm->windows[vm->focus].id, queued,
-        vm->windows[vm->focus].verbosity) < 0) {
+        vm->windows[vm->focus].verbosity, false, false) < 0) {
         notice(vm, errno == ENOTSUP ? !snag_vm_buffer_supported(target) ?
             "This owner does not support this conversation input" :
             snag_command_chained(text, strlen(text)) && !target->connection->command_chains ?
@@ -2503,6 +3273,349 @@ submit_draft(struct vm *vm, bool queued)
         queue_history(vm, window, LOAD_LAST);
         notice(vm, target->message);
     }
+}
+
+static int
+native_broker_step(struct vm *vm, struct vm_native *native)
+{
+    struct snag_vm_connection *c = connection_for(vm, native->session, false);
+    if (!c || !c->bound || !c->state) return 0;
+    struct snag_view_channel *channel = &native->channel;
+    uint64_t now = snag_monotonic_ms();
+    if ((channel->read_deadline && now >= channel->read_deadline) ||
+        (channel->write_deadline && now >= channel->write_deadline))
+        return snag_errno(ETIMEDOUT);
+    if (channel->output && snag_view_channel_write(channel) < 0) return -1;
+    json_t *message = NULL;
+    int rc = 0;
+    if (json_array_size(native->pending_actions) && native_receiving(c) && !c->channel.output) {
+        message = json_incref(json_array_get(native->pending_actions, 0u));
+        if (json_array_remove(native->pending_actions, 0u) < 0) {
+            json_decref(message);
+            return -1;
+        }
+        if (!json_array_size(native->pending_actions)) {
+            json_decref(native->pending_actions);
+            native->pending_actions = NULL;
+        }
+        rc = 1;
+    } else rc = snag_view_channel_read(channel, &message);
+    /* Capture frontend feedback and checkpoints without an owner receipt.
+     * Queue submissions until their predecessor's draft is reconciled, while
+     * continuing to drain later feedback on this same duplex channel. */
+    const char *type = snag_json_string(message, "type");
+    if (rc > 0 && type && !strcmp(type, "input") &&
+        (!native_receiving(c) || c->channel.output)) {
+        if (!native->pending_actions) native->pending_actions = json_array();
+        if (!native->pending_actions) {
+            json_decref(message);
+            return -1;
+        }
+        if (json_array_append_new(native->pending_actions, message) < 0) return -1;
+        message = NULL;
+        rc = 0;
+        changed(vm);
+    }
+    if (rc < 0) return -1;
+    if (rc > 0) {
+        uint64_t serial;
+        if (type && !strcmp(type, "frame") &&
+            snag_json_integer_u64(message, "serial", &serial) == 0 &&
+            serial == native->serial) {
+            native->acknowledged = serial;
+            native->ready = true;
+            uint64_t audio;
+            if (snag_json_integer_u64(message, "audio", &audio) == 0 &&
+                audio == native->audio_sent) {
+                native->audio_ready = audio;
+            }
+            vm->dirty = true;
+        } else if (type && !strcmp(type, "feedback")) {
+            const char *kind = snag_json_string(message, "kind");
+            const char *label = snag_json_string(message, "label");
+            const char *text = snag_json_string(message, "text");
+            json_t *origin = json_object_get(message, "origin");
+            const char *id = snag_json_string(origin, "frontend");
+            uint64_t event;
+            json_t *route = json_object_get(message, "route");
+            if (json_is_null(route)) route = NULL;
+            struct snag_vm_buffer *source = snag_vm_buffer_get(c, route, true);
+            if (!source || !c->feedback_origin_supported || !label || !text || !kind ||
+                !snag_string_in(kind, "choices cancelled echo local") || !id ||
+                strlen(id) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
+                snag_json_integer_u64(origin, "event", &event) < 0 ||
+                event != native->feedback_sequence + 1u || event > INT64_MAX ||
+                (native->frontend_id[0] && strcmp(id, native->frontend_id))) rc = -1;
+            else {
+                rc = snag_vm_buffer_feedback(source, !strcmp(kind, "choices") ?
+                    SNAG_TERM_CHOICES : !strcmp(kind, "echo") ? SNAG_TERM_ECHO :
+                    !strcmp(kind, "local") ? SNAG_TERM_LOCAL_FEEDBACK :
+                    SNAG_TERM_CANCELLED, label, text);
+                if (!rc) {
+                    json_t *feedback = json_array_get(c->feedback,
+                        json_array_size(c->feedback) - 1u);
+                    if (json_object_set(feedback, "origin", origin) < 0) rc = -1;
+                    else {
+                        memcpy(native->frontend_id, id, sizeof(native->frontend_id));
+                        native->feedback_sequence = event;
+                    }
+                }
+            }
+        } else if (type && !strcmp(type, "editors")) {
+            if (native->authoritative) {
+                rc = native_drafts(vm, native, c, json_object_get(message, "snapshot"));
+                if (rc >= 0) { changed(vm); rc = 0; }
+            }
+        } else if (type && !strcmp(type, "input")) {
+            uint64_t action, verbosity;
+            const json_t *value = json_object_get(message, "text");
+            const char *text = json_string_value(value);
+            size_t length = json_string_length(value);
+            json_t *route = json_object_get(message, "route");
+            if (json_is_null(route)) route = NULL;
+            struct snag_vm_buffer *source = snag_vm_buffer_get(c, route, true);
+            if (!text || length > SNAG_MAX_DIRECT_PROMPT || strlen(text) != length ||
+                !snag_utf8_valid((const unsigned char *)text, length, true) || !source ||
+                snag_json_integer_u64(message, "action", &action) < 0 ||
+                snag_json_integer_u64(message, "verbosity", &verbosity) < 0 ||
+                verbosity > SNAG_VERBOSITY_MAX ||
+                !json_is_boolean(json_object_get(message, "echoed")) ||
+                !json_is_boolean(json_object_get(message, "local"))) rc = -1;
+            else if (action == SNAG_TERM_SUBMIT && snag_workspace_search(text, length)) {
+                /* Navigation belongs to the submitting pane, not the owner or
+                 * whichever pane received focus while this action was in flight. */
+                /* Earlier editor snapshots are ordered before this action.
+                 * Its frontend now waits for readiness, so another terminal
+                 * checkpoint here would wait on the command being handled. */
+                if (snag_vm_draft_replace(source, 0u, source->draft.len,
+                        text, length) < 0) rc = -1;
+                else {
+                    for (size_t i = 0u; i < vm->count; ++i) {
+                        struct vm_window *window = &vm->windows[i];
+                        if (window->id != native->window) continue;
+                        size_t focus = vm->focus;
+                        bool insert = vm->insert, composer = vm->composer;
+                        char mode = vm->mode;
+                        vm->focus = i;
+                        window->native = false;
+                        native->authoritative = false;
+                        submit_draft(vm, false);
+                        vm->focus = focus;
+                        if (focus != i) {
+                            vm->insert = insert;
+                            vm->composer = composer;
+                            vm->mode = mode;
+                        }
+                        break;
+                    }
+                }
+            } else if ((action == SNAG_TERM_SUBMIT || action == SNAG_TERM_QUEUE) &&
+                *text && json_is_object(source->route) &&
+                !json_object_get(source->route, "peer") &&
+                !json_object_get(source->route, "room") && !snag_prompt_command(text)) {
+                rc = snag_vm_draft_replace(source, 0u, source->draft.len, text, length);
+                if (!rc) {
+                    native->authoritative = native->ready = false;
+                    native->revision = UINT64_MAX;
+                    notice(vm, "Connection text needs an explicit target; "
+                        "use /query, /chat or /msg");
+                    changed(vm);
+                }
+            } else if (action == SNAG_TERM_SUBMIT || action == SNAG_TERM_QUEUE) {
+                for (size_t i = 0u; i < vm->count; ++i) {
+                    struct vm_window *window = &vm->windows[i];
+                    if (window->id != native->window) continue;
+                    window->follow = true;
+                    window->native_offset = 0u;
+                    window->native_select = false;
+                }
+                if (snag_vm_draft_replace(source, 0u, source->draft.len, text, strlen(text)) < 0)
+                    rc = -1;
+                else {
+                    struct snag_vm_buffer *target = command_buffer(vm, source, text);
+                    if (!target) {
+                        /* The ordinary editor consumed Enter. Restore its retained
+                         * draft through the same frame used for a focus handoff. */
+                        native->authoritative = native->ready = false;
+                        native->revision = UINT64_MAX;
+                        changed(vm);
+                        rc = 0;
+                    } else if (snag_vm_buffer_prepare(target, source, native->window,
+                            action == SNAG_TERM_QUEUE, (unsigned int)verbosity,
+                            json_is_true(json_object_get(message, "echoed")),
+                            json_is_true(json_object_get(message, "local"))) < 0) rc = -1;
+                    else {
+                        json_t *capture = json_object_get(message, "capture");
+                        json_t *forwarded = target->connection != c ?
+                            snag_ui_input_capture_forward(capture, target->connection->state,
+                                text) :
+                            json_incref(capture);
+                        int captured = target->connection->input_capture && forwarded ?
+                            json_object_set(target->pending, "capture", forwarded) : -1;
+                        json_decref(forwarded);
+                        if (captured < 0) {
+                            json_decref(message);
+                            return snag_errno(ENOTSUP);
+                        }
+                        changed(vm);
+                        /* This exact input is already captured. Do not wait for another
+                         * editor checkpoint while servicing its bounded duplex channel. */
+                        if (save_snapshot(vm, NULL) < 0 || snag_vm_buffer_send(target) < 0)
+                            rc = -1;
+                    }
+                }
+            } else if (action == SNAG_TERM_UPLOAD) {
+                struct snag_vm_buffer *buffer = c->rollout;
+                rc = snag_vm_buffer_upload(buffer, native->window, !strcmp(text, "trz -d"));
+                if (!rc) {
+                    changed(vm);
+                    /* The editor checkpoint precedes this action on the same channel. */
+                    if (save_snapshot(vm, NULL) < 0 || snag_vm_buffer_send(buffer) < 0) rc = -1;
+                }
+            } else if (action == SNAG_TERM_CANCEL) {
+                /* The ordinary editor cleared its draft. Only an empty active
+                 * editor emits INTERRUPT and cancels the owner's request. */
+                rc = 0;
+            } else if (action == SNAG_TERM_DICTATE_DONE || action == SNAG_TERM_DICTATE_CANCEL) {
+                rc = snag_vm_connection_input_control(c, (enum snag_term_action)action,
+                    json_object_get(message, "capture"));
+            } else if (action == SNAG_TERM_INTERRUPT)
+                rc = snag_vm_connection_control(c, "cancel");
+            else if (action == SNAG_TERM_EXIT) snag_vm_connection_detach(c);
+            else rc = snag_errno(ENOTSUP);
+        } else rc = snag_errno(EPROTO);
+        json_decref(message);
+        if (rc < 0) return -1;
+    }
+    bool selection_ready = false;
+    if (native->selection) {
+        /* The command receipt may precede the state advertising its new tab. */
+        const char *catalogs[] = {"channels", "queries", "connections"};
+        const char *conversation = snag_json_string(native->selection, "conversation");
+        for (size_t i = 0u; i < sizeof(catalogs) / sizeof(catalogs[0]); ++i) {
+            json_t *rows = json_object_get(c->state, catalogs[i]);
+            for (size_t j = 0u; j < json_array_size(rows); ++j) {
+                json_t *route = json_object_get(json_array_get(rows, j), "route");
+                if (!strcmp(conversation, snag_json_string(route, "conversation")))
+                    selection_ready = true;
+            }
+        }
+    }
+    /* The active editor owns its draft. Mirrors still need draft refreshes. */
+    if (!channel->output && native->acknowledged == native->serial &&
+        (!native->serial || selection_ready || native->revision == UINT64_MAX ||
+            native->state_revision != c->state_revision ||
+            (!native->authoritative && native->revision != c->revision))) {
+        bool binding_changed = strcmp(native->audio_instance, c->instance) ||
+            native->audio_generation != c->generation;
+        bool state_changed = !native->serial || selection_ready || binding_changed ||
+            native->revision == UINT64_MAX || native->state_revision != c->state_revision ||
+            (native->audio_sent && native->audio_forwarded != native->audio_sent);
+        json_t *frame;
+        if (state_changed) {
+            json_t *state = snag_ui_frontend_state(c->state);
+            frame = state ? json_pack("{s:s,s:I,s:o,s:s,s:s,s:I}", "type", "frame",
+                "serial", (json_int_t)(native->serial + 1u), "state", state,
+                "dotdir", vm->store.root_path, "session", c->session,
+                "turns", (json_int_t)vm->config.resume_history_turns) : NULL;
+        } else {
+            /* Draft-only mirrors already hold this acknowledged owner state. */
+            frame = json_pack("{s:s,s:I}", "type", "frame", "serial",
+                (json_int_t)(native->serial + 1u));
+        }
+        if (frame && !native->serial) {
+            for (size_t i = 0u; i < vm->count; ++i) {
+                const struct vm_window *window = &vm->windows[i];
+                if (window->id != native->window) continue;
+                if (json_object_set(frame, "route", window->route ?
+                        window->route : json_null()) < 0 ||
+                    (window->verbosity_set && json_object_set_new(frame, "verbosity",
+                        json_integer(window->verbosity)) < 0)) {
+                    json_decref(frame);
+                    return -1;
+                }
+                break;
+            }
+        }
+        if (frame && selection_ready &&
+            json_object_set(frame, "selection", native->selection) < 0) {
+            json_decref(frame);
+            return -1;
+        }
+        json_t *drafts = !native->authoritative ? json_array() : NULL;
+        for (struct snag_vm_buffer *b = c->buffers; drafts && b; b = b->next) {
+            json_t *row = json_pack("{s:O,s:s,s:I}", "route", b->route, "text",
+                b->draft.len ? (const char *)b->draft.data : "", "cursor", (json_int_t)b->cursor);
+            if (row && native->pending_input.len && b->native_history &&
+                json_object_set(row, "history", b->native_history) < 0) {
+                json_decref(row);
+                row = NULL;
+            }
+            if (!row || json_array_append_new(drafts, row) < 0) {
+                json_decref(drafts); json_decref(frame); return -1;
+            }
+        }
+        if (drafts && (!frame || json_object_set_new(frame, "drafts", drafts) < 0)) {
+            json_decref(frame); return -1;
+        }
+        rc = frame ? snag_view_channel_send(channel, frame) : -1;
+        json_decref(frame);
+        if (rc < 0) return -1;
+        if (selection_ready) {
+            json_decref(native->selection);
+            native->selection = NULL;
+        }
+        ++native->serial;
+        if (state_changed) {
+            native->audio_sent = 0u;
+            if (binding_changed) {
+                memcpy(native->audio_instance, c->instance, sizeof(native->audio_instance));
+                native->audio_generation = c->generation;
+                native->audio_forwarded = 0u;
+            }
+            (void)snag_json_integer_u64(json_object_get(c->state, "audio"), "epoch",
+                &native->audio_sent);
+            native->audio_ready = 0u;
+        }
+        native->revision = c->revision;
+        native->state_revision = c->state_revision;
+        /* A copied editor is not ready until this frame has applied it. */
+        if (!native->authoritative || native->pending_input.len) native->ready = false;
+    } else if (!channel->output && native->acknowledged == native->serial &&
+        native->revision != c->revision) {
+        /* A receipt releases the frontend's submitted-input barrier even when
+         * owner state is unchanged. Reuse its prompt without republishing state. */
+        json_t *ready = json_pack("{s:s}", "type", "ready");
+        rc = ready ? snag_view_channel_send(channel, ready) : -1;
+        json_decref(ready);
+        if (rc < 0) return -1;
+        native->revision = c->revision;
+    }
+    if (native->ready && native->pending_input.len &&
+        (!c->frontend_audio || native->audio_forwarded)) {
+        /* A new split can retain input before its frontend exists. Transfer
+         * editor ownership here too, before that first input changes a draft. */
+        bool transfer = false;
+        for (struct vm_native *other = vm->native; other; other = other->next) {
+            if (other == native || !other->authoritative ||
+                strcmp(other->session, native->session)) continue;
+            if (native_checkpoint(vm, other, true) < 0) return -1;
+            other->authoritative = false;
+            transfer = true;
+        }
+        if (transfer) {
+            native->ready = false;
+            native->revision = UINT64_MAX;
+            return 0;
+        }
+        struct snag_vm_input_event event = {
+            .kind = native->pending_paste ? SNAG_VM_PASTE_BEGIN : SNAG_VM_RAW,
+            .wire = native->pending_input.data, .wire_length = native->pending_input.len};
+        if (snag_vm_terminal_input(native->terminal, &event) < 0) return -1;
+        native->authoritative = true;
+        snag_buf_reset(&native->pending_input);
+    }
+    return 0;
 }
 
 static void
@@ -3059,6 +4172,8 @@ queue_input(struct vm *vm, const struct snag_vm_input_event *event)
     struct vm_pending_input *pending = malloc(sizeof(*pending) + event->length);
     if (!pending) return -1;
     *pending = (struct vm_pending_input){.event = *event, .charge = charge};
+    pending->event.wire = NULL;
+    pending->event.wire_length = 0u;
     if (event->length) {
         memcpy(pending->text, event->text, event->length);
         pending->event.text = pending->text;
@@ -3171,6 +4286,58 @@ mouse_input(struct vm *vm, const struct snag_vm_input_event *event)
             if (window->id != vm->mouse_window) continue;
         } else if (event->row < r->row || event->row - r->row >= r->rows ||
             event->column < r->column || event->column - r->column >= r->columns) continue;
+        struct snag_vm_terminal *terminal = native_for(vm, window);
+        if (terminal) {
+            if (wheel && !snag_vm_terminal_mouse(terminal)) {
+                size_t count = snag_vm_terminal_history_rows(terminal);
+                if (window->native_offset > count) window->native_offset = count;
+                if (button == 64u) window->native_offset +=
+                    count - window->native_offset < 3u ? count - window->native_offset : 3u;
+                else window->native_offset -= window->native_offset < 3u ?
+                    window->native_offset : 3u;
+                window->follow = window->native_offset == 0u;
+                changed(vm);
+                return 0;
+            }
+            struct snag_vm_input_event local = *event;
+            local.row = event->row < r->row ? 0u : event->row - r->row;
+            local.column = event->column < r->column ? 0u : event->column - r->column;
+            if (local.row >= r->rows) local.row = r->rows - 1u;
+            if (local.column >= r->columns) local.column = r->columns - 1u;
+            if (!wheel && snag_vm_terminal_mouse(terminal)) {
+                vm->focus = i;
+                vm->mode = vm->prefix = 0;
+                vm->insert = vm->composer = true;
+                vm->mouse_window = window->id;
+                vm->mouse_down = !event->release;
+                changed(vm);
+            }
+            if (!wheel && !snag_vm_terminal_mouse(terminal)) {
+                size_t at = (size_t)local.row * r->columns + local.column;
+                if (!dragging) {
+                    vm->focus = i;
+                    vm->mode = vm->prefix = 0;
+                    vm->insert = vm->composer = true;
+                    window->native_anchor = window->native_cursor = at;
+                    window->native_width = r->columns;
+                    window->native_select = false;
+                    vm->mouse_window = window->id;
+                    vm->mouse_down = !event->release;
+                } else if (window->native_select || at != window->native_anchor) {
+                    window->native_cursor = at;
+                    window->native_select = true;
+                    window->follow = false;
+                    vm->insert = vm->composer = false;
+                    if (event->release) vm->mouse_down = false;
+                    changed(vm);
+                    return 0;
+                } else if (event->release) vm->mouse_down = false;
+                changed(vm);
+            }
+            if (snag_vm_terminal_input(terminal, &local) < 0)
+                notice(vm, "Standalone frontend ended; :attach reconnects");
+            return 0;
+        }
         if (wheel) {
             size_t focus = vm->focus;
             vm->focus = i;
@@ -3265,16 +4432,78 @@ mouse_input(struct vm *vm, const struct snag_vm_input_event *event)
 }
 
 static int
+native_yank(struct vm *vm, struct snag_vm_terminal *terminal)
+{
+    struct vm_window *window = &vm->windows[vm->focus];
+    const struct snag_vm_rectangle *r = &window->rectangle;
+    struct snag_vm_register next = {0};
+    size_t first = window->native_anchor < window->native_cursor ?
+        window->native_anchor : window->native_cursor;
+    size_t last = window->native_anchor > window->native_cursor ?
+        window->native_anchor : window->native_cursor;
+    for (size_t row = first / r->columns; row <= last / r->columns; ++row) {
+        size_t start = row == first / r->columns ? first % r->columns : 0u;
+        size_t end = row == last / r->columns ? last % r->columns + 1u : r->columns;
+        struct snag_vm_cell *cells = vm->grid.front.cells +
+            (r->row + row) * vm->grid.columns + r->column;
+        while (start && cells[start].continuation) --start;
+        bool continued = row < last / r->columns &&
+            snag_vm_terminal_continued(terminal, window->native_offset, row + 1u);
+        if (!continued) {
+            while (end > start && !cells[end - 1u].continuation &&
+                (!cells[end - 1u].length || (cells[end - 1u].length == 1u &&
+                vm->grid.front.text.data[cells[end - 1u].offset] == ' '))) --end;
+        }
+        for (size_t column = start; column < end; ++column) {
+            const struct snag_vm_cell *cell = &cells[column];
+            if (cell->continuation) continue;
+            const void *text = cell->length ? vm->grid.front.text.data + cell->offset :
+                (const unsigned char *)" ";
+            if (snag_vm_register_append(&next, vm->store.root_fd, text,
+                cell->length ? cell->length : 1u) < 0) goto failed;
+        }
+        if (row < last / r->columns && !continued &&
+            snag_vm_register_append(&next, vm->store.root_fd, "\n", 1u) < 0) goto failed;
+    }
+    snag_vm_register_free(&vm->reg);
+    vm->reg = next;
+    window->native_select = false;
+    clipboard_yank(vm);
+    notice(vm, "Yanked terminal selection");
+    changed(vm);
+    return 0;
+failed:
+    snag_vm_register_free(&next);
+    return -1;
+}
+
+static int
 input_event(void *opaque, const struct snag_vm_input_event *event)
 {
     struct vm *vm = opaque;
+    struct snag_vm_terminal *terminal = native_for(vm, &vm->windows[vm->focus]);
+    for (struct vm_native *n = vm->native; n; n = n->next)
+        if (n->terminal == terminal && !n->ready) terminal = NULL;
     if (event->kind == SNAG_VM_TERMINAL_REPLY) {
-        (void)snag_clipboard_send_input(vm->clipboard.send, event->text, event->length,
-            snag_monotonic_ms());
+        bool consumed = snag_clipboard_send_input(vm->clipboard.send, event->text,
+            event->length, snag_monotonic_ms());
+        for (struct vm_native *native = vm->native; !consumed && native; native = native->next) {
+            if (!native->terminal) continue;
+            int rc = snag_vm_terminal_reply(native->terminal, event);
+            if (rc < 0) notice(vm, "Cannot deliver terminal reply to its frontend");
+            consumed = rc != 0;
+        }
         return 0;
     }
     if (vm->clipboard.settling || vm->quit || vm->detach_exit || vm->detach_suspend ||
         vm->switch_workspace || vm->classic_pending) return 0;
+    if (event->kind == SNAG_VM_FOCUS) {
+        vm->unfocused = !event->focused;
+        if (vm->unfocused) vm->mouse_down = false;
+        vm->dirty = true;
+        if (terminal) (void)snag_vm_terminal_input(terminal, event);
+        return 0;
+    }
     /* Vim uses an Escape prefix to leave the current mode before the next key.
      * Transport batching must preserve that order for text and control keys. */
     if ((event->modifiers & SNAG_VM_ALT) && (event->kind == SNAG_VM_TEXT ||
@@ -3286,20 +4515,9 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         int rc = input_event(vm, &escape);
         return rc ? rc : input_event(vm, &next);
     }
-    if (event->kind == SNAG_VM_KEY && event->key == 'c' &&
-        (event->modifiers & SNAG_VM_CTRL) && clipboard_cancel(vm)) {
-        notice(vm, "Canceling clipboard copy; register retained");
-        return 0;
-    }
-    if (event->kind == SNAG_VM_FOCUS) {
-        vm->unfocused = !event->focused;
-        if (vm->unfocused) vm->mouse_down = false;
-        vm->dirty = true;
-        return 0;
-    }
-    if (event->kind == SNAG_VM_MOUSE) return mouse_input(vm, event);
-    vm->mouse_down = false;
-    if (!vm->mode && !vm->composer && vm->prefix != 'w' && document_input_pending(vm)) {
+    /* Pending report navigation belongs to that report, not its old live pane. */
+    if (event->kind != SNAG_VM_MOUSE && event->kind != SNAG_VM_RAW &&
+        !vm->mode && !vm->composer && vm->prefix != 'w' && document_input_pending(vm)) {
         bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
         bool boundary = !vm->pending_input && event->kind == SNAG_VM_TEXT && event->length == 1u &&
             (event->text[0] == ':' || (vm->windows[vm->focus].kind == VIEW_TRANSCRIPT &&
@@ -3324,6 +4542,211 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
             }
         } else return queue_input(vm, event);
     }
+    if (terminal && !vm->mode && !vm->prefix && !vm->insert &&
+        event->kind == SNAG_VM_TEXT && event->length == 1u &&
+        (event->text[0] == 'p' || event->text[0] == 'P')) {
+        if (!vm->reg.length) { notice(vm, "Register is empty"); return 0; }
+        struct snag_vm_input_event paste = {.kind = SNAG_VM_PASTE_BEGIN,
+            .wire = (const unsigned char *)"\033[200~", .wire_length = 6u};
+        vm->insert = vm->composer = true;
+        vm->windows[vm->focus].native_select = false;
+        vm->windows[vm->focus].native_offset = 0u;
+        vm->windows[vm->focus].follow = true;
+        if (input_event(vm, &paste) < 0) return -1;
+        unsigned char bytes[4096];
+        for (uint64_t offset = 0u; offset < vm->reg.length;) {
+            size_t count = vm->reg.length - offset > sizeof(bytes) ?
+                sizeof(bytes) : (size_t)(vm->reg.length - offset);
+            if (snag_vm_register_read(&vm->reg, offset, bytes, count) < 0) return -1;
+            paste = (struct snag_vm_input_event){.kind = SNAG_VM_RAW,
+                .wire = bytes, .wire_length = count};
+            if (input_event(vm, &paste) < 0) return -1;
+            offset += count;
+        }
+        paste = (struct snag_vm_input_event){.kind = SNAG_VM_PASTE_END,
+            .wire = (const unsigned char *)"\033[201~", .wire_length = 6u};
+        int rc = input_event(vm, &paste);
+        vm->insert = vm->composer = false;
+        return rc;
+    }
+    if (terminal && !vm->mode && !vm->prefix && !vm->insert &&
+        event->kind == SNAG_VM_TEXT && event->length == 1u && event->text[0] == 'y') {
+        if (vm->windows[vm->focus].native_select) return native_yank(vm, terminal);
+        notice(vm, "Select terminal text before copying; register retained");
+        return 0;
+    }
+    if (vm->windows[vm->focus].native && !vm->mode && !vm->prefix && !vm->insert &&
+        ((event->kind == SNAG_VM_TEXT && event->length == 1u && event->text[0] == 'u') ||
+        (event->kind == SNAG_VM_KEY && event->key == 'r' &&
+            (event->modifiers & SNAG_VM_CTRL)))) {
+        unsigned char request[] = "\033[9007;1~";
+        if (event->modifiers & SNAG_VM_CTRL) request[7] = '2';
+        struct snag_vm_input_event undo = {.kind = SNAG_VM_RAW,
+            .wire = request, .wire_length = sizeof(request) - 1u};
+        vm->insert = true;
+        int rc = input_event(vm, &undo);
+        vm->insert = false;
+        if (rc < 0) return rc;
+        struct vm_native *selected = vm->native;
+        while (selected && (selected->window != vm->windows[vm->focus].id ||
+            strcmp(selected->session, vm->windows[vm->focus].session_id)))
+            selected = selected->next;
+        /* A following Ex command can save immediately. Complete the local
+         * frontend operation before that command snapshots the shared draft. */
+        if (!selected || native_checkpoint(vm, selected, true) < 0) {
+            notice(vm, "Cannot confirm frontend undo; inspect the draft before continuing");
+            return 0;
+        }
+        changed(vm);
+        return 0;
+    }
+    if (vm->windows[vm->focus].native && !vm->mode && !vm->prefix && !vm->insert &&
+        event->kind == SNAG_VM_TEXT && event->length == 1u &&
+        strchr("iIaA", event->text[0])) {
+        vm->insert = vm->composer = true;
+        vm->windows[vm->focus].native_offset = 0u;
+        vm->windows[vm->focus].follow = true;
+        vm->windows[vm->focus].native_select = false;
+        vm->dirty = true;
+        if (event->text[0] != 'i') {
+            unsigned char request[] = "\033[9005;1~";
+            request[7] = event->text[0] == 'I' ? '1' : event->text[0] == 'A' ? '2' : '3';
+            struct snag_vm_input_event move = {.kind = SNAG_VM_RAW,
+                .wire = request, .wire_length = sizeof(request) - 1u};
+            return input_event(vm, &move);
+        }
+        return 0;
+    }
+    if (!terminal && vm->windows[vm->focus].native && !vm->mode && !vm->prefix) {
+        bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
+        bool escape = event->kind == SNAG_VM_KEY &&
+            (event->key == SNAG_VM_KEY_ESCAPE || (control && event->key == '['));
+        bool window_key = event->kind == SNAG_VM_KEY && control &&
+            (event->key == 'w' || event->key == 'z');
+        if (escape) {
+            for (struct vm_native *native = vm->native; native; native = native->next) {
+                if (native->window != vm->windows[vm->focus].id ||
+                    vm->windows[vm->focus].launch || !native->pending_input.len) continue;
+                if (native_checkpoint(vm, native, true) < 0) {
+                    if (!native->pending_input.len) {
+                        notice(vm, "Cannot leave editor before preserving its draft");
+                        return 0;
+                    }
+                    /* Unsent bytes remain workspace-owned when the owner is
+                     * unavailable. Allow commands to save them for :recover. */
+                    notice(vm, "Retained frontend input; use :recover after reconnecting");
+                }
+                break;
+            }
+            vm->insert = vm->composer = false;
+            vm->windows[vm->focus].native_select = false;
+            vm->dirty = true;
+            return 0;
+        }
+        if (vm->insert && !window_key && event->kind != SNAG_VM_MOUSE) {
+            struct vm_native *native = vm->native;
+            while (native && native->window != vm->windows[vm->focus].id)
+                native = native->next;
+            /* A split and its first input can share one terminal read. Create
+             * the new pane before retaining bytes, rather than waiting for the
+             * next outer-loop lifecycle pass. */
+            if (!native) {
+                attach(vm, "");
+                native = vm->native;
+                while (native && native->window != vm->windows[vm->focus].id)
+                    native = native->next;
+            }
+            if (!native || snag_buf_append(&native->pending_input,
+                event->wire, event->wire_length) < 0) {
+                command_error(vm, "Cannot retain frontend input");
+                return -1;
+            }
+            if (event->kind == SNAG_VM_PASTE_BEGIN) native->pending_paste = true;
+            if (event->kind == SNAG_VM_PASTE_END || (event->kind == SNAG_VM_KEY &&
+                event->key == 'c' && control)) native->pending_paste = false;
+            changed(vm);
+            notice(vm, "INSERT  Input retained until the standalone frontend is ready");
+            return 0;
+        }
+    }
+    if (terminal && !vm->mode && !vm->prefix) {
+        bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
+        bool escape = event->kind == SNAG_VM_KEY &&
+            (event->key == SNAG_VM_KEY_ESCAPE || (control && event->key == '['));
+        bool window_key = event->kind == SNAG_VM_KEY && control &&
+            (event->key == 'w' || event->key == 'z');
+        if (escape) {
+            struct snag_vm_connection *connection =
+                connection_for(vm, vm->windows[vm->focus].session_id, false);
+            const json_t *audio = connection && connection->state ?
+                json_object_get(connection->state, "audio") : NULL;
+            if (json_is_true(json_object_get(audio, "dictating")))
+                return snag_vm_terminal_input(terminal, event);
+            if (vm->insert) {
+                for (struct vm_native *native = vm->native; native; native = native->next) {
+                    if (native->terminal != terminal) continue;
+                    if (native_checkpoint(vm, native, true) < 0 && errno != ENOTSUP) {
+                        notice(vm, "Cannot leave editor before preserving its draft");
+                        return 0;
+                    }
+                    changed(vm);
+                    break;
+                }
+            }
+            /* This Esc belongs to the window manager. Sending it to the owner
+             * would leave an incomplete escape sequence across detach. */
+            vm->insert = vm->composer = false;
+            vm->windows[vm->focus].native_select = false;
+            vm->dirty = true;
+            return 0;
+        }
+        if (vm->insert && !window_key && event->kind != SNAG_VM_MOUSE) {
+            struct vm_native *selected = vm->native;
+            while (selected && selected->terminal != terminal) selected = selected->next;
+            struct snag_vm_buffer *buffer = focused_buffer(vm);
+            bool retained_undo = buffer && buffer->native_history &&
+                (json_array_size(json_object_get(buffer->native_history, "undo")) ||
+                json_array_size(json_object_get(buffer->native_history, "redo")));
+            bool transfer = !selected->authoritative && retained_undo;
+            for (struct vm_native *n = vm->native; n; n = n->next) {
+                if (n == selected || !n->authoritative ||
+                    strcmp(n->session, selected->session)) continue;
+                if (native_checkpoint(vm, n, true) < 0) {
+                    notice(vm, "Cannot transfer frontend editor; draft retained");
+                    return 0;
+                }
+                n->authoritative = false;
+                transfer = true;
+            }
+            struct snag_vm_connection *connection = connection_for(vm, selected->session, false);
+            bool initial_paint = connection && connection->frontend_audio &&
+                !selected->audio_forwarded;
+            if (transfer || initial_paint) {
+                selected->ready = false;
+                selected->revision = UINT64_MAX;
+                if (snag_buf_append(&selected->pending_input, event->wire,
+                    event->wire_length) < 0) return -1;
+                changed(vm);
+                return 0;
+            }
+            selected->authoritative = true;
+            int rc = snag_vm_terminal_input(terminal, event);
+            if (rc < 0) notice(vm, "Standalone frontend ended; :attach reconnects");
+            else {
+                changed(vm);
+            }
+            return 0;
+        }
+        if (window_key && event->key == 'w') vm->insert = vm->composer = false;
+    }
+    if (event->kind == SNAG_VM_RAW) return 0;
+    if (event->kind == SNAG_VM_KEY && event->key == 'c' &&
+        (event->modifiers & SNAG_VM_CTRL) && clipboard_cancel(vm)) {
+        notice(vm, "Canceling clipboard copy; register retained");
+        return 0;
+    }
+    if (event->kind == SNAG_VM_MOUSE) return mouse_input(vm, event);
+    vm->mouse_down = false;
     if (vm->copying || vm->navigating || vm->motion_loading) {
         bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
         bool cancel = event->kind == SNAG_VM_KEY &&
@@ -3443,6 +4866,67 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         vm->prefix = 'w';
         return 0;
     }
+    if (terminal && !vm->insert && vm->prefix != 'w') {
+        if (window->native_select && !control) {
+            size_t width = window->rectangle.columns;
+            size_t cells = width * window->rectangle.rows;
+            size_t at = window->native_cursor;
+            bool handled = true;
+            if (key == 'h' || key == SNAG_VM_KEY_LEFT) {
+                if (at % width) --at;
+            } else if (key == 'l' || key == SNAG_VM_KEY_RIGHT) {
+                if ((at + 1u) % width) ++at;
+            } else if (key == 'k' || key == SNAG_VM_KEY_UP) {
+                if (at >= width) at -= width;
+            } else if (key == 'j' || key == SNAG_VM_KEY_DOWN) {
+                if (at + width < cells) at += width;
+            } else if (key == '0' || key == SNAG_VM_KEY_HOME) at -= at % width;
+            else if (key == '$' || key == SNAG_VM_KEY_END) at += width - at % width - 1u;
+            else handled = false;
+            if (handled) {
+                size_t row = (window->rectangle.row + at / width) * vm->grid.columns +
+                    window->rectangle.column;
+                bool right = key == 'l' || key == SNAG_VM_KEY_RIGHT;
+                while (at % width && vm->grid.front.cells[row + at % width].continuation) {
+                    if (right && (at + 1u) % width) ++at;
+                    else --at;
+                }
+                window->native_cursor = at;
+                changed(vm);
+                return 0;
+            }
+        }
+        size_t count = snag_vm_terminal_history_rows(terminal);
+        size_t step = 1u;
+        if (window->native_offset > count) window->native_offset = count;
+        if (key == SNAG_VM_KEY_PAGE_UP || key == SNAG_VM_KEY_PAGE_DOWN ||
+            (control && (key == 'b' || key == 'f'))) step = window->rectangle.rows;
+        else if (control && (key == 'u' || key == 'd')) step = window->rectangle.rows / 2u;
+        bool up = key == 'k' || key == SNAG_VM_KEY_UP || key == SNAG_VM_KEY_PAGE_UP ||
+            (control && (key == 'b' || key == 'u'));
+        bool down = key == 'j' || key == SNAG_VM_KEY_DOWN || key == SNAG_VM_KEY_PAGE_DOWN ||
+            (control && (key == 'f' || key == 'd'));
+        bool handled = true;
+        if (key == 'g') {
+            if (vm->prefix == 'g') window->native_offset = count;
+            vm->prefix = vm->prefix == 'g' ? 0 : 'g';
+        } else if (key == 'G' || key == SNAG_VM_KEY_END) window->native_offset = 0u;
+        else if (key == SNAG_VM_KEY_HOME) window->native_offset = count;
+        else if (up) window->native_offset += step < count - window->native_offset ?
+            step : count - window->native_offset;
+        else if (down) window->native_offset -= step < window->native_offset ?
+            step : window->native_offset;
+        else handled = false;
+        if (handled) {
+            if (key != 'g' || !vm->prefix)
+                window->follow = key == 'G' || key == SNAG_VM_KEY_END ||
+                    (down && window->native_offset == 0u);
+            if (key != 'g') vm->prefix = 0;
+            window->native_select = false;
+            changed(vm);
+            return 0;
+        }
+    }
     if (vm->prefix != 'w' && composer_key(vm, event)) return 0;
     if (history_key(vm, event, key, control)) return 0;
     if (key == SNAG_VM_KEY_ESCAPE) vm->prefix = 0;
@@ -3525,6 +5009,10 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
             changed(vm);
         } else if ((key == 'i' || key == 'a' || key == 'I' || key == 'A') &&
             window->kind == VIEW_TRANSCRIPT) {
+            if (snag_session_host_supported()) {
+                attach(vm, "");
+                if (window->native) return 0;
+            }
             struct snag_vm_connection *c = connection_for(vm, window->session_id, true);
             if (c) {
                 vm->composer = true;
@@ -3593,6 +5081,9 @@ drain_input(struct vm *vm)
 static int
 input_ready(struct vm *vm, int timeout)
 {
+    /* A draft checkpoint can paint while decoding Escape. Output progress must
+     * not recursively feed later terminal bytes into that in-flight decoder. */
+    if (vm->reading_input) return 0;
     uint64_t now = snag_monotonic_ms();
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
         timeout = snag_vm_connection_wait(c, now, timeout);
@@ -3618,8 +5109,19 @@ input_ready(struct vm *vm, int timeout)
         if (job->fd >= 0) ++count;
         else if (job->child && (timeout < 0 || timeout > 100)) timeout = 100;
     }
-    struct pollfd *fds = calloc(count, sizeof(*fds));
-    if (!fds) return -1;
+    for (struct vm_native *native = vm->native; native; native = native->next) {
+        if (snag_vm_terminal_fd(native->terminal) >= 0) ++count;
+        if (native->channel.fd >= 0) ++count;
+        if (timeout < 0 || timeout > 100) timeout = 100;
+    }
+    if (count > vm->pollfd_capacity) {
+        if (count > SIZE_MAX / sizeof(*vm->pollfds)) return snag_errno(EOVERFLOW);
+        struct pollfd *grown = realloc(vm->pollfds, count * sizeof(*grown));
+        if (!grown) return -1;
+        vm->pollfds = grown;
+        vm->pollfd_capacity = count;
+    }
+    struct pollfd *fds = vm->pollfds;
     fds[0] = (struct pollfd){.fd = STDIN_FILENO,
         .events = vm->classic_pending ? 0 : POLLIN};
     fds[1] = (struct pollfd){.fd = snag_vm_reader_fd(vm->page.reader), .events = POLLIN};
@@ -3634,10 +5136,20 @@ input_ready(struct vm *vm, int timeout)
     }
     for (struct vm_launch *job = vm->launches; job; job = job->next)
         if (job->fd >= 0) fds[at++] = (struct pollfd){.fd = job->fd, .events = POLLIN};
+    for (struct vm_native *native = vm->native; native; native = native->next) {
+        if (native->channel.fd >= 0) {
+            bool reading = native_receiving(connection_for(vm, native->session, false));
+            fds[at++] = (struct pollfd){
+                .fd = reading || native->channel.output ? native->channel.fd : -1,
+                .events = (reading ? POLLIN : 0) | (native->channel.output ? POLLOUT : 0)};
+        }
+        int fd = snag_vm_terminal_fd(native->terminal);
+        if (fd >= 0) fds[at++] = (struct pollfd){.fd = fd, .events = POLLIN |
+            (snag_vm_terminal_writing(native->terminal) ? POLLOUT : 0)};
+    }
     int ready = poll(fds, (nfds_t)count, timeout);
     if (ready >= 0) ready = (fds[0].revents & POLLIN ? SNAG_TERM_WAIT_INPUT : 0) |
         (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL) ? SNAG_TERM_WAIT_END : 0);
-    free(fds);
 #endif /* _WIN32 */
     if (ready < 0) return errno == EINTR ? 0 : -1;
     if (ready & SNAG_TERM_WAIT_END) {
@@ -3649,9 +5161,12 @@ input_ready(struct vm *vm, int timeout)
         ssize_t count = snag_term_input_read(&vm->terminal, bytes, sizeof(bytes));
         if (count < 0 && errno != EAGAIN && errno != EINTR) return -1;
         uint64_t now = snag_monotonic_ms();
+        vm->reading_input = true;
         for (ssize_t i = 0; i < count; ++i) {
-            if (snag_vm_input_feed(&vm->input, bytes + i, 1u, now, input_event, vm) < 0)
+            if (snag_vm_input_feed(&vm->input, bytes + i, 1u, now, input_event, vm) < 0) {
+                vm->reading_input = false;
                 return -1;
+            }
             if (vm->classic_pending) {
                 /* The decoder has consumed the command's Enter. The remainder
                  * belongs to the terminal owner, including escape/paste bytes. */
@@ -3661,9 +5176,13 @@ input_ready(struct vm *vm, int timeout)
                 break;
             }
         }
+        vm->reading_input = false;
     }
     if (vm->classic_pending) return 0;
-    return snag_vm_input_expire(&vm->input, snag_monotonic_ms(), input_event, vm);
+    vm->reading_input = true;
+    int expired = snag_vm_input_expire(&vm->input, snag_monotonic_ms(), input_event, vm);
+    vm->reading_input = false;
+    return expired;
 }
 
 static void
@@ -3738,6 +5257,13 @@ connection_step(struct vm *vm, struct snag_vm_connection *c)
 {
     struct snag_vm_buffer *focused = focused_buffer(vm);
     struct snag_vm_buffer *feedback = submission_from(vm, focused);
+    if (!feedback && focused && focused->connection == c) {
+        for (struct snag_vm_buffer *b = c->buffers; b; b = b->next) {
+            if (!b->pending || b->request_window != vm->windows[vm->focus].id) continue;
+            if (feedback) { feedback = NULL; break; }
+            feedback = b;
+        }
+    }
     if (!feedback) feedback = focused;
     char buffer_previous[256] = "";
     if (feedback && feedback->connection == c)
@@ -3758,7 +5284,9 @@ connection_step(struct vm *vm, struct snag_vm_connection *c)
                     !strcmp(window->session_id, c->session)) window->follow_at = 0u;
             }
         }
-        if (focused_connection(vm) == c && strcmp(previous, c->message))
+        if (focused_connection(vm) == c && strcmp(previous, c->message) &&
+            (!vm->windows[vm->focus].native || c->control ||
+             !snag_view_channel_opened(&c->channel)))
             notice(vm, c->message);
         if (feedback && feedback->connection == c &&
             strcmp(buffer_previous, feedback->message)) notice(vm, feedback->message);
@@ -3767,8 +5295,66 @@ connection_step(struct vm *vm, struct snag_vm_connection *c)
 }
 
 static void
+native_reconcile_step(struct vm *vm)
+{
+    for (struct vm_native *native = vm->native; native; native = native->next) {
+        if (native->phase != NATIVE_RECONCILE) continue;
+        bool launching = false;
+        for (size_t i = 0u; i < vm->count; ++i)
+            if (vm->windows[i].id == native->window && vm->windows[i].launch)
+                launching = true;
+        if (launching) continue;
+        struct snag_vm_connection *c = connection_for(vm, native->session, false);
+        const char *error = NULL;
+        if (!c || !snag_view_channel_opened(&c->channel) ||
+            (c->hello && !c->bound && !c->deadline)) {
+            error = c ? c->message : "Draft controller unavailable";
+        } else if (!c->bound) {
+            continue;
+        } else if (!c->state) {
+            continue;
+        } else if (!json_is_object(json_object_get(c->state, "frontend")) ||
+            !json_is_object(json_object_get(c->state, "prompt")) ||
+            !json_is_object(json_object_get(c->state, "presentation"))) {
+            error = "Owner cannot supply the standalone frontend state; use :classic";
+        } else {
+            bool waiting = c->draft_wait != NULL || c->channel.output != NULL;
+            for (struct snag_vm_buffer *b = c->buffers; b; b = b->next) {
+                if (b->pending || b->reconcile_pending) {
+                    error = "Retained submission; inspect its receipt or :recover before :attach";
+                    break;
+                }
+                if (b->draft_conflict) {
+                    error = "Draft conflict; use :draft local or :draft owner, then :attach";
+                    break;
+                }
+                if (!snag_vm_buffer_writable(b) || !snag_vm_buffer_supported(b)) {
+                    if (b->draft.len) error = "Saved draft route unavailable; draft retained";
+                    continue;
+                }
+                waiting |= b->draft_get || !b->draft_ready || b->draft_dirty;
+            }
+            if (!error && waiting) continue;
+            if (!error) {
+                native->phase = NATIVE_READY;
+                continue;
+            }
+        }
+        for (size_t i = 0u; i < vm->count; ++i) {
+            if (strcmp(vm->windows[i].session_id, native->session)) continue;
+            vm->windows[i].native = false;
+            if (i == vm->focus) vm->composer = vm->insert = false;
+        }
+        native->phase = NATIVE_TERMINAL;
+        command_error(vm, error);
+        changed(vm);
+    }
+}
+
+static void
 connections_step(struct vm *vm)
 {
+    native_reconcile_step(vm);
     bool waiting = false, connected = false;
     bool catalog = false;
     for (size_t i = 0u; i < vm->count; ++i)
@@ -3808,10 +5394,38 @@ connections_step(struct vm *vm)
             }
             if (b->selection) {
                 struct snag_vm_buffer *selected = snag_vm_buffer_get(c, b->selection, true);
-                if (selected && origin && !source->draft.len) {
+                bool checkpointed = true;
+                if (selected && origin && window->native) {
+                    /* A receipt can beat the editor's newer typeahead on its
+                     * separate channel. Never replace that pane from a stale draft. */
+                    checkpointed = false;
+                    for (struct vm_native *native = vm->native; native; native = native->next) {
+                        if (native->window != window->id ||
+                            strcmp(native->session, window->session_id)) continue;
+                        checkpointed = native_checkpoint(vm, native, true) == 0;
+                        break;
+                    }
+                    if (!checkpointed)
+                        notice(vm, "Conversation unchanged; editor checkpoint unavailable");
+                }
+                if (selected && origin && checkpointed && !source->draft.len) {
                     bool composer = vm->composer, insert = vm->insert;
-                    open_conversation(vm, selected);
-                    if (snag_vm_buffer_writable(selected)) {
+                    bool native_window = window->native;
+                    if (native_window && c == source->connection) {
+                        for (struct vm_native *native = vm->native; native; native = native->next) {
+                            if (native->window != window->id ||
+                                strcmp(native->session, window->session_id)) continue;
+                            json_decref(native->selection);
+                            native->selection = json_incref(b->selection);
+                            break;
+                        }
+                    } else {
+                        open_conversation(vm, selected);
+                    }
+                    if (native_window && c != source->connection &&
+                        snag_vm_buffer_writable(selected)) {
+                        attach(vm, "");
+                    } else if (snag_vm_buffer_writable(selected)) {
                         vm->composer = composer;
                         vm->insert = insert;
                         if (insert) notice(vm, "");
@@ -3827,7 +5441,6 @@ connections_step(struct vm *vm)
                 b->origin = NULL;
             }
             if (b == c->rollout && b->terminal_result && b->terminal_auto && origin) {
-                b->terminal_auto = false;
                 classic_request(vm, c->session);
             }
         }
@@ -4265,6 +5878,46 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
     }
     size_t height = window->kind == VIEW_TRANSCRIPT ? rectangle->rows :
         rectangle->rows > 1u ? rectangle->rows - 1u : 0u;
+    struct snag_vm_terminal *terminal = native_for(vm, window);
+    if (terminal) {
+        if (snag_vm_terminal_resize(terminal,
+            rectangle->rows, rectangle->columns) < 0) return -1;
+        if (snag_vm_terminal_draw(terminal, &vm->grid, rectangle, window->native_offset,
+            index == vm->focus && !vm->mode ? &vm->cursor_row : NULL,
+            index == vm->focus && !vm->mode ? &vm->cursor_column : NULL) < 0) return -1;
+        size_t cells = (size_t)rectangle->rows * rectangle->columns;
+        if (window->native_width != rectangle->columns || window->native_anchor >= cells ||
+            window->native_cursor >= cells) window->native_select = false;
+        if (window->native_select) {
+            size_t first = window->native_anchor < window->native_cursor ?
+                window->native_anchor : window->native_cursor;
+            size_t last = window->native_anchor > window->native_cursor ?
+                window->native_anchor : window->native_cursor;
+            size_t base = (rectangle->row + first / rectangle->columns) * vm->grid.columns +
+                rectangle->column;
+            while (first % rectangle->columns &&
+                vm->grid.back.cells[base + first % rectangle->columns].continuation) --first;
+            while (last + 1u < cells && (last + 1u) % rectangle->columns &&
+                vm->grid.back.cells[(rectangle->row + (last + 1u) / rectangle->columns) *
+                    vm->grid.columns + rectangle->column +
+                    (last + 1u) % rectangle->columns].continuation) ++last;
+            for (size_t at = first; at <= last; ++at) {
+                size_t row = rectangle->row + at / rectangle->columns;
+                size_t column = rectangle->column + at % rectangle->columns;
+                vm->grid.back.cells[row * vm->grid.columns + column].style ^= SNAG_VM_REVERSE;
+            }
+            if (index == vm->focus && !vm->mode) {
+                vm->cursor_row = rectangle->row + window->native_cursor / rectangle->columns;
+                vm->cursor_column = rectangle->column + window->native_cursor % rectangle->columns;
+            }
+        }
+        return 0;
+    }
+    if (window->native) {
+        static const char text[] = "Opening standalone frontend; saved drafts remain retained";
+        return snag_vm_grid_text(&vm->grid, rectangle->row, rectangle->column,
+            rectangle->columns, text, sizeof(text) - 1u, SNAG_VM_DIM);
+    }
     struct snag_vm_buffer *b = window_buffer(vm, window);
     bool editing = index == vm->focus && vm->composer && snag_vm_buffer_writable(b) && !vm->mode;
     size_t count = row_count(vm, window);
@@ -4284,9 +5937,11 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
             snag_vm_document_columns(window->document) != rectangle->columns) &&
             !window->load && vm->page.window != window->id && vm->scan.window != window->id)
             queue_history(vm, window, window->follow ? LOAD_LAST : LOAD_KEEP);
+        struct snag_vm_document_row row;
         for (size_t i = window->top; i < count && i - window->top < height; ++i) {
-            struct snag_vm_document_row row;
-            if (snag_vm_document_row(window->document, i, &row) < 0) return -1;
+            int rc = i == window->top ? snag_vm_document_row(window->document, i, &row) :
+                snag_vm_document_row_next(window->document, &row);
+            if (rc < 0) return -1;
             const char *text = snag_vm_document_text(window->document, &row);
             unsigned int style = document_style(
                 snag_vm_document_block(window->document, row.block), row.heading);
@@ -4427,6 +6082,7 @@ draw(struct vm *vm)
     size_t rows = snag_term_host_rows(), columns = snag_term_host_columns();
     if (!rows) rows = 1u;
     if (!columns) columns = 1u;
+    if (rows != vm->grid.rows || columns != vm->grid.columns) vm->mouse_down = false;
     if (snag_vm_grid_resize(&vm->grid, rows, columns) < 0) return -1;
     vm->dirty = false;
     vm->prompt_due = 0u;
@@ -4460,17 +6116,44 @@ draw(struct vm *vm)
         if (cursor >= columns) cursor = columns - 1u;
     } else {
         char line[sizeof(vm->message) + 32u];
-        const char *mode = input_mode(vm, &vm->windows[vm->focus]);
-        bool labeled = !strncmp(vm->message, mode, strlen(mode));
-        (void)snprintf(line, sizeof(line), "%s%s%s", labeled ? "" : mode,
-            labeled || !vm->message[0] ? "" : "  ", vm->message);
+        const struct vm_window *window = &vm->windows[vm->focus];
+        const char *mode = input_mode(vm, window);
+        bool retained = false;
+        for (const struct vm_native *native = vm->native; native; native = native->next)
+            if (native->recover_input && !strcmp(native->session, window->session_id))
+                retained = true;
+        bool labeled = !retained && !strncmp(vm->message, mode, strlen(mode));
+        (void)snprintf(line, sizeof(line), "%s%s%s%s", labeled ? "" : mode,
+            retained ? "  Retained frontend input; :recover  " : "",
+            labeled || !vm->message[0] || retained ? "" : "  ", vm->message);
         if (snag_vm_grid_text(&vm->grid, rows - 1u, 0u, columns,
             line, strlen(line), 0u) < 0) return -1;
     }
     int rc = !vm->mode && vm->cursor_row < rows && vm->cursor_column < columns ?
         snag_vm_grid_flush(&vm->grid, vm->cursor_row, vm->cursor_column, true, emit, vm) :
         snag_vm_grid_flush(&vm->grid, rows - 1u, cursor, vm->mode != 0, emit, vm);
-    return rc < 0 ? rc : painted_read(vm);
+    if (rc < 0) return rc;
+    /* Both the private receipt and the ordered PTY marker must precede this
+     * completed grid flush. A control socket alone cannot prove terminal paint. */
+    for (struct vm_native *native = vm->native; native; native = native->next) {
+        if (!native->terminal || !native->audio_ready ||
+            native->audio_forwarded == native->audio_ready ||
+            native->acknowledged != native->serial ||
+            snag_vm_terminal_frame(native->terminal) != native->serial) continue;
+        struct vm_window *window = NULL;
+        for (size_t i = 0u; i < vm->count; ++i)
+            if (vm->windows[i].id == native->window) window = &vm->windows[i];
+        if (!window || !window->native || window->native_offset ||
+            !window->rectangle.visible) continue;
+        struct snag_vm_connection *connection = connection_for(vm, native->session, false);
+        if (!connection || !connection->frontend_audio || connection->channel.output) {
+            vm->dirty = true;
+            continue;
+        }
+        if (snag_vm_connection_presented(connection, native->audio_ready) < 0) return -1;
+        native->audio_forwarded = native->audio_ready;
+    }
+    return painted_read(vm);
 }
 
 static void
@@ -4687,7 +6370,7 @@ collect(struct vm *vm, struct vm_read *read)
             else if (load == LOAD_LAST || load == LOAD_PREVIOUS || load == LOAD_POLL)
                 window->selected = count ? count - 1u : 0u;
             else window->selected = 0u;
-                size_t height = window->history_rows ? window->history_rows : 1u;
+            size_t height = window->history_rows ? window->history_rows : 1u;
             window->top = window->selected >= height ? window->selected - height + 1u : 0u;
             if (count) {
                 if (!result->request.rows && window->follow && window->begin.next_seq > 1u &&
@@ -5013,6 +6696,10 @@ classic_run(struct vm *vm)
     }
     vm->classic_pending = vm->classic_ready = false;
     if (stopped) return 0;
+    for (struct vm_native *native = vm->native; native; native = native->next) {
+        native->ready = false;
+        native->revision = UINT64_MAX;
+    }
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
         if (connection_visible(vm, c)) (void)snag_vm_connection_open(c, &vm->store, c->control);
     for (size_t i = 0u; i < vm->count; ++i) {
@@ -5033,7 +6720,8 @@ interactive(struct vm *vm)
     }
     struct snag_shutdown shutdown = {0};
     bool captured = false, controls = false, entered = false;
-    int rc = -1;
+    const char *stage = "terminal setup";
+    int rc = -1, error;
     stopped = resized = 0;
     vm->output = snag_term_output_open(&vm->terminal, STDOUT_FILENO);
     if (vm->output < 0 || snag_term_input_capture(&vm->terminal) < 0) goto out;
@@ -5044,15 +6732,63 @@ interactive(struct vm *vm)
     entered = true;
     if (enter_screen(vm, true) < 0) goto out;
     refresh(vm);
+    for (struct vm_native *native = vm->native; native; native = native->next)
+        if (native->recover_input)
+            notice(vm, "Retained frontend input; :recover restores unsent text");
     if (vm->start_session) session_request(vm, vm->start_session);
     while (!vm->quit && !stopped) {
+        native_unused(vm);
+        for (size_t i = 0u; i < vm->count; ++i) {
+            if (vm->classic_pending || vm->detach_exit ||
+                !vm->windows[i].native || native_for(vm, &vm->windows[i])) continue;
+            struct vm_native *native = vm->native;
+            while (native && (native->window != vm->windows[i].id ||
+                strcmp(native->session, vm->windows[i].session_id))) native = native->next;
+            /* An existing reconciliation owns its attachment attempt. Retrying
+             * here could erase a refusal and acquire control without user input. */
+            if (native && native->phase != NATIVE_READY) continue;
+            size_t focus = vm->focus;
+            bool insert = vm->insert, composer = vm->composer;
+            char message[sizeof(vm->message)];
+            memcpy(message, vm->message, sizeof(message));
+            vm->focus = i;
+            attach(vm, "");
+            vm->focus = focus;
+            vm->insert = insert;
+            vm->composer = composer;
+            memcpy(vm->message, message, sizeof(message));
+        }
+        for (struct vm_native *native = vm->native; native; native = native->next) {
+            if (!native->terminal) continue;
+            int progress = native_step(vm, native);
+            if (progress < 0) notice(vm, "Standalone frontend transport failed");
+            if (progress) vm->dirty = true;
+        }
         launches_step(vm);
         connections_step(vm);
+        for (struct vm_native *native = vm->native; native; native = native->next) {
+            if (!native->terminal || !snag_view_channel_opened(&native->channel)) continue;
+            if (native_broker_step(vm, native) < 0) {
+                char error[192];
+                (void)snprintf(error, sizeof(error),
+                    "Standalone frontend channel failed (%s); drafts remain retained",
+                    strerror(errno));
+                notice(vm, error);
+                native->ready = false;
+                snag_view_channel_close(&native->channel);
+                /* Audio belongs to the visible attachment. Losing its frontend
+                 * must end that generation even while the independent owner lives. */
+                struct snag_vm_connection *connection = connection_for(vm, native->session, false);
+                if (connection) snag_vm_connection_close(connection);
+            }
+        }
         if (vm->quit || stopped) break;
+        stage = "classic handoff";
         if (vm->classic_ready && classic_run(vm) < 0) goto out;
         if (stopped) break;
         collect(vm, &vm->page);
         collect(vm, &vm->scan);
+        stage = "clipboard";
         if (clipboard_step(vm) < 0) goto out;
         /* Queued commands can schedule owner writes, detach or workspace
          * changes. Run those state transitions before waiting for new input. */
@@ -5062,7 +6798,6 @@ interactive(struct vm *vm)
         }
         if (resized || snag_term_input_resized(&vm->terminal)) {
             resized = 0;
-            vm->mouse_down = false;
             vm->grid.valid = false;
             vm->dirty = true;
         }
@@ -5071,6 +6806,11 @@ interactive(struct vm *vm)
             if (snag_term_can_suspend() && save(vm, NULL) == 0) {
                 for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
                     snag_vm_connection_close(c);
+                while (vm->native) {
+                    struct vm_native *native = vm->native;
+                    vm->native = native->next;
+                    native_free(native);
+                }
                 leave_screen(vm, true);
                 (void)snag_term_suspend();
                 if (enter_screen(vm, false) < 0) goto out;
@@ -5080,11 +6820,12 @@ interactive(struct vm *vm)
             }
         }
         if (vm->save_dirty && vm->save_at && snag_monotonic_ms() >= vm->save_at)
-            (void)save(vm, NULL);
+            (void)save_checkpoint(vm, NULL, false);
         uint64_t now = snag_monotonic_ms();
         for (size_t i = 0u; i < vm->count; ++i) {
             struct vm_window *window = &vm->windows[i];
-            if (window->kind == VIEW_TRANSCRIPT && window->document && window->rectangle.visible &&
+            if (!window->native && window->kind == VIEW_TRANSCRIPT && window->document &&
+                window->rectangle.visible &&
                 !window->visual.kind && !window->load &&
                 vm->page.window != window->id && vm->scan.window != window->id &&
                 window->follow_at <= now)
@@ -5093,6 +6834,7 @@ interactive(struct vm *vm)
         if (vm->prompt_due && now >= vm->prompt_due) vm->dirty = true;
         bool clipboard_output = vm->clipboard.osc.source ||
             vm->clipboard.packet_at < vm->clipboard.packet_length;
+        stage = "draw";
         if (vm->dirty && !clipboard_output && draw(vm) < 0) {
             if (vm->quit || stopped) break;
             goto out;
@@ -5113,7 +6855,7 @@ interactive(struct vm *vm)
             uint64_t now = snag_monotonic_ms();
             for (size_t i = 0u; i < vm->count; ++i) {
                 struct vm_window *window = &vm->windows[i];
-                if (window->kind != VIEW_TRANSCRIPT || !window->document ||
+                if (window->native || window->kind != VIEW_TRANSCRIPT || !window->document ||
                     !window->rectangle.visible || window->source_failed ||
                     window->visual.kind || vm->scan.window == window->id) continue;
                 int remaining = window->follow_at > now ? (int)(window->follow_at - now) : 0;
@@ -5124,10 +6866,15 @@ interactive(struct vm *vm)
             for (struct snag_vm_buffer *b = c->buffers; b; b = b->next)
                 if (b->editor.input && b->editor.input->history_pending) timeout = 0;
         if ((vm->dirty && !clipboard_output) || vm->suspend) timeout = 0;
+        stage = "input";
         if (input_ready(vm, timeout) < 0) goto out;
     }
+    /* A graceful signal stops admission, then gives the existing editors one
+     * bounded final checkpoint before their processes are joined. */
+    vm->quit = true;
     rc = save(vm, NULL) < 0 ? 1 : 0;
 out:
+    error = errno;
     snag_shutdown_detach(&shutdown);
     if (entered) leave_screen(vm, true);
     else if (captured) (void)snag_term_input_restore(&vm->terminal, false);
@@ -5137,7 +6884,8 @@ out:
     vm->output = -1;
     snag_term_host_close(&vm->terminal);
     if (rc < 0) {
-        (void)fprintf(stderr, "snajpagent: workspace terminal failed: %s\n", strerror(errno));
+        (void)fprintf(stderr, "snajpagent: workspace terminal failed (%s): %s\n",
+            stage, strerror(error));
     } else if (rc) {
         (void)fprintf(stderr, "snajpagent: %s\n", vm->message);
     }
@@ -5287,8 +7035,16 @@ out:
     free(vm.program);
     free(vm.search_query);
     free(vm.completion_prefix);
+#ifndef _WIN32
+    free(vm.pollfds);
+#endif
     snag_vm_reader_close(vm.page.reader);
     snag_vm_reader_close(vm.scan.reader);
+    while (vm.native) {
+        struct vm_native *native = vm.native;
+        vm.native = native->next;
+        native_free(native);
+    }
     snag_vm_connections_free(vm.connections);
     if (vm.switch_workspace) {
         snag_vm_workspace_close(vm.switch_workspace);

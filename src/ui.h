@@ -12,13 +12,15 @@ struct snag_ui {
     struct snag_history history;
     enum snag_render_view view;
     bool opened;
-    bool native, native_continuing, direct;
+    bool native, native_continuing, direct, frontend;
     struct snag_terminal_profile profile;
     bool prompt_wanted;
     bool active, input_active, input_echoed, input_view_applied;
-    bool input_error;
+    bool input_error, input_local;
     bool input_interface, input_terminal_command;
     int input_verbosity;
+    /* Owned frontend event from poll; released by the next poll or free. */
+    json_t *frontend_message;
     /* Engine-local capture for the duration of semantic command dispatch. */
     struct snag_buf *command_report;
     bool command_error, command_report_passthrough;
@@ -29,7 +31,7 @@ struct snag_ui {
     void (*observe)(void *, const char *, const char *, const char *);
     void *observe_opaque;
     uint64_t turn_generation;
-    uint64_t input_received_ms;
+    uint64_t input_received_ms, input_turn_generation;
     char label[SNAG_TERM_LABEL_BYTES];
     char submitted_label[SNAG_TERM_LABEL_BYTES];
     enum snag_render_view input_view;
@@ -58,7 +60,8 @@ enum snag_ui_operation {
     SNAG_UI_SESSION_REFUSE, SNAG_UI_SESSION_RELEASED, SNAG_UI_SESSION_BOUND,
     SNAG_UI_SESSION_READY,
     SNAG_UI_INPUT, SNAG_UI_VOICE_EVENT, SNAG_UI_VIEW_STATE, SNAG_UI_VIEW_RESULT,
-    SNAG_UI_COMMAND_RESULT, SNAG_UI_COMMAND_REPORT, SNAG_UI_STOP, SNAG_UI_NOTICE
+    SNAG_UI_COMMAND_RESULT, SNAG_UI_COMMAND_REPORT, SNAG_UI_STOP, SNAG_UI_NOTICE,
+    SNAG_UI_PRESENTATION_REPLAY, SNAG_UI_EDITORS, SNAG_UI_FRONTEND, SNAG_UI_FRONTEND_VISIBLE
 };
 
 /* Borrowed command bytes remain valid until the synchronous call returns.
@@ -71,6 +74,8 @@ struct snag_ui_command {
     bool retain_only;
     /* Selected conversation for local presentation; NULL names the rollout. */
     const json_t *route;
+    /* Exact locally painted event identity, retained for replay acknowledgement. */
+    const json_t *origin;
     union {
         unsigned int value;
         struct { enum snag_render_view view; uint32_t destination;
@@ -88,11 +93,13 @@ struct snag_ui_command {
         const struct snag_irc_event *irc;
         const struct snag_irc_conversation_target *conversation;
         const json_t *voice;
+        const json_t *editors;
         struct { int fd; struct snag_render_source source;
                  uint32_t timeout_ms, max_output_bytes; } durable;
         uint64_t seq;
         /* The immutable command catalog must outlive the UI. */
         struct { const struct snag_term_command *items; size_t count; } commands;
+        struct { const json_t *record; int journal; } presentation;
         struct { struct snag_history_snapshot entries; bool refresh; } history;
         const struct snag_irc_destinations *destinations;
         struct snag_irc_route *route;
@@ -104,6 +111,14 @@ int snag_ui_send(struct snag_ui *ui, struct snag_ui_command command);
 int snag_ui_restore_input(struct snag_ui *ui, const char *text);
 
 int snag_ui_init(struct snag_ui *ui);
+/* Private same-executable frontend. Its workspace broker retains the lease. */
+int snag_ui_frontend_main(const char *descriptor);
+json_t *snag_ui_frontend_state(const json_t *state);
+snag_wake_fd snag_ui_input_wake(const struct snag_ui *);
+/* Owned immutable context of the action most recently returned by poll. */
+json_t *snag_ui_input_capture(const struct snag_ui *);
+json_t *snag_ui_input_capture_forward(json_t *, const json_t *, const char *);
+int snag_ui_prompt_frame(struct snag_ui *, const json_t *);
 /* Transfer owner descriptors to the presentation thread before opening input. */
 int snag_ui_session_start(struct snag_ui *, struct snag_session_process *);
 #if SNAJPAGENT_VM
@@ -176,8 +191,11 @@ int snag_ui_public_continue(struct snag_ui *ui, int fd);
 int snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
                          bool resumed);
 int snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count);
+int snag_ui_attachment_history(struct snag_ui *, struct snag_session *, uint64_t turns);
 int snag_ui_history_report(struct snag_ui *, struct snag_session *, uint64_t, struct snag_buf *,
     const struct snag_irc_conversation_target *);
+/* Navigation of the owner's persisted prompts without opening a history writer. */
+int snag_ui_history_read(struct snag_ui *, const char *dotdir, const char *session);
 int snag_ui_history_open(struct snag_ui *ui, const char *dotdir, const char *session_dir);
 int snag_ui_history_add(struct snag_ui *ui, const char *text);
 bool snag_ui_history_warning(struct snag_ui *ui);

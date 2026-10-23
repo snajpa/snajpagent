@@ -326,10 +326,8 @@ service_attachment(struct app_state *app, bool external)
     int rc = 0;
     if (!external && app->attachment_history_pending) {
         app->attachment_history_pending = false;
-        rc = app_textf(app, SNAG_UI_HOST,
-            "Attached session %s; recent history follows. Use /history N for earlier turns.",
-            app->session.id);
-        if (!rc) rc = snag_ui_history(&app->ui, &app->session, app->config->resume_history_turns);
+        rc = snag_ui_attachment_history(&app->ui, &app->session,
+            app->config->resume_history_turns);
         if (!rc && app->stream_item_active)
             rc = snag_ui_public_continue(&app->ui, app->execute ? STDERR_FILENO : STDOUT_FILENO);
     }
@@ -4203,18 +4201,21 @@ handle_common_command(
             if (target->kind == SNAG_IRC_CHANNEL ? !target->endpoint[0] :
                     !target->connection[0] || !target->conversation[0])
                 return app_error(app, "select an IRC conversation first");
+            /* The classic pager collects before display. Private controllers
+             * retain through UI publication so live frontends receive it too. */
+            if (app->command_report && !app->ui.command_report)
+                return snag_ui_history_report(
+                    &app->ui, &app->session, count, app->command_report, target);
             struct snag_buf text = {.max = SIZE_MAX};
-            int rc = snag_ui_history_report(&app->ui, &app->session, count,
-                app->command_report ? app->command_report : &text, target);
-            if (!rc && !app->command_report)
-                rc = snag_ui_text(&app->ui, SNAG_UI_HELP, (const char *)text.data);
+            int rc = snag_ui_history_report(&app->ui, &app->session, count, &text, target);
+            if (!rc) rc = snag_buf_terminate(&text);
+            if (!rc) rc = snag_ui_text(&app->ui, SNAG_UI_HELP, (const char *)text.data);
             snag_buf_free(&text);
             return rc;
         }
-        return app->command_report
-                   ? snag_ui_history_report(
-                         &app->ui, &app->session, count, app->command_report, NULL)
-                   : snag_ui_history(&app->ui, &app->session, count);
+        return app->command_report ?
+            snag_ui_history_report(&app->ui, &app->session, count, app->command_report, NULL) :
+            snag_ui_history(&app->ui, &app->session, count);
     }
     if (strncmp(line, "/cat", 4u) == 0 && (!line[4] || isspace((unsigned char)line[4])))
         return page_local_file(app, line + 4u);
@@ -4820,6 +4821,14 @@ poll_input(struct app_state *app, int timeout_ms, enum snag_term_action *action,
         (void)app_error(app, error);
         return -1;
     }
+#if SNAJPAGENT_VM
+    if (rc >= 0 && app->ui.input_local && app->ui.view_request[0]) {
+        int retained = snag_ui_view_result(&app->ui, app->ui.view_request, "local",
+            app->session.next_seq - 1u, "");
+        app->ui.view_request[0] = '\0';
+        if (retained < 0) return -1;
+    }
+#endif
     return rc;
 }
 
@@ -5897,7 +5906,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
     char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
     char rejected_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
-    bool hard_compacted = false;
+    bool request_compacted = false;
     unsigned int cyber_clarifications = 0u;
     bool continuing = app->session.active_turn;
     bool retry_skills = app->retry_skill_binding ||
@@ -6167,6 +6176,10 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 app->history_recovery_rebase);
         int build_rc = snag_app_request_build(app, steering, cycle, &credential, &projection,
             &count_method, &request_body, error, sizeof(error));
+        if (app->input_closed) {
+            result = 0;
+            goto out;
+        }
         if (build_rc < 0) {
             bool request_oversized = errno == E2BIG;
             bool image_boundary = errno == EFBIG &&
@@ -6181,7 +6194,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 /* One bounded compact gets a chance to preserve the archive.
                  * Recheck its rebuilt size before choosing history recovery. */
                 bool compacted = false;
-                int compact_rc = hard_compacted ? 0 :
+                int compact_rc = request_compacted ? 0 :
                     snag_app_compact_oversized_request(app, &credential,
                         &compacted, error, sizeof(error));
                 if (compact_rc == 1 && (app->steering_requested ||
@@ -6190,7 +6203,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 if (compact_rc == 2 && app->interrupt_requested) goto user_interrupted;
                 if (compact_rc == 0) {
                     if (compacted) {
-                        hard_compacted = true;
+                        request_compacted = true;
                     } else {
                         app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
                         app->history_recovery_rebase = true;
@@ -6236,12 +6249,14 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             goto rebuild_request;
         {
             bool compacted = false;
-            bool over_hard = !strcmp(count_method, "exact") &&
-                             app->turn_capacity.hard_input_known &&
-                             projection.input_tokens_bound > app->turn_capacity.hard_input_tokens;
+            uint64_t measured = projection.input_tokens_bound;
+            bool measured_known = !strcmp(count_method, "exact") ||
+                                  snag_app_measured_input(app, &measured);
+            bool over_hard = measured_known && app->turn_capacity.hard_input_known &&
+                             measured > app->turn_capacity.hard_input_tokens;
             int compact_rc;
 
-            if (over_hard && !pure_history_recovery && hard_compacted) {
+            if (over_hard && !pure_history_recovery && request_compacted) {
                 /* One checkpoint can summarize an ordinary prefix. If the
                  * active turn still exceeds the window, let the model fetch
                  * needed history rather than walking every older tool group.
@@ -6277,8 +6292,10 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             if (over_hard)
                 memcpy(over_budget_request_hash, projection.create_request.sha256,
                     sizeof(over_budget_request_hash));
-            compact_rc = snag_app_compact_before_response(app, &credential,
-                projection.input_tokens_bound, count_method, &compacted, error, sizeof(error));
+            compact_rc = 0;
+            if (!request_compacted || over_hard)
+                compact_rc = snag_app_compact_before_response(app, &credential,
+                    projection.input_tokens_bound, count_method, &compacted, error, sizeof(error));
             if (compact_rc == 1 &&
                 (app->steering_requested || app->control_requested ||
                     app->model_switch_requested)) {
@@ -6295,7 +6312,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 goto out;
             }
             if (compacted) {
-                if (over_hard) hard_compacted = true;
+                request_compacted = true;
                 goto rebuild_request;
             }
         }
@@ -6623,11 +6640,11 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 error, sizeof(error)) < 0) {
             goto fail;
         }
-        /* Bound repeated hard-budget compactions while rebuilding one request,
+        /* Bound repeated proactive and hard-budget compactions within one request,
          * not for the whole (possibly very long) active turn. A completed
          * provider response is genuine progress; its new tool/assistant group
          * may need another checkpoint later instead of a summary-less rebase. */
-        hard_compacted = false;
+        request_compacted = false;
         over_budget_request_hash[0] = '\0';
         {
             struct snag_usage_totals *totals = &app->program_usage;

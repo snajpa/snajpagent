@@ -4600,8 +4600,13 @@ snag_render_resume_hint(struct snag_render *render, const char *command, size_t 
         if (!rc)
             rc = render_write(render, STDERR_FILENO, (const char *)block.data + heading,
                 block.len - heading, true);
-    } else
+    } else {
+        /* A retained resume hint can be replayed into a live editor. Keep its
+         * painted prompt synchronized just as for ordinary host output. */
+        if (output_begin(render) < 0) goto out;
         rc = snag_term_write(STDERR_FILENO, block.data, block.len);
+        if (output_end(render) < 0) rc = -1;
+    }
 out:
     snag_buf_free(&block);
     return rc;

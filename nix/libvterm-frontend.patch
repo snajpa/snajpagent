@@ -1,0 +1,1589 @@
+--- /dev/null
++++ b/CMakeLists.txt
+@@ -0,0 +1,19 @@
++# SPDX-License-Identifier: GPL-2.0-only
++cmake_minimum_required(VERSION 3.16)
++project(snajpagent_vterm VERSION 0.3.3 LANGUAGES C)
++include(GNUInstallDirs)
++if(NOT SNAG_UNICODE_HEADER)
++  message(FATAL_ERROR "SNAG_UNICODE_HEADER must name the application's Unicode declaration header")
++endif()
++configure_file("${SNAG_UNICODE_HEADER}" snag_unicode.h COPYONLY)
++file(GLOB VTERM_SOURCES CONFIGURE_DEPENDS src/*.c)
++add_library(snajpagent-vterm STATIC ${VTERM_SOURCES})
++target_compile_features(snajpagent-vterm PRIVATE c_std_99)
++target_include_directories(snajpagent-vterm PRIVATE include "${CMAKE_CURRENT_BINARY_DIR}")
++set_target_properties(snajpagent-vterm PROPERTIES POSITION_INDEPENDENT_CODE ON)
++install(TARGETS snajpagent-vterm ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
++install(FILES include/vterm.h include/vterm_keycodes.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
++install(FILES LICENSE DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/snajpagent-vterm")
++configure_file(snajpagent-vterm.pc.in snajpagent-vterm.pc @ONLY)
++install(FILES "${CMAKE_CURRENT_BINARY_DIR}/snajpagent-vterm.pc"
++  DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
+--- a/include/vterm.h
++++ b/include/vterm.h
+@@ -1,5 +1,7 @@
+ #ifndef __VTERM_H__
+ #define __VTERM_H__
++
++#define SNAJPAGENT_VTERM_ABI 1
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -246,6 +248,7 @@
+   VTERM_ATTR_SMALL,      // bool:   73, 74, 75
+   VTERM_ATTR_BASELINE,   // number: 73, 74, 75
+ 
++  VTERM_ATTR_FAINT,
+   VTERM_N_ATTRS
+ } VTermAttr;
+ 
+@@ -343,6 +346,7 @@
+ VTerm *vterm_new_with_allocator(int rows, int cols, VTermAllocatorFunctions *funcs, void *allocdata);
+ 
+ void   vterm_free(VTerm* vt);
++int    vterm_get_error(const VTerm *vt);
+ 
+ void vterm_get_size(const VTerm *vt, int *rowsp, int *colsp);
+ void vterm_set_size(VTerm *vt, int rows, int cols);
+@@ -412,6 +416,8 @@
+   int (*resize)(int rows, int cols, void *user);
+ } VTermParserCallbacks;
+ 
++/* A nonzero filter result consumes a sequence before state interpretation. */
++void vterm_parser_set_filter(VTerm *vt, const VTermParserCallbacks *filter, void *user);
+ void  vterm_parser_set_callbacks(VTerm *vt, const VTermParserCallbacks *callbacks, void *user);
+ void *vterm_parser_get_cbdata(VTerm *vt);
+ 
+@@ -498,6 +504,7 @@
+ 
+ typedef struct {
+     unsigned int bold      : 1;
++    unsigned int faint     : 1;
+     unsigned int underline : 2;
+     unsigned int italic    : 1;
+     unsigned int blink     : 1;
+@@ -552,6 +559,12 @@
+ void *vterm_screen_get_unrecognised_fbdata(VTermScreen *screen);
+ 
+ void vterm_screen_enable_reflow(VTermScreen *screen, bool reflow);
++/* Private terminal-owned scrollback. Glyphs are borrowed until the next mutation. */
++void vterm_screen_enable_history(VTermScreen *screen);
++size_t vterm_screen_history_rows(const VTermScreen *screen);
++int vterm_screen_view_line_continued(const VTermScreen *screen, size_t offset, int row);
++int vterm_screen_get_view_cell(const VTermScreen *screen, size_t offset, VTermPos pos,
++    VTermScreenCell *cell, const uint32_t **glyph, size_t *length);
+ 
+ // Back-compat alias for the brief time it was in 0.3-RC1
+ #define vterm_screen_set_reflow  vterm_screen_enable_reflow
+@@ -595,6 +608,7 @@
+ 
+ int vterm_screen_get_attrs_extent(const VTermScreen *screen, VTermRect *extent, VTermPos pos, VTermAttrMask attrs);
+ 
++size_t vterm_screen_get_glyph(const VTermScreen *screen, VTermPos pos, const uint32_t **chars);
+ int vterm_screen_get_cell(const VTermScreen *screen, VTermPos pos, VTermScreenCell *cell);
+ 
+ int vterm_screen_is_eol(const VTermScreen *screen, VTermPos pos);
+--- /dev/null
++++ b/snajpagent-vterm.pc.in
+@@ -0,0 +1,9 @@
++prefix=@CMAKE_INSTALL_PREFIX@
++libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
++includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
++
++Name: snajpagent-vterm
++Description: Private terminal parser and screen storage for snajpagent
++Version: @PROJECT_VERSION@
++Libs: -L${libdir} -lsnajpagent-vterm
++Cflags: -I${includedir}
+--- a/src/parser.c
++++ b/src/parser.c
+@@ -32,6 +32,14 @@
+   }
+ #endif
+ 
++  if(vt->parser.filter && vt->parser.filter->csi &&
++     (*vt->parser.filter->csi)(
++       vt->parser.v.csi.leaderlen ? vt->parser.v.csi.leader : NULL,
++       vt->parser.v.csi.args, vt->parser.v.csi.argi,
++       vt->parser.intermedlen ? vt->parser.intermed : NULL,
++       command, vt->parser.filterdata))
++    return;
++
+   if(vt->parser.callbacks && vt->parser.callbacks->csi)
+     if((*vt->parser.callbacks->csi)(
+           vt->parser.v.csi.leaderlen ? vt->parser.v.csi.leader : NULL, 
+@@ -72,9 +80,16 @@
+ 
+   switch(vt->parser.state) {
+     case OSC:
++      if(vt->parser.filter && vt->parser.filter->osc &&
++         (*vt->parser.filter->osc)(vt->parser.v.osc.command, frag, vt->parser.filterdata))
++        break;
+       if(vt->parser.callbacks && vt->parser.callbacks->osc)
+         (*vt->parser.callbacks->osc)(vt->parser.v.osc.command, frag, vt->parser.cbdata);
+       break;
+ 
+     case DCS:
++      if(vt->parser.filter && vt->parser.filter->dcs &&
++         (*vt->parser.filter->dcs)(vt->parser.v.dcs.command,
++           vt->parser.v.dcs.commandlen, frag, vt->parser.filterdata))
++        break;
+       if(vt->parser.callbacks && vt->parser.callbacks->dcs)
+@@ -111,7 +122,7 @@
+ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
+ {
+   size_t pos = 0;
+-  const char *string_start;
++  const char *string_start = NULL;
+ 
+   switch(vt->parser.state) {
+   case NORMAL:
+@@ -141,7 +152,25 @@
+     bool c1_allowed = !vt->mode.utf8;
+ 
++    if(vt->parser.in_esc && vt->parser.state == DCS &&
++       c != 0x5c && vt->parser.filter && vt->parser.filter->dcs) {
++      size_t length = string_start ? bytes + pos - string_start : 0;
++      const char escape = 0x1b;
++      VTermStringFragment frag = {
++        .str = length ? string_start : &escape,
++        .len = length ? length : 1,
++        .initial = vt->parser.string_initial,
++        .final = false,
++      };
++      if((*vt->parser.filter->dcs)(vt->parser.v.dcs.command,
++           vt->parser.v.dcs.commandlen, frag, vt->parser.filterdata)) {
++        vt->parser.string_initial = false;
++        vt->parser.in_esc = false;
++        string_start = bytes + pos;
++      }
++    }
++
+     if(c == 0x00 || c == 0x7f) { // NUL, DEL
+-      if(IS_STRING_STATE()) {
++      if(string_start) {
+         string_fragment(vt, string_start, bytes + pos - string_start, false);
+         string_start = bytes + pos + 1;
+       }
+@@ -171,16 +182,30 @@
+       if(vt->parser.state == SOS)
+         continue; // All other C0s permitted in SOS
+ 
+-      if(IS_STRING_STATE())
++      if(string_start)
+         string_fragment(vt, string_start, bytes + pos - string_start, false);
++      if(vt->parser.state == DCS && vt->parser.filter && vt->parser.filter->dcs) {
++        VTermStringFragment frag = {
++          .str = bytes + pos,
++          .len = 1,
++          .initial = vt->parser.string_initial,
++          .final = false,
++        };
++        if((*vt->parser.filter->dcs)(vt->parser.v.dcs.command,
++             vt->parser.v.dcs.commandlen, frag, vt->parser.filterdata)) {
++          vt->parser.string_initial = false;
++          string_start = bytes + pos + 1;
++          continue;
++        }
++      }
+       do_control(vt, c);
+-      if(IS_STRING_STATE())
++      if(string_start)
+         string_start = bytes + pos + 1;
+       continue;
+     }
+     // else fallthrough
+ 
+-    size_t string_len = bytes + pos - string_start;
++    size_t string_len = string_start ? bytes + pos - string_start : 0;
+ 
+     if(vt->parser.in_esc) {
+       // Hoist an ESC letter into a C1 if we're not in a string mode
+@@ -400,3 +411,9 @@
+ {
+   vt->parser.emit_nul = emit;
+ }
++
++void vterm_parser_set_filter(VTerm *vt, const VTermParserCallbacks *filter, void *user)
++{
++  vt->parser.filter = filter;
++  vt->parser.filterdata = user;
++}
+--- a/src/pen.c
++++ b/src/pen.c
+@@ -169,6 +169,7 @@
+ 
+ INTERNAL void vterm_state_resetpen(VTermState *state)
+ {
++  state->pen.faint = 0;     setpenattr_bool(state, VTERM_ATTR_FAINT, 0);
+   state->pen.bold = 0;      setpenattr_bool(state, VTERM_ATTR_BOLD, 0);
+   state->pen.underline = 0; setpenattr_int (state, VTERM_ATTR_UNDERLINE, 0);
+   state->pen.italic = 0;    setpenattr_bool(state, VTERM_ATTR_ITALIC, 0);
+@@ -192,6 +193,7 @@
+   else {
+     state->pen = state->saved.pen;
+ 
++    setpenattr_bool(state, VTERM_ATTR_FAINT,     state->pen.faint);
+     setpenattr_bool(state, VTERM_ATTR_BOLD,      state->pen.bold);
+     setpenattr_int (state, VTERM_ATTR_UNDERLINE, state->pen.underline);
+     setpenattr_bool(state, VTERM_ATTR_ITALIC,    state->pen.italic);
+@@ -300,6 +302,11 @@
+         set_pen_col_ansi(state, VTERM_ATTR_FOREGROUND, fg->indexed.idx + (state->pen.bold ? 8 : 0));
+       break;
+     }
++
++    case 2: // Faint on
++      state->pen.faint = 1;
++      setpenattr_bool(state, VTERM_ATTR_FAINT, 1);
++      break;
+ 
+     case 3: // Italic on
+       state->pen.italic = 1;
+@@ -360,6 +367,8 @@
+       break;
+ 
+     case 22: // Bold off
++      state->pen.faint = 0;
++      setpenattr_bool(state, VTERM_ATTR_FAINT, 0);
+       state->pen.bold = 0;
+       setpenattr_bool(state, VTERM_ATTR_BOLD, 0);
+       break;
+@@ -508,6 +517,9 @@
+   if(state->pen.bold)
+     args[argi++] = 1;
+ 
++  if(state->pen.faint)
++    args[argi++] = 2;
++
+   if(state->pen.italic)
+     args[argi++] = 3;
+ 
+@@ -551,6 +563,9 @@
+ int vterm_state_get_penattr(const VTermState *state, VTermAttr attr, VTermValue *val)
+ {
+   switch(attr) {
++  case VTERM_ATTR_FAINT:
++    val->boolean = state->pen.faint;
++    return 1;
+   case VTERM_ATTR_BOLD:
+     val->boolean = state->pen.bold;
+     return 1;
+--- a/src/screen.c
++++ b/src/screen.c
+@@ -1,5 +1,6 @@
+ #include "vterm_internal.h"
+ 
++#include <errno.h>
+ #include <stdio.h>
+ #include <string.h>
+ 
+@@ -18,6 +19,7 @@
+   VTermColor   fg, bg;
+ 
+   unsigned int bold      : 1;
++  unsigned int faint     : 1;
+   unsigned int underline : 2;
+   unsigned int italic    : 1;
+   unsigned int blink     : 1;
+@@ -34,12 +36,25 @@
+   unsigned int dhl            : 2; /* on a DECDHL line (1=top 2=bottom) */
+ } ScreenPen;
+ 
++/* Overflow graphemes are immutable and shared while cells move/reflow. */
++typedef struct {
++  size_t references, length;
++  uint32_t chars[];
++} ScreenGlyph;
++
+ /* Internal representation of a screen cell */
+ typedef struct
+ {
+   uint32_t chars[VTERM_MAX_CHARS_PER_CELL];
++  ScreenGlyph *glyph;
+   ScreenPen pen;
+ } ScreenCell;
++
++typedef struct {
++  int columns;
++  VTermLineInfo info;
++  ScreenCell cells[];
++} ScreenHistoryLine;
+ 
+ struct VTermScreen
+ {
+@@ -60,6 +75,10 @@
+ 
+   unsigned int global_reverse : 1;
+   unsigned int reflow : 1;
++  unsigned int history_enabled : 1;
++
++  ScreenHistoryLine **history;
++  size_t history_count, history_capacity;
+ 
+   /* Primary and Altscreen. buffers[1] is lazily allocated as needed */
+   ScreenCell *buffers[2];
+@@ -73,8 +92,39 @@
+   ScreenPen pen;
+ };
+ 
++static void release_glyph(VTerm *vt, ScreenCell *cell)
++{
++  if(cell->glyph && !--cell->glyph->references)
++    vterm_allocator_free(vt, cell->glyph);
++  cell->glyph = NULL;
++}
++
++static void move_cells(VTerm *vt, ScreenCell *dest, const ScreenCell *src, size_t count)
++{
++  for(size_t i = 0; i < count; i++)
++    if(src[i].glyph)
++      src[i].glyph->references++;
++  /* Source and destination can overlap. Keep the retained source pointers
++   * intact until memmove has consumed them. */
++  for(size_t i = 0; i < count; i++)
++    if(dest[i].glyph && !--dest[i].glyph->references)
++      vterm_allocator_free(vt, dest[i].glyph);
++  memmove(dest, src, count * sizeof(*dest));
++}
++
++static void free_buffer(VTermScreen *screen, ScreenCell *buffer, int rows, int cols)
++{
++  if(!buffer)
++    return;
++  for(int row = 0; row < rows; row++)
++    for(int col = 0; col < cols; col++)
++      release_glyph(screen->vt, buffer + row * cols + col);
++  vterm_allocator_free(screen->vt, buffer);
++}
++
+ static inline void clearcell(const VTermScreen *screen, ScreenCell *cell)
+ {
++  release_glyph(screen->vt, cell);
+   cell->chars[0] = 0;
+   cell->pen = screen->pen;
+ }
+@@ -91,6 +141,8 @@
+ static ScreenCell *alloc_buffer(VTermScreen *screen, int rows, int cols)
+ {
+   ScreenCell *new_buffer = vterm_allocator_malloc(screen->vt, sizeof(ScreenCell) * rows * cols);
++  if(!new_buffer)
++    return NULL;
+ 
+   for(int row = 0; row < rows; row++) {
+     for(int col = 0; col < cols; col++) {
+@@ -178,6 +230,20 @@
+   if(!cell)
+     return 0;
+ 
++  size_t length = 0;
++  while(info->chars[length])
++    length++;
++  ScreenGlyph *glyph = NULL;
++  if(length > VTERM_MAX_CHARS_PER_CELL) {
++    glyph = vterm_allocator_malloc(screen->vt, sizeof(*glyph) + length * sizeof(uint32_t));
++    if(!glyph)
++      return 0;
++    glyph->references = 1;
++    glyph->length = length;
++    memcpy(glyph->chars, info->chars, length * sizeof(uint32_t));
++  }
++  release_glyph(screen->vt, cell);
++  cell->glyph = glyph;
+   int i;
+   for(i = 0; i < VTERM_MAX_CHARS_PER_CELL && info->chars[i]; i++) {
+     cell->chars[i] = info->chars[i];
+@@ -186,8 +252,13 @@
+   if(i < VTERM_MAX_CHARS_PER_CELL)
+     cell->chars[i] = 0;
+ 
+-  for(int col = 1; col < info->width; col++)
+-    getcell(screen, pos.row, pos.col + col)->chars[0] = (uint32_t)-1;
++  for(int col = 1; col < info->width; col++) {
++    ScreenCell *continuation = getcell(screen, pos.row, pos.col + col);
++    if(continuation) {
++      release_glyph(screen->vt, continuation);
++      continuation->chars[0] = (uint32_t)-1;
++    }
++  }
+ 
+   VTermRect rect = {
+     .start_row = pos.row,
+@@ -205,13 +276,63 @@
+   return 1;
+ }
+ 
++static void store_history_row(VTermScreen *screen, int row)
++{
++  if(screen->history_enabled) {
++    if(screen->history_count == screen->history_capacity) {
++      size_t capacity = screen->history_capacity ? screen->history_capacity * 2 : 16;
++      if(capacity < screen->history_capacity || capacity > SIZE_MAX / sizeof(*screen->history)) {
++        screen->vt->error = ENOMEM;
++        return;
++      }
++      ScreenHistoryLine **history = vterm_allocator_malloc(screen->vt, capacity * sizeof(*history));
++      if(!history)
++        return;
++      if(screen->history_count)
++        memcpy(history, screen->history, screen->history_count * sizeof(*history));
++      vterm_allocator_free(screen->vt, screen->history);
++      screen->history = history;
++      screen->history_capacity = capacity;
++    }
++    size_t columns = screen->cols;
++    if(columns > (SIZE_MAX - sizeof(ScreenHistoryLine)) / sizeof(ScreenCell)) {
++      screen->vt->error = ENOMEM;
++      return;
++    }
++    ScreenHistoryLine *line = vterm_allocator_malloc(screen->vt,
++        sizeof(*line) + columns * sizeof(*line->cells));
++    if(!line)
++      return;
++    line->columns = screen->cols;
++    line->info = screen->state->lineinfos[BUFIDX_PRIMARY][row];
++    move_cells(screen->vt, line->cells,
++        screen->buffers[BUFIDX_PRIMARY] + row * screen->cols, columns);
++    screen->history[screen->history_count++] = line;
++  }
++}
++
+ static void sb_pushline_from_row(VTermScreen *screen, int row)
+ {
++  if(!screen->callbacks || !screen->callbacks->sb_pushline)
++    return;
+   VTermPos pos = { .row = row };
+   for(pos.col = 0; pos.col < screen->cols; pos.col++)
+     vterm_screen_get_cell(screen, pos, screen->sb_buffer + pos.col);
+ 
+   (screen->callbacks->sb_pushline)(screen->cols, screen->sb_buffer, screen->cbdata);
++}
++
++/* Capture before the state layer shifts continuation metadata. */
++INTERNAL void vterm_screen_scroll_history(VTermScreen *screen, VTermRect rect,
++    int downward, int rightward)
++{
++  if(!screen || !screen->history_enabled || downward <= 0 || rightward ||
++      rect.start_row || rect.start_col || rect.end_col != screen->cols ||
++      screen->buffer != screen->buffers[BUFIDX_PRIMARY])
++    return;
++  vterm_screen_flush_damage(screen);
++  for(int row = 0; row < downward; row++)
++    store_history_row(screen, row);
+ }
+ 
+ static int moverect_internal(VTermRect dest, VTermRect src, void *user)
+@@ -242,9 +363,8 @@
+   }
+ 
+   for(int row = init_row; row != test_row; row += inc_row)
+-    memmove(getcell(screen, row, dest.start_col),
+-            getcell(screen, row + downward, src.start_col),
+-            cols * sizeof(ScreenCell));
++    move_cells(screen->vt, getcell(screen, row, dest.start_col),
++               getcell(screen, row + downward, src.start_col), cols);
+ 
+   return 1;
+ }
+@@ -280,6 +400,7 @@
+       if(selective && cell->pen.protected_cell)
+         continue;
+ 
++      release_glyph(screen->vt, cell);
+       cell->chars[0] = 0;
+       cell->pen = (ScreenPen){
+         /* Only copy .fg and .bg; leave things like rv in reset state */
+@@ -408,6 +529,9 @@
+   VTermScreen *screen = user;
+ 
+   switch(attr) {
++  case VTERM_ATTR_FAINT:
++    screen->pen.faint = val->boolean;
++    return 1;
+   case VTERM_ATTR_BOLD:
+     screen->pen.bold = val->boolean;
+     return 1;
+@@ -504,16 +628,172 @@
+ 
+ #define REFLOW (screen->reflow)
+ 
+-static void resize_buffer(VTermScreen *screen, int bufidx, int new_rows, int new_cols, bool active, VTermStateFields *statefields)
++static void clear_history(VTermScreen *screen);
++
++/* History rows can have different widths until the next primary reflow. */
++static ScreenCell *primary_row(VTermScreen *screen, VTermStateFields *fields,
++    size_t row, int *columns, VTermLineInfo *info)
++{
++  if(row < screen->history_count) {
++    ScreenHistoryLine *line = screen->history[row];
++    *columns = line->columns;
++    *info = line->info;
++    return line->cells;
++  }
++  row -= screen->history_count;
++  *columns = screen->cols;
++  *info = fields->lineinfos[BUFIDX_PRIMARY][row];
++  return screen->buffers[BUFIDX_PRIMARY] + row * screen->cols;
++}
++
++static int reflow_primary(VTermScreen *screen, int rows, int cols, bool active,
++    VTermStateFields *fields, ScreenCell *buffer, VTermLineInfo *lineinfo)
++{
++  size_t source_rows = screen->history_count + screen->rows;
++  size_t cursor_row = screen->history_count + fields->pos.row;
++  VTermPos cursor = fields->pos;
++  ScreenHistoryLine **history = NULL;
++  size_t history_count = 0, allocated = 0;
++  size_t cursor_output_row = 0;
++
++  /* Height shrink consumes bottom blanks before width reflow. Retain the rest:
++   * they participate in scrolling just like the terminal's other logical rows. */
++  int remove_rows = screen->rows > rows ? screen->rows - rows : 0;
++  while(active && remove_rows > 0 && source_rows > cursor_row + 1 &&
++      line_popcount(screen->buffers[BUFIDX_PRIMARY],
++          (int)(source_rows - screen->history_count - 1), screen->rows, screen->cols) == 0) {
++    source_rows--;
++    remove_rows--;
++  }
++
++  /* Count first, then allocate every row before copying any shared glyphs.
++   * The source remains untouched until the complete replacement is ready. */
++  for(int pass = 0; pass < 2; pass++) {
++    size_t output_row = 0, logical_start = 0;
++    int output_col = 0;
++    VTermLineInfo logical_info = {0};
++    for(size_t row = 0; row < source_rows; row++) {
++      int columns, next_columns = 0;
++      VTermLineInfo info, next_info = {0};
++      ScreenCell *source = primary_row(screen, fields, row, &columns, &info);
++      ScreenCell *next = row + 1 < source_rows ?
++          primary_row(screen, fields, row + 1, &next_columns, &next_info) : NULL;
++      int used = next_info.continuation ? columns : line_popcount(source, 0, 1, columns);
++      /* An erased final continuation remains a separate empty terminal row.
++       * Joining it would move the cursor onto the preceding text after resize. */
++      if(info.continuation && !used && !next_info.continuation) {
++        if(output_col) {
++          if(output_row == SIZE_MAX)
++            goto failed;
++          output_row++;
++          output_col = 0;
++        }
++        info.continuation = 0;
++      }
++      if(row == 0 || !info.continuation) {
++        logical_start = output_row;
++        logical_info = info;
++      }
++      /* A wide glyph can leave one erased cell before wrapping. That padding
++       * belongs to the old geometry, unlike an explicit space character. */
++      if(next_info.continuation && used && !source[used - 1].chars[0] &&
++          next_columns > 1 && next[1].chars[0] == (uint32_t)-1)
++        used--;
++      for(int col = 0; col < used;) {
++        int width = col + 1 < used && source[col + 1].chars[0] == (uint32_t)-1 ? 2 : 1;
++        int copied = width > cols ? cols : width;
++        if(output_col + copied > cols) {
++          output_row++;
++          output_col = 0;
++        }
++        if(row == cursor_row && fields->pos.col >= col && fields->pos.col < col + width) {
++          cursor_output_row = output_row;
++          cursor.col = output_col + (fields->pos.col - col < copied ? fields->pos.col - col : 0);
++        }
++        if(pass) {
++          ScreenCell *dest = output_row < history_count ? history[output_row]->cells :
++              buffer + (output_row - history_count) * cols;
++          VTermLineInfo *dest_info = output_row < history_count ? &history[output_row]->info :
++              lineinfo + output_row - history_count;
++          *dest_info = logical_info;
++          dest_info->continuation = logical_info.continuation || output_row > logical_start;
++          move_cells(screen->vt, dest + output_col, source + col, copied);
++        }
++        col += width;
++        output_col += copied;
++      }
++      if(row == cursor_row && fields->pos.col >= used) {
++        cursor_output_row = output_row;
++        cursor.col = output_col + fields->pos.col - used;
++        if(cursor.col >= cols)
++          cursor.col = cols - 1;
++      }
++      if(!next_info.continuation) {
++        if(pass && !output_col) {
++          VTermLineInfo *dest_info = output_row < history_count ? &history[output_row]->info :
++              lineinfo + output_row - history_count;
++          *dest_info = logical_info;
++        }
++        if(output_row == SIZE_MAX)
++          goto failed;
++        output_row++;
++        output_col = 0;
++      }
++    }
++    if(pass)
++      break;
++    history_count = output_row > (size_t)rows ? output_row - rows : 0;
++    if(history_count > SIZE_MAX / sizeof(*history))
++      goto failed;
++    if(history_count) {
++      history = vterm_allocator_malloc(screen->vt, history_count * sizeof(*history));
++      if(!history)
++        goto failed;
++    }
++    for(; allocated < history_count; allocated++) {
++      history[allocated] = vterm_allocator_malloc(screen->vt,
++          sizeof(ScreenHistoryLine) + cols * sizeof(ScreenCell));
++      if(!history[allocated])
++        goto failed;
++      history[allocated]->columns = cols;
++      for(int col = 0; col < cols; col++)
++        clearcell(screen, history[allocated]->cells + col);
++    }
++    for(int row = 0; row < rows; row++)
++      for(int col = 0; col < cols; col++)
++        clearcell(screen, buffer + row * cols + col);
++  }
++
++  clear_history(screen);
++  vterm_allocator_free(screen->vt, screen->history);
++  screen->history = history;
++  screen->history_count = screen->history_capacity = history_count;
++  free_buffer(screen, screen->buffers[BUFIDX_PRIMARY], screen->rows, screen->cols);
++  screen->buffers[BUFIDX_PRIMARY] = buffer;
++  vterm_allocator_free(screen->vt, fields->lineinfos[BUFIDX_PRIMARY]);
++  fields->lineinfos[BUFIDX_PRIMARY] = lineinfo;
++  if(active) {
++    cursor.row = cursor_output_row >= history_count ? (int)(cursor_output_row - history_count) : 0;
++    fields->pos = cursor;
++  }
++  return 1;
++
++failed:
++  for(size_t i = 0; i < allocated; i++)
++    vterm_allocator_free(screen->vt, history[i]);
++  vterm_allocator_free(screen->vt, history);
++  screen->vt->error = ENOMEM;
++  return 0;
++}
++
++static void resize_buffer(VTermScreen *screen, int bufidx, int new_rows, int new_cols,
++    bool active, VTermStateFields *statefields, ScreenCell *new_buffer, VTermLineInfo *new_lineinfo)
+ {
+   int old_rows = screen->rows;
+   int old_cols = screen->cols;
+ 
+   ScreenCell *old_buffer = screen->buffers[bufidx];
+   VTermLineInfo *old_lineinfo = statefields->lineinfos[bufidx];
+-
+-  ScreenCell *new_buffer = vterm_allocator_malloc(screen->vt, sizeof(ScreenCell) * new_rows * new_cols);
+-  VTermLineInfo *new_lineinfo = vterm_allocator_malloc(screen->vt, sizeof(new_lineinfo[0]) * new_rows);
+ 
+   int old_row = old_rows - 1;
+   int new_row = new_rows - 1;
+@@ -534,7 +814,7 @@
+   while(old_row >= 0) {
+     int old_row_end = old_row;
+     /* TODO: Stop if dwl or dhl */
+-    while(REFLOW && old_lineinfo && old_row >= 0 && old_lineinfo[old_row].continuation)
++    while(REFLOW && old_lineinfo && old_row > 0 && old_lineinfo[old_row].continuation)
+       old_row--;
+     int old_row_start = old_row;
+ 
+@@ -577,7 +857,7 @@
+       fprintf(stderr, "  scroll %d rows +%d downwards\n", rowcount, downwards);
+ #endif
+ 
+-      memmove(&new_buffer[downwards * new_cols], &new_buffer[0],   rowcount * new_cols * sizeof(ScreenCell));
++      move_cells(screen->vt, &new_buffer[downwards * new_cols], &new_buffer[0], rowcount * new_cols);
+       memmove(&new_lineinfo[downwards],          &new_lineinfo[0], rowcount            * sizeof(new_lineinfo[0]));
+ 
+       new_row += downwards;
+@@ -613,7 +893,8 @@
+ 
+       while(count) {
+         /* TODO: This could surely be done a lot faster by memcpy()'ing the entire range */
+-        new_buffer[new_row * new_cols + new_col] = old_buffer[old_row * old_cols + old_col];
++        move_cells(screen->vt, &new_buffer[new_row * new_cols + new_col],
++                   &old_buffer[old_row * old_cols + old_col], 1);
+ 
+         if(old_cursor.row == old_row && old_cursor.col == old_col)
+           new_cursor.row = new_row, new_cursor.col = new_col;
+@@ -644,7 +925,8 @@
+         new_col++;
+       }
+ 
+-      new_lineinfo[new_row].continuation = (new_row > new_row_start);
++      new_lineinfo[new_row].continuation = new_row > new_row_start ||
++          (old_lineinfo && old_lineinfo[old_row_start].continuation);
+     }
+ 
+     old_row = old_row_start - 1;
+@@ -667,11 +949,29 @@
+ 
+   if(old_row >= 0 && bufidx == BUFIDX_PRIMARY) {
+     /* Push spare lines to scrollback buffer */
+-    if(screen->callbacks && screen->callbacks->sb_pushline)
+-      for(int row = 0; row <= old_row; row++)
+-        sb_pushline_from_row(screen, row);
++    for(int row = 0; row <= old_row; row++) {
++      store_history_row(screen, row);
++      sb_pushline_from_row(screen, row);
++    }
+     if(active)
+       statefields->pos.row -= (old_row + 1);
++  }
++  if(bufidx == BUFIDX_PRIMARY && screen->history_enabled) {
++    while(new_row >= 0 && screen->history_count) {
++      ScreenHistoryLine *line = screen->history[screen->history_count - 1];
++      /* Width-changing reflow must not discard the tail of a stored row. */
++      if(line->columns != new_cols)
++        break;
++      move_cells(screen->vt, new_buffer + new_row * new_cols, line->cells, new_cols);
++      new_lineinfo[new_row] = line->info;
++      for(int col = 0; col < line->columns; col++)
++        release_glyph(screen->vt, line->cells + col);
++      vterm_allocator_free(screen->vt, line);
++      screen->history_count--;
++      new_row--;
++      if(active)
++        statefields->pos.row++;
++    }
+   }
+   if(new_row >= 0 && bufidx == BUFIDX_PRIMARY &&
+       screen->callbacks && screen->callbacks->sb_popline) {
+@@ -692,6 +992,7 @@
+         }
+ 
+         dst->pen.bold      = src->attrs.bold;
++        dst->pen.faint     = src->attrs.faint;
+         dst->pen.underline = src->attrs.underline;
+         dst->pen.italic    = src->attrs.italic;
+         dst->pen.blink     = src->attrs.blink;
+@@ -719,7 +1020,7 @@
+   if(new_row >= 0) {
+     /* Scroll new rows back up to the top and fill in blanks at the bottom */
+     int moverows = new_rows - new_row - 1;
+-    memmove(&new_buffer[0], &new_buffer[(new_row + 1) * new_cols], moverows * new_cols * sizeof(ScreenCell));
++    move_cells(screen->vt, &new_buffer[0], &new_buffer[(new_row + 1) * new_cols], moverows * new_cols);
+     memmove(&new_lineinfo[0], &new_lineinfo[new_row + 1], moverows * sizeof(new_lineinfo[0]));
+ 
+     new_cursor.row -= (new_row + 1);
+@@ -731,7 +1032,7 @@
+     }
+   }
+ 
+-  vterm_allocator_free(screen->vt, old_buffer);
++  free_buffer(screen, old_buffer, old_rows, old_cols);
+   screen->buffers[bufidx] = new_buffer;
+ 
+   vterm_allocator_free(screen->vt, old_lineinfo);
+@@ -749,42 +1050,53 @@
+ 
+   int altscreen_active = (screen->buffers[BUFIDX_ALTSCREEN] && screen->buffer == screen->buffers[BUFIDX_ALTSCREEN]);
+ 
+-  int old_rows = screen->rows;
+   int old_cols = screen->cols;
+ 
++  /* Allocate every replacement before moving cells or releasing old storage. */
++  ScreenCell *buffers[2] = {NULL, NULL};
++  VTermLineInfo *lineinfos[2] = {NULL, NULL};
++  VTermScreenCell *scrollback = vterm_allocator_malloc(screen->vt,
++      sizeof(VTermScreenCell) * new_cols);
++  if(!scrollback)
++    goto failed;
++  for(int i = 0; i < 2; i++) {
++    lineinfos[i] = vterm_allocator_malloc(screen->vt, sizeof(VTermLineInfo) * new_rows);
++    if(!lineinfos[i])
++      goto failed;
++    if(screen->buffers[i]) {
++      buffers[i] = vterm_allocator_malloc(screen->vt, sizeof(ScreenCell) * new_rows * new_cols);
++      if(!buffers[i])
++        goto failed;
++    }
++  }
++  bool primary_reflow = screen->history_enabled && REFLOW &&
++      (new_cols != old_cols || (screen->history_count &&
++          screen->history[screen->history_count - 1]->columns != new_cols));
++  if(primary_reflow && !reflow_primary(screen, new_rows, new_cols, !altscreen_active,
++      fields, buffers[0], lineinfos[0]))
++    goto failed;
++  /* Reflow can push old-width rows before committing the new geometry. */
+   if(new_cols > old_cols) {
+-    /* Ensure that ->sb_buffer is large enough for a new or and old row */
+-    if(screen->sb_buffer)
+-      vterm_allocator_free(screen->vt, screen->sb_buffer);
+-
+-    screen->sb_buffer = vterm_allocator_malloc(screen->vt, sizeof(VTermScreenCell) * new_cols);
+-  }
+-
+-  resize_buffer(screen, 0, new_rows, new_cols, !altscreen_active, fields);
+-  if(screen->buffers[BUFIDX_ALTSCREEN])
+-    resize_buffer(screen, 1, new_rows, new_cols, altscreen_active, fields);
+-  else if(new_rows != old_rows) {
+-    /* We don't need a full resize of the altscreen because it isn't enabled
+-     * but we should at least keep the lineinfo the right size */
+-    vterm_allocator_free(screen->vt, fields->lineinfos[BUFIDX_ALTSCREEN]);
+-
+-    VTermLineInfo *new_lineinfo = vterm_allocator_malloc(screen->vt, sizeof(new_lineinfo[0]) * new_rows);
+-    for(int row = 0; row < new_rows; row++)
+-      new_lineinfo[row] = (VTermLineInfo){ 0 };
+-
+-    fields->lineinfos[BUFIDX_ALTSCREEN] = new_lineinfo;
+-  }
+-
+-  screen->buffer = altscreen_active ? screen->buffers[BUFIDX_ALTSCREEN] : screen->buffers[BUFIDX_PRIMARY];
+-
++    vterm_allocator_free(screen->vt, screen->sb_buffer);
++    screen->sb_buffer = scrollback;
++    scrollback = NULL;
++  }
++  if(!primary_reflow)
++    resize_buffer(screen, 0, new_rows, new_cols, !altscreen_active, fields,
++        buffers[0], lineinfos[0]);
++  if(screen->buffers[1])
++    resize_buffer(screen, 1, new_rows, new_cols, altscreen_active, fields,
++        buffers[1], lineinfos[1]);
++  else {
++    vterm_allocator_free(screen->vt, fields->lineinfos[1]);
++    fields->lineinfos[1] = lineinfos[1];
++  }
++  screen->buffer = screen->buffers[altscreen_active ? 1 : 0];
+   screen->rows = new_rows;
+   screen->cols = new_cols;
+-
+-  if(new_cols <= old_cols) {
+-    if(screen->sb_buffer)
+-      vterm_allocator_free(screen->vt, screen->sb_buffer);
+-
+-    screen->sb_buffer = vterm_allocator_malloc(screen->vt, sizeof(VTermScreenCell) * new_cols);
++  if(scrollback) {
++    vterm_allocator_free(screen->vt, screen->sb_buffer);
++    screen->sb_buffer = scrollback;
+   }
+ 
+   /* TODO: Maaaaybe we can optimise this if there's no reflow happening */
+@@ -794,6 +1106,13 @@
+     return (*screen->callbacks->resize)(new_rows, new_cols, screen->cbdata);
+ 
+   return 1;
++failed:
++  vterm_allocator_free(screen->vt, scrollback);
++  for(int i = 0; i < 2; i++) {
++    vterm_allocator_free(screen->vt, buffers[i]);
++    vterm_allocator_free(screen->vt, lineinfos[i]);
++  }
++  return 0;
+ }
+ 
+ static int setlineinfo(int row, const VTermLineInfo *newinfo, const VTermLineInfo *oldinfo, void *user)
+@@ -827,9 +1146,20 @@
+   return 1;
+ }
+ 
+-static int sb_clear(void *user) {
++static void clear_history(VTermScreen *screen)
++{
++  while(screen->history_count) {
++    ScreenHistoryLine *line = screen->history[--screen->history_count];
++    for(int col = 0; col < line->columns; col++)
++      release_glyph(screen->vt, line->cells + col);
++    vterm_allocator_free(screen->vt, line);
++  }
++}
++
++static int sb_clear(void *user)
++{
+   VTermScreen *screen = user;
+-
++  clear_history(screen);
+   if(screen->callbacks && screen->callbacks->sb_clear)
+     if((*screen->callbacks->sb_clear)(screen->cbdata))
+       return 1;
+@@ -857,6 +1187,8 @@
+     return NULL;
+ 
+   VTermScreen *screen = vterm_allocator_malloc(vt, sizeof(VTermScreen));
++  if(!screen)
++    return NULL;
+   int rows, cols;
+ 
+   vterm_get_size(vt, &rows, &cols);
+@@ -882,6 +1214,10 @@
+   screen->buffer = screen->buffers[BUFIDX_PRIMARY];
+ 
+   screen->sb_buffer = vterm_allocator_malloc(screen->vt, sizeof(VTermScreenCell) * cols);
++  if(!screen->buffer || !screen->sb_buffer) {
++    vterm_screen_free(screen);
++    return NULL;
++  }
+ 
+   vterm_state_set_callbacks(screen->state, &state_cbs, screen);
+ 
+@@ -890,9 +1226,10 @@
+ 
+ INTERNAL void vterm_screen_free(VTermScreen *screen)
+ {
+-  vterm_allocator_free(screen->vt, screen->buffers[BUFIDX_PRIMARY]);
+-  if(screen->buffers[BUFIDX_ALTSCREEN])
+-    vterm_allocator_free(screen->vt, screen->buffers[BUFIDX_ALTSCREEN]);
++  clear_history(screen);
++  vterm_allocator_free(screen->vt, screen->history);
++  free_buffer(screen, screen->buffers[BUFIDX_PRIMARY], screen->rows, screen->cols);
++  free_buffer(screen, screen->buffers[BUFIDX_ALTSCREEN], screen->rows, screen->cols);
+ 
+   vterm_allocator_free(screen->vt, screen->sb_buffer);
+ 
+@@ -942,8 +1279,13 @@
+           PUT(UNICODE_SPACE);
+           padding--;
+         }
+-        for(int i = 0; i < VTERM_MAX_CHARS_PER_CELL && cell->chars[i]; i++) {
+-          PUT(cell->chars[i]);
++        if(cell->glyph) {
++          for(size_t i = 0; i < cell->glyph->length; i++)
++            PUT(cell->glyph->chars[i]);
++        }
++        else {
++          for(int i = 0; i < VTERM_MAX_CHARS_PER_CELL && cell->chars[i]; i++)
++            PUT(cell->chars[i]);
+         }
+       }
+     }
+@@ -967,13 +1309,29 @@
+   return _get_chars(screen, 1, str, len, rect);
+ }
+ 
+-/* Copy internal to external representation of a screen cell */
+-int vterm_screen_get_cell(const VTermScreen *screen, VTermPos pos, VTermScreenCell *cell)
+-{
+-  ScreenCell *intcell = getcell(screen, pos.row, pos.col);
+-  if(!intcell)
+-    return 0;
+-
++/* Borrowed until the screen changes. No fixed limit on grapheme length. */
++static size_t cell_glyph(const ScreenCell *cell, const uint32_t **chars)
++{
++  if(cell->glyph) {
++    *chars = cell->glyph->chars;
++    return cell->glyph->length;
++  }
++  *chars = cell->chars;
++  size_t length = 0;
++  while(length < VTERM_MAX_CHARS_PER_CELL && cell->chars[length])
++    length++;
++  return length;
++}
++
++size_t vterm_screen_get_glyph(const VTermScreen *screen, VTermPos pos, const uint32_t **chars)
++{
++  ScreenCell *cell = getcell(screen, pos.row, pos.col);
++  return cell ? cell_glyph(cell, chars) : 0;
++}
++
++static void export_cell(const VTermScreen *screen, const ScreenCell *intcell,
++    bool wide, VTermScreenCell *cell)
++{
+   for(int i = 0; i < VTERM_MAX_CHARS_PER_CELL; i++) {
+     cell->chars[i] = intcell->chars[i];
+     if(!intcell->chars[i])
+@@ -981,6 +1339,7 @@
+   }
+ 
+   cell->attrs.bold      = intcell->pen.bold;
++  cell->attrs.faint     = intcell->pen.faint;
+   cell->attrs.underline = intcell->pen.underline;
+   cell->attrs.italic    = intcell->pen.italic;
+   cell->attrs.blink     = intcell->pen.blink;
+@@ -997,12 +1356,72 @@
+   cell->fg = intcell->pen.fg;
+   cell->bg = intcell->pen.bg;
+ 
+-  if(pos.col < (screen->cols - 1) &&
+-     getcell(screen, pos.row, pos.col + 1)->chars[0] == (uint32_t)-1)
+-    cell->width = 2;
+-  else
+-    cell->width = 1;
+-
++  cell->width = wide ? 2 : 1;
++}
++
++/* Copy internal to external representation of a screen cell */
++int vterm_screen_get_cell(const VTermScreen *screen, VTermPos pos, VTermScreenCell *cell)
++{
++  ScreenCell *intcell = getcell(screen, pos.row, pos.col);
++  if(!intcell)
++    return 0;
++  export_cell(screen, intcell, pos.col + 1 < screen->cols &&
++      intcell[1].chars[0] == UINT32_MAX, cell);
++  return 1;
++}
++
++void vterm_screen_enable_history(VTermScreen *screen)
++{
++  screen->history_enabled = true;
++}
++
++size_t vterm_screen_history_rows(const VTermScreen *screen)
++{
++  return screen->buffer == screen->buffers[BUFIDX_PRIMARY] ? screen->history_count : 0;
++}
++
++int vterm_screen_view_line_continued(const VTermScreen *screen, size_t offset, int row)
++{
++  if(row < 0 || row >= screen->rows)
++    return 0;
++  size_t rows = vterm_screen_history_rows(screen);
++  if(offset > rows)
++    offset = rows;
++  if((size_t)row < offset)
++    return screen->history[rows - offset + row]->info.continuation;
++  return vterm_state_get_lineinfo(screen->state, row - (int)offset)->continuation;
++}
++
++/* offset is the number of rows above the live viewport, not an absolute index. */
++int vterm_screen_get_view_cell(const VTermScreen *screen, size_t offset, VTermPos pos,
++    VTermScreenCell *cell, const uint32_t **glyph, size_t *length)
++{
++  if(pos.row < 0 || pos.row >= screen->rows || pos.col < 0 || pos.col >= screen->cols)
++    return 0;
++  size_t rows = vterm_screen_history_rows(screen);
++  if(offset > rows)
++    offset = rows;
++  if((size_t)pos.row >= offset) {
++    pos.row -= offset;
++    if(!vterm_screen_get_cell(screen, pos, cell))
++      return 0;
++    *length = vterm_screen_get_glyph(screen, pos, glyph);
++    return 1;
++  }
++  const ScreenHistoryLine *line = screen->history[rows - offset + pos.row];
++  if(pos.col >= line->columns) {
++    static const ScreenCell blank = {.pen = {
++        .fg = {.type = VTERM_COLOR_DEFAULT_FG},
++        .bg = {.type = VTERM_COLOR_DEFAULT_BG}}};
++    export_cell(screen, &blank, false, cell);
++    *length = cell_glyph(&blank, glyph);
++  }
++  else {
++    const ScreenCell *stored = line->cells + pos.col;
++    export_cell(screen, stored, pos.col + 1 < line->columns &&
++        stored[1].chars[0] == UINT32_MAX, cell);
++    *length = cell_glyph(stored, glyph);
++  }
+   return 1;
+ }
+ 
+--- a/src/state.c
++++ b/src/state.c
+@@ -1,4 +1,5 @@
+ #include "vterm_internal.h"
++#include "snag_unicode.h"
+ 
+ #include <stdio.h>
+ #include <string.h>
+@@ -59,6 +60,8 @@
+ static VTermState *vterm_state_new(VTerm *vt)
+ {
+   VTermState *state = vterm_allocator_malloc(vt, sizeof(VTermState));
++  if(!state)
++    return NULL;
+ 
+   state->vt = vt;
+ 
+@@ -90,6 +93,11 @@
+   state->lineinfos[BUFIDX_PRIMARY]   = vterm_allocator_malloc(state->vt, state->rows * sizeof(VTermLineInfo));
+   /* TODO: Make an 'enable' function */
+   state->lineinfos[BUFIDX_ALTSCREEN] = vterm_allocator_malloc(state->vt, state->rows * sizeof(VTermLineInfo));
++  if(!state->combine_chars || !state->tabstops ||
++      !state->lineinfos[BUFIDX_PRIMARY] || !state->lineinfos[BUFIDX_ALTSCREEN]) {
++    vterm_state_free(state);
++    return NULL;
++  }
+   state->lineinfo = state->lineinfos[BUFIDX_PRIMARY];
+ 
+   state->encoding_utf8.enc = vterm_lookup_encoding(ENC_UTF8, 'u');
+@@ -125,6 +133,8 @@
+     rightward = cols;
+   else if(rightward < -cols)
+     rightward = -cols;
++
++  vterm_screen_scroll_history(state->vt->screen, rect, downward, rightward);
+ 
+   // Update lineinfo if full line
+   if(rect.start_col == 0 && rect.end_col == state->cols && rightward == 0) {
+@@ -171,10 +181,14 @@
+     state->pos.row++;
+ }
+ 
+-static void grow_combine_buffer(VTermState *state)
++static int grow_combine_buffer(VTermState *state)
+ {
+   size_t    new_size = state->combine_chars_size * 2;
++  if(new_size < state->combine_chars_size || new_size > SIZE_MAX / sizeof(uint32_t))
++    return 0;
+   uint32_t *new_chars = vterm_allocator_malloc(state->vt, new_size * sizeof(new_chars[0]));
++  if(!new_chars)
++    return 0;
+ 
+   memcpy(new_chars, state->combine_chars, state->combine_chars_size * sizeof(new_chars[0]));
+ 
+@@ -182,6 +196,7 @@
+ 
+   state->combine_chars = new_chars;
+   state->combine_chars_size = new_size;
++  return 1;
+ }
+ 
+ static void set_col_tabstop(VTermState *state, int col)
+@@ -300,136 +315,98 @@
+   if(state->gsingle_set && npoints)
+     state->gsingle_set = 0;
+ 
++  /* Share the frontend's Unicode boundaries and cell widths. A grapheme may
++   * cross read/escape boundaries; keep the previous glyph until cursor motion
++   * makes recombination impossible. */
++  struct snag_grapheme_state grapheme = {0};
++  struct snag_grapheme_cells cells = {0};
++  int saved = 0;
++  int adjacent = state->pos.row == state->combine_pos.row &&
++    (state->pos.col == state->combine_pos.col + state->combine_width ||
++     (state->at_phantom && state->pos.col == state->combine_pos.col));
++  if(adjacent) {
++    while(state->combine_chars[saved]) {
++      snag_grapheme_feed(&grapheme, state->combine_chars[saved]);
++      snag_grapheme_cells_feed(&cells, state->combine_chars[saved], false);
++      saved++;
++    }
++  }
++
+   int i = 0;
+-
+-  /* This is a combining char. that needs to be merged with the previous
+-   * glyph output */
+-  if(vterm_unicode_is_combining(codepoints[i])) {
+-    /* See if the cursor has moved since */
+-    if(state->pos.row == state->combine_pos.row && state->pos.col == state->combine_pos.col + state->combine_width) {
+-#ifdef DEBUG_GLYPH_COMBINE
+-      int printpos;
+-      printf("DEBUG: COMBINING SPLIT GLYPH of chars {");
+-      for(printpos = 0; state->combine_chars[printpos]; printpos++)
+-        printf("U+%04x ", state->combine_chars[printpos]);
+-      printf("} + {");
+-#endif
+-
+-      /* Find where we need to append these combining chars */
+-      int saved_i = 0;
+-      while(state->combine_chars[saved_i])
+-        saved_i++;
+-
+-      /* Add extra ones */
+-      while(i < npoints && vterm_unicode_is_combining(codepoints[i])) {
+-        if(saved_i >= state->combine_chars_size)
+-          grow_combine_buffer(state);
+-        state->combine_chars[saved_i++] = codepoints[i++];
++  while(i < npoints) {
++    int combining = !snag_grapheme_feed(&grapheme, codepoints[i]);
++    int previous_width = state->combine_width;
++    if(!combining) {
++      saved = 0;
++      cells = (struct snag_grapheme_cells){0};
++    }
++    do {
++      if((size_t)saved + 1 >= state->combine_chars_size && !grow_combine_buffer(state))
++        return len;
++      state->combine_chars[saved++] = codepoints[i];
++      snag_grapheme_cells_feed(&cells, codepoints[i], false);
++      i++;
++      if(i == npoints)
++        break;
++      struct snag_grapheme_state next = grapheme;
++      if(snag_grapheme_feed(&next, codepoints[i]))
++        break;
++      grapheme = next;
++    } while(1);
++    state->combine_chars[saved] = 0;
++    int width = snag_grapheme_cells_width(&cells);
++    if(width < 0)
++      width = 1;
++
++    if(combining) {
++      if(state->combine_pos.col + width > THISROWWIDTH(state) &&
++          width > previous_width && state->combine_pos.col) {
++        VTermRect previous = {
++          .start_row = state->combine_pos.row,
++          .end_row = state->combine_pos.row + 1,
++          .start_col = state->combine_pos.col,
++          .end_col = state->combine_pos.col + previous_width,
++        };
++        erase(state, previous, 0);
++        linefeed(state);
++        state->pos.col = 0;
++        state->combine_pos = state->pos;
++        state->lineinfo[state->pos.row].continuation = 1;
+       }
+-      if(saved_i >= state->combine_chars_size)
+-        grow_combine_buffer(state);
+-      state->combine_chars[saved_i] = 0;
+-
+-#ifdef DEBUG_GLYPH_COMBINE
+-      for(; state->combine_chars[printpos]; printpos++)
+-        printf("U+%04x ", state->combine_chars[printpos]);
+-      printf("}\n");
+-#endif
+-
+-      /* Now render it */
+-      putglyph(state, state->combine_chars, state->combine_width, state->combine_pos);
++      putglyph(state, state->combine_chars, width, state->combine_pos);
++      state->pos.col = state->combine_pos.col;
++      state->at_phantom = state->mode.autowrap &&
++        state->pos.col + width >= THISROWWIDTH(state);
++      if(!state->at_phantom && state->pos.col + width < THISROWWIDTH(state))
++        state->pos.col += width;
+     }
+     else {
+-      DEBUG_LOG("libvterm: TODO: Skip over split char+combining\n");
+-    }
+-  }
+-
+-  for(; i < npoints; i++) {
+-    // Try to find combining characters following this
+-    int glyph_starts = i;
+-    int glyph_ends;
+-    for(glyph_ends = i + 1;
+-        (glyph_ends < npoints) && (glyph_ends < glyph_starts + VTERM_MAX_CHARS_PER_CELL);
+-        glyph_ends++)
+-      if(!vterm_unicode_is_combining(codepoints[glyph_ends]))
+-        break;
+-
+-    int width = 0;
+-
+-    uint32_t chars[VTERM_MAX_CHARS_PER_CELL + 1];
+-
+-    for( ; i < glyph_ends; i++) {
+-      chars[i - glyph_starts] = codepoints[i];
+-      int this_width = vterm_unicode_width(codepoints[i]);
+-#ifdef DEBUG
+-      if(this_width < 0) {
+-        fprintf(stderr, "Text with negative-width codepoint U+%04x\n", codepoints[i]);
+-        abort();
++      if(state->at_phantom || state->pos.col + width > THISROWWIDTH(state)) {
++        linefeed(state);
++        state->pos.col = 0;
++        state->at_phantom = 0;
++        state->lineinfo[state->pos.row].continuation = 1;
+       }
+-#endif
+-      width += this_width;
+-    }
+-
+-    while(i < npoints && vterm_unicode_is_combining(codepoints[i]))
+-      i++;
+-
+-    chars[glyph_ends - glyph_starts] = 0;
+-    i--;
+-
+-#ifdef DEBUG_GLYPH_COMBINE
+-    int printpos;
+-    printf("DEBUG: COMBINED GLYPH of %d chars {", glyph_ends - glyph_starts);
+-    for(printpos = 0; printpos < glyph_ends - glyph_starts; printpos++)
+-      printf("U+%04x ", chars[printpos]);
+-    printf("}, onscreen width %d\n", width);
+-#endif
+-
+-    if(state->at_phantom || state->pos.col + width > THISROWWIDTH(state)) {
+-      linefeed(state);
+-      state->pos.col = 0;
+-      state->at_phantom = 0;
+-      state->lineinfo[state->pos.row].continuation = 1;
+-    }
+-
+-    if(state->mode.insert) {
+-      /* TODO: This will be a little inefficient for large bodies of text, as
+-       * it'll have to 'ICH' effectively before every glyph. We should scan
+-       * ahead and ICH as many times as required
+-       */
+-      VTermRect rect = {
+-        .start_row = state->pos.row,
+-        .end_row   = state->pos.row + 1,
+-        .start_col = state->pos.col,
+-        .end_col   = THISROWWIDTH(state),
+-      };
+-      scroll(state, rect, 0, -1);
+-    }
+-
+-    putglyph(state, chars, width, state->pos);
+-
+-    if(i == npoints - 1) {
+-      /* End of the buffer. Save the chars in case we have to combine with
+-       * more on the next call */
+-      int save_i;
+-      for(save_i = 0; chars[save_i]; save_i++) {
+-        if(save_i >= state->combine_chars_size)
+-          grow_combine_buffer(state);
+-        state->combine_chars[save_i] = chars[save_i];
++      if(state->mode.insert) {
++        VTermRect rect = {
++          .start_row = state->pos.row,
++          .end_row = state->pos.row + 1,
++          .start_col = state->pos.col,
++          .end_col = THISROWWIDTH(state),
++        };
++        scroll(state, rect, 0, -width);
+       }
+-      if(save_i >= state->combine_chars_size)
+-        grow_combine_buffer(state);
+-      state->combine_chars[save_i] = 0;
+-      state->combine_width = width;
+       state->combine_pos = state->pos;
+-    }
+-
+-    if(state->pos.col + width >= THISROWWIDTH(state)) {
+-      if(state->mode.autowrap)
+-        state->at_phantom = 1;
+-    }
+-    else {
+-      state->pos.col += width;
+-    }
++      putglyph(state, state->combine_chars, width, state->pos);
++      if(state->pos.col + width >= THISROWWIDTH(state)) {
++        if(state->mode.autowrap)
++          state->at_phantom = 1;
++      }
++      else {
++        state->pos.col += width;
++      }
++    }
++    state->combine_width = width;
+   }
+ 
+   updatecursor(state, &oldpos, 0);
+@@ -1871,7 +1848,7 @@
+ 
+     case ' '|('q'<<8): {
+       // Query DECSCUSR
+-      int reply;
++      int reply = 2;
+       switch(state->mode.cursor_shape) {
+         case VTERM_PROP_CURSORSHAPE_BLOCK:     reply = 2; break;
+         case VTERM_PROP_CURSORSHAPE_UNDERLINE: reply = 4; break;
+@@ -1950,9 +1927,20 @@
+ {
+   VTermState *state = user;
+   VTermPos oldpos = state->pos;
+-
++  unsigned char *newtabstops = NULL;
++  VTermLineInfo *new_lineinfos[2] = {NULL, NULL};
++
++  if(!state->callbacks || !state->callbacks->resize) {
++    for(int i = 0; i < 2; i++) {
++      new_lineinfos[i] = vterm_allocator_malloc(state->vt, rows * sizeof(VTermLineInfo));
++      if(!new_lineinfos[i])
++        goto failed;
++    }
++  }
+   if(cols != state->cols) {
+-    unsigned char *newtabstops = vterm_allocator_malloc(state->vt, (cols + 7) / 8);
++    newtabstops = vterm_allocator_malloc(state->vt, (cols + 7) / 8);
++    if(!newtabstops)
++      goto failed;
+ 
+     /* TODO: This can all be done much more efficiently bytewise */
+     int col;
+@@ -1972,17 +1960,7 @@
+         newtabstops[col >> 3] &= ~mask;
+     }
+ 
+-    vterm_allocator_free(state->vt, state->tabstops);
+-    state->tabstops = newtabstops;
+-  }
+-
+-  state->rows = rows;
+-  state->cols = cols;
+-
+-  if(state->scrollregion_bottom > -1)
+-    UBOUND(state->scrollregion_bottom, state->rows);
+-  if(state->scrollregion_right > -1)
+-    UBOUND(state->scrollregion_right, state->cols);
++  }
+ 
+   VTermStateFields fields = {
+     .pos       = state->pos,
+@@ -1990,7 +1968,8 @@
+   };
+ 
+   if(state->callbacks && state->callbacks->resize) {
+-    (*state->callbacks->resize)(rows, cols, &fields, state->cbdata);
++    if(!(*state->callbacks->resize)(rows, cols, &fields, state->cbdata))
++      goto failed;
+     state->pos = fields.pos;
+ 
+     state->lineinfos[0] = fields.lineinfos[0];
+@@ -2003,7 +1982,8 @@
+         if(!oldlineinfo)
+           continue;
+ 
+-        VTermLineInfo *newlineinfo = vterm_allocator_malloc(state->vt, rows * sizeof(VTermLineInfo));
++        VTermLineInfo *newlineinfo = new_lineinfos[bufidx];
++        new_lineinfos[bufidx] = NULL;
+ 
+         int row;
+         for(row = 0; row < state->rows && row < rows; row++) {
+@@ -2022,6 +2002,18 @@
+     }
+   }
+ 
++  for(int i = 0; i < 2; i++)
++    vterm_allocator_free(state->vt, new_lineinfos[i]);
++  if(newtabstops) {
++    vterm_allocator_free(state->vt, state->tabstops);
++    state->tabstops = newtabstops;
++  }
++  state->rows = rows;
++  state->cols = cols;
++  if(state->scrollregion_bottom > -1)
++    UBOUND(state->scrollregion_bottom, state->rows);
++  if(state->scrollregion_right > -1)
++    UBOUND(state->scrollregion_right, state->cols);
+   state->lineinfo = state->lineinfos[state->mode.alt_screen ? BUFIDX_ALTSCREEN : BUFIDX_PRIMARY];
+ 
+   if(state->at_phantom && state->pos.col < cols-1) {
+@@ -2041,6 +2033,11 @@
+   updatecursor(state, &oldpos, 1);
+ 
+   return 1;
++failed:
++  vterm_allocator_free(state->vt, newtabstops);
++  for(int i = 0; i < 2; i++)
++    vterm_allocator_free(state->vt, new_lineinfos[i]);
++  return 0;
+ }
+ 
+ static const VTermParserCallbacks parser_callbacks = {
+@@ -2062,6 +2059,8 @@
+     return vt->state;
+ 
+   VTermState *state = vterm_state_new(vt);
++  if(!state)
++    return NULL;
+   vt->state = state;
+ 
+   vterm_parser_set_callbacks(vt, &parser_callbacks, state);
+--- a/src/vterm.c
++++ b/src/vterm.c
+@@ -1,6 +1,7 @@
+ #include "vterm_internal.h"
+ 
+ #include <stdio.h>
++#include <errno.h>
+ #include <stdlib.h>
+ #include <stdarg.h>
+ #include <string.h>
+@@ -54,6 +55,8 @@
+ 
+   /* Need to bootstrap using the allocator function directly */
+   VTerm *vt = (*allocator->malloc)(sizeof(VTerm), builder->allocdata);
++  if(!vt)
++    return NULL;
+ 
+   vt->allocator = allocator;
+   vt->allocdata = builder->allocdata;
+@@ -77,6 +80,10 @@
+ 
+   vt->tmpbuffer_len = DEFAULT(builder->tmpbuffer_len, 4096);
+   vt->tmpbuffer = vterm_allocator_malloc(vt, vt->tmpbuffer_len);
++  if(!vt->outbuffer || !vt->tmpbuffer) {
++    vterm_free(vt);
++    return NULL;
++  }
+ 
+   return vt;
+ }
+@@ -97,12 +104,20 @@
+ 
+ INTERNAL void *vterm_allocator_malloc(VTerm *vt, size_t size)
+ {
+-  return (*vt->allocator->malloc)(size, vt->allocdata);
++  void *memory = (*vt->allocator->malloc)(size, vt->allocdata);
++  if(!memory)
++    vt->error = ENOMEM;
++  return memory;
+ }
+ 
+ INTERNAL void vterm_allocator_free(VTerm *vt, void *ptr)
+ {
+   (*vt->allocator->free)(ptr, vt->allocdata);
++}
++
++int vterm_get_error(const VTerm *vt)
++{
++  return vt->error;
+ }
+ 
+ void vterm_get_size(const VTerm *vt, int *rowsp, int *colsp)
+@@ -115,14 +130,15 @@
+ 
+ void vterm_set_size(VTerm *vt, int rows, int cols)
+ {
+-  if(rows < 1 || cols < 1)
++  if(vt->error || rows < 1 || cols < 1)
++    return;
++
++  if(vt->parser.callbacks && vt->parser.callbacks->resize &&
++      !(*vt->parser.callbacks->resize)(rows, cols, vt->parser.cbdata))
+     return;
+ 
+   vt->rows = rows;
+   vt->cols = cols;
+-
+-  if(vt->parser.callbacks && vt->parser.callbacks->resize)
+-    (*vt->parser.callbacks->resize)(rows, cols, vt->parser.cbdata);
+ }
+ 
+ int vterm_get_utf8(const VTerm *vt)
+@@ -266,6 +282,7 @@
+ VTermValueType vterm_get_attr_type(VTermAttr attr)
+ {
+   switch(attr) {
++    case VTERM_ATTR_FAINT:     return VTERM_VALUETYPE_BOOL;
+     case VTERM_ATTR_BOLD:       return VTERM_VALUETYPE_BOOL;
+     case VTERM_ATTR_UNDERLINE:  return VTERM_VALUETYPE_INT;
+     case VTERM_ATTR_ITALIC:     return VTERM_VALUETYPE_BOOL;
+--- a/src/vterm_internal.h
++++ b/src/vterm_internal.h
+@@ -41,6 +41,7 @@
+   VTermColor fg;
+   VTermColor bg;
+   unsigned int bold:1;
++  unsigned int faint:1;
+   unsigned int underline:2;
+   unsigned int italic:1;
+   unsigned int blink:1;
+@@ -180,6 +181,7 @@
+ 
+   int rows;
+   int cols;
++  int error;
+ 
+   struct {
+     unsigned int utf8:1;
+@@ -224,8 +226,8 @@
+       } dcs;
+     } v;
+ 
+-    const VTermParserCallbacks *callbacks;
+-    void *cbdata;
++    const VTermParserCallbacks *callbacks, *filter;
++    void *cbdata, *filterdata;
+ 
+     bool string_initial;
+ 
+@@ -259,6 +261,9 @@
+   ENC_UTF8,
+   ENC_SINGLE_94
+ } VTermEncodingType;
++
++void vterm_screen_scroll_history(VTermScreen *screen, VTermRect rect,
++    int downward, int rightward);
+ 
+ void *vterm_allocator_malloc(VTerm *vt, size_t size);
+ void  vterm_allocator_free(VTerm *vt, void *ptr);

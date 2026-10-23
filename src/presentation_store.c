@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "presentation.h"
+#include "turn.h"
 #include "fs.h"
 #include "store_binary_wire.h"
 
@@ -11,6 +12,7 @@
 
 struct snag_presentation_writer {
     int fd;
+    char id[SNAG_ID_HEX_LEN + 1u];
     uint64_t origin;
     struct snag_binary_anchor tail;
     struct snag_buf batch, wire;
@@ -65,6 +67,7 @@ snag_presentation_writer_open(int directory, const char *id)
     }
     struct snag_presentation_writer *writer = calloc(1u, sizeof(*writer));
     if (!writer) return NULL;
+    memcpy(writer->id, id, sizeof(writer->id));
     writer->fd = snag_open_private_append_at(directory, SNAG_PRESENTATION_FILE, true);
     if (writer->fd < 0 && errno == EEXIST)
         writer->fd = snag_open_private_append_at(directory, SNAG_PRESENTATION_FILE, false);
@@ -354,5 +357,72 @@ snag_presentation_read(int fd, const char *id, const struct snag_binary_anchor *
 out:
     json_decref(records);
     snag_buf_free(&scratch);
+    return rc;
+}
+
+int
+snag_presentation_local_records(int fd, const char *id,
+    const struct snag_binary_anchor *bound, json_t **selected)
+{
+    *selected = json_array();
+    if (!*selected) return -1;
+    if (bound->next_seq <= 2u) return 0;
+    struct snag_binary_anchor begin, tail;
+    json_t *records = NULL;
+    bool incomplete;
+    if (snag_presentation_read(fd, id, bound, NULL, true,
+        SNAG_JOURNAL_PAGE_BYTES, &records, &begin, &tail, &incomplete, NULL, NULL) < 0)
+        goto fail;
+    size_t count = json_array_size(records), end = count;
+    /* Model history omits local commands and cancelled edits. Retain their
+     * recent output after the last model submission, on the rollout only. */
+    for (size_t i = 0u; i < count; ++i) {
+        const json_t *record = json_object_get(json_array_get(records, i), "data");
+        const char *op = snag_json_string(record, "op");
+        const char *text = snag_json_string(record, "text");
+        if ((!strcmp(op, "event") && text && !strcmp(text, "turn_started")) ||
+            (!strcmp(op, "submitted") && !json_integer_value(json_object_get(record, "data")) &&
+                !snag_prompt_command(text))) {
+            end = i;
+            break;
+        }
+    }
+    bool command = false;
+    for (size_t i = end; i; --i) {
+        json_t *record = json_object_get(json_array_get(records, i - 1u), "data");
+        const char *op = snag_json_string(record, "op");
+        const char *text = snag_json_string(record, "text");
+        size_t length = text ? strlen(text) : 0u;
+        bool local = !json_is_object(json_object_get(record, "route"));
+        bool cancelled = false;
+        if (!strcmp(op, "submitted")) {
+            command = local && snag_prompt_command(text);
+            cancelled = local && json_integer_value(json_object_get(record, "data")) &&
+                length >= 2u && !strcmp(text + length - 2u, "^C");
+        }
+        if ((cancelled || (command && local && snag_string_in(op,
+            "submitted host notice help runtime error warning choices"))) &&
+            json_array_append(*selected, record) < 0) goto fail;
+    }
+    json_decref(records);
+    return 0;
+fail:
+    json_decref(records);
+    json_decref(*selected);
+    *selected = NULL;
+    return -1;
+}
+
+int
+snag_presentation_local(struct snag_presentation_writer *writer, struct snag_render *render)
+{
+    if (!writer) return 0;
+    json_t *records = NULL;
+    if (snag_presentation_local_records(writer->fd, writer->id, &writer->tail, &records) < 0)
+        return -1;
+    int rc = 0;
+    for (size_t i = 0u; !rc && i < json_array_size(records); ++i)
+        rc = snag_presentation_replay(render, json_array_get(records, i), -1);
+    json_decref(records);
     return rc;
 }

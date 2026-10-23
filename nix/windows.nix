@@ -268,13 +268,16 @@ let
 in {
   inherit windows threads jansson tls curl av png freetype jpeg openjpeg pdf archive xml networkLibraries regex pty;
   application = { source, packageName, version, revision, debug ? false,
-                  updateBase ? "", updateTarget ? "" }: windows.stdenv.mkDerivation {
+                  updateBase ? "", updateTarget ? "" }:
+    let vterm = cmakeLibrary (import ./libvterm-source.nix { inherit pkgs; })
+      [ "-DSNAG_UNICODE_HEADER=${source}/src/unicode.h" ] [];
+    in windows.stdenv.mkDerivation {
     pname = "${packageName}-windows-${arch}";
     inherit version;
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ windows.buildPackages.pkg-config ];
-    buildInputs = [ threads libyaml jansson curl regex av png pdf freetype jpeg openjpeg archive xml ] ++ voiceRtc.dependencies ++ networkLibraries
+    buildInputs = [ vterm threads libyaml jansson curl regex av png pdf freetype jpeg openjpeg archive xml ] ++ voiceRtc.dependencies ++ networkLibraries
       ++ pkgs.lib.optionals (pty != null) [ pty.collector pty.cxx pty.unwind ];
     enableParallelBuilding = true;
     dontConfigure = true;
@@ -301,6 +304,8 @@ in {
         'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}'
         'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else "-Os -g -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
         'LDFLAGS=-static -municode ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections${pkgs.lib.optionalString legacy ",--major-os-version,5,--minor-os-version,${if arch == "x86_64" then "2" else "0"},--major-subsystem-version,5,--minor-subsystem-version,${if arch == "x86_64" then "2" else "0"}"}'
+        "VTERM_CFLAGS=-I${vterm}/include"
+        "VTERM_LIBS=${vterm}/lib/libsnajpagent-vterm.a"
         "YAML_CFLAGS=-I${libyaml}/include -DYAML_DECLARE_STATIC"
         "YAML_LIBS=${libyaml}/lib/libyaml.a"
         "ZSTD_CFLAGS=-I${zstd}/include"

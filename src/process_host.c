@@ -1108,12 +1108,25 @@ snag_child_spawn(struct snag_child *child, const char *shell, const char *comman
 }
 
 int
-snag_child_spawn_terminal(struct snag_child *child, const char *executable, const char *const *argv)
+snag_child_spawn_terminal(struct snag_child *child, const char *executable, const char *const *argv,
+    char **environment, unsigned short rows, unsigned short columns)
 {
     (void)child;
     (void)executable;
     (void)argv;
+    (void)environment;
+    (void)rows;
+    (void)columns;
     return snag_errno(ENOTSUP);
+}
+
+int
+snag_child_spawn_terminal_channel(struct snag_child *child, const char *executable,
+    const char *const *argv, char **environment, unsigned short rows, unsigned short columns,
+    int channel)
+{
+    (void)channel;
+    return snag_child_spawn_terminal(child, executable, argv, environment, rows, columns);
 }
 
 int
@@ -1503,7 +1516,7 @@ open_pty_pair(int *master_fd, int *slave_fd, unsigned short *rows, unsigned shor
 {
     struct winsize ws;
 
-    host_winsize(rows, cols);
+    if (!*rows || !*cols) host_winsize(rows, cols);
     memset(&ws, 0, sizeof(ws));
     ws.ws_row = *rows;
     ws.ws_col = *cols;
@@ -1511,18 +1524,20 @@ open_pty_pair(int *master_fd, int *slave_fd, unsigned short *rows, unsigned shor
 }
 
 static void
-exec_terminal_child(const char *executable, const char *const *argv, int slave_fd)
+exec_terminal_child(const char *executable, const char *const *argv, int slave_fd,
+    char **environment, int channel)
 {
     if (setsid() < 0 || ioctl(slave_fd, TIOCSCTTY, 0) < 0) _exit(125);
     if (dup2(slave_fd, STDIN_FILENO) < 0 || dup2(slave_fd, STDOUT_FILENO) < 0 ||
         dup2(slave_fd, STDERR_FILENO) < 0)
         _exit(125);
     if (slave_fd > STDERR_FILENO) (void)close(slave_fd);
+    if (channel >= 0 && fcntl(channel, F_SETFD, 0) < 0) _exit(125);
     (void)signal(SIGPIPE, SIG_DFL);
     /* A user's terminal command inherits cwd, environment and limits. It is
      * not a bounded document helper and must not acquire that helper's sandbox. */
     extern char **environ;
-    execve(executable, (char *const *)argv, environ);
+    execve(executable, (char *const *)argv, environment ? environment : environ);
     _exit(errno == ENOENT ? 127 : 126);
 }
 
@@ -1564,7 +1579,8 @@ snag_child_init(struct snag_child *child)
 
 static int
 child_spawn(struct snag_child *child, const char *shell, const char *command,
-    const char *const *argv, const char *directory, char **environment, bool pty, bool bounded)
+    const char *const *argv, const char *directory, char **environment, bool pty, bool bounded,
+    unsigned short rows, unsigned short columns, int channel)
 {
     int pipes[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
     int master = -1, slave = -1;
@@ -1572,8 +1588,8 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
 #ifdef __APPLE__
     child->bounded = bounded;
 #endif
-    child->rows = 24;
-    child->columns = 80;
+    child->rows = rows;
+    child->columns = columns;
     if (pty) {
         if (open_pty_pair(&master, &slave, &child->rows, &child->columns) < 0 ||
             snag_fd_cloexec(master) < 0 || snag_fd_cloexec(slave) < 0 || set_nonblock(master) < 0)
@@ -1597,7 +1613,7 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
         if (pty) {
             close_if_open(&master);
 #if defined(SNAJPAGENT_HAVE_PTY)
-            if (argv) exec_terminal_child(shell, argv, slave);
+            if (argv) exec_terminal_child(shell, argv, slave, environment, channel);
             exec_pty_child(shell, command, argv, directory, slave, environment);
 #else
             _exit(125);
@@ -1911,7 +1927,7 @@ int
 snag_child_spawn(struct snag_child *child, const char *shell, const char *command,
     const char *directory, char **environment, bool pty)
 {
-    return child_spawn(child, shell, command, NULL, directory, environment, pty, false);
+    return child_spawn(child, shell, command, NULL, directory, environment, pty, false, 0u, 0u, -1);
 }
 
 int
@@ -1922,14 +1938,29 @@ snag_child_spawn_argv(
         errno = EINVAL;
         return -1;
     }
-    return child_spawn(child, argv[0], NULL, argv, directory, environment, false, true);
+    return child_spawn(child, argv[0], NULL, argv, directory, environment, false, true, 0u, 0u, -1);
 }
 
 int
-snag_child_spawn_terminal(struct snag_child *child, const char *executable, const char *const *argv)
+snag_child_spawn_terminal(struct snag_child *child, const char *executable, const char *const *argv,
+    char **environment, unsigned short rows, unsigned short columns)
 {
-    if (!argv || !argv[0] || !snag_path_root_len(executable)) return snag_errno(EINVAL);
-    return child_spawn(child, executable, NULL, argv, NULL, NULL, true, false);
+    if (!argv || !argv[0] || !snag_path_root_len(executable) || (!rows != !columns))
+        return snag_errno(EINVAL);
+    return child_spawn(child, executable, NULL, argv, NULL, environment,
+        true, false, rows, columns, -1);
+}
+
+int
+snag_child_spawn_terminal_channel(struct snag_child *child, const char *executable,
+    const char *const *argv, char **environment, unsigned short rows, unsigned short columns,
+    int channel)
+{
+    if (!argv || !argv[0] || !snag_path_root_len(executable) || (!rows != !columns) ||
+        channel <= STDERR_FILENO || fcntl(channel, F_GETFD) < 0)
+        return snag_errno(EINVAL);
+    return child_spawn(child, executable, NULL, argv, NULL, environment,
+        true, false, rows, columns, channel);
 }
 #endif
 
@@ -1943,7 +1974,8 @@ snag_child_spawn_host_env(struct snag_child *child, const char *const *argv, cha
 #ifdef _WIN32
         rc = child_spawn(child, argv[0], NULL, argv, directory, environment, false, true, false);
 #else
-        rc = child_spawn(child, argv[0], NULL, argv, directory, environment, false, false);
+        rc = child_spawn(child, argv[0], NULL, argv, directory, environment,
+            false, false, 0u, 0u, -1);
 #endif
     }
     int error = errno;

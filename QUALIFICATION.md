@@ -2,6 +2,40 @@
 
 # Qualification ledger
 
+## Standalone terminal panes
+
+Native Linux and macOS fixtures compare the actual standalone and workspace
+terminal cells, including blank-cell attributes, colors, Unicode graphemes and
+cursor position. Matched cases cover the configured prompt, wrapped editing,
+resize sequences, unequal mirrors, completed Markdown and every configured
+activity-animation frame. The workspace retains its separate navigation row.
+
+Controller and terminal fixtures exercise independent owner lifetime, exclusive
+attachment, draft and undo transfer, private-route recovery, ordered command
+receipts, backpressure, frontend loss, explicit detach and shutdown. Allocation
+failure controls cover parser state, prompt ownership and journal decoding.
+The prior production paths fail the corresponding permanent regression controls.
+
+Four matched two-pane save/detach samples include the complete observed
+application process family, including the additional frontends. Allocation count,
+requested bytes and observed out-of-line memcpy/memmove calls and bytes all
+improve over the same frozen baseline workload. No tracked allocation fails or
+remains unfinished, and all observed application processes exit. These shared-host
+samples do not measure quiet latency, compiler-inlined copies or kernel copies.
+
+Linux and macOS receiving gates pass on the combined full-capability builds,
+with scoped follow-ups for late test and tooling failures. The Mac owner helper
+now refreshes discovery after its first terminal read. Configure tests restore
+the terminal-header override after incompatible-ABI probes; Linux native probes
+use the actual dependency headers. The closure checker accepts a native Mach-O
+executable linked only to Apple system libraries and still rejects external
+runtime libraries without the required provider dependencies. Original failed
+runs remain recorded; these results combine the complete runs and follow-ups.
+
+Physical audio devices, live providers and native Windows desktop rendering
+remain outside these fixtures. Windows retains its existing direct-session
+implementation.
+
 ## Pinned commands and monitor controls
 
 Linux and Mac native-owner tests exercise full PTY input/output, bounded redacted tails,

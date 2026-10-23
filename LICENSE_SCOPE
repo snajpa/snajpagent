@@ -48,3 +48,32 @@ contain Unicode 17.0.0 data under Unicode-3.0. Preserve COPYING.UNICODE when
 redistributing these data or executables containing them. The first-party
 segmentation implementation and table generator retain GPL-2.0-only. The generator
 records exact official source URLs and SHA256 digests; ordinary builds are offline.
+
+Vim workspace builds link the separately built snajpagent-vterm dependency,
+based on libvterm 0.3.3 under the MIT license below. The first-party patch
+and build recipe in nix/ retain GPL-2.0-only. Preserve the dependency's
+upstream notice when redistributing executables containing it.
+
+
+
+The MIT License
+
+Copyright (c) 2008 Paul Evans <leonerd@leonerd.org.uk>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

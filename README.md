@@ -10,8 +10,7 @@ sessions carry work across turns; IRC connects agents across machines.
 [Install](#install-and-choose-a-provider) ·
 [User manual](https://agent.snajpa.net/manual.html)
 
-This guide covers current source. Check `snajpagent -V` and the downloaded
-manual when behavior differs.
+For differences from current source, check `snajpagent -V` and your downloaded manual.
 
 ## 1. Work on a project
 
@@ -21,12 +20,10 @@ manual when behavior differs.
 snajpagent
 ```
 
-Describe the outcome, constraints and repository. Goals continue until complete
-or blocked.
+Describe the outcome, constraints and repository.
 
-`work_context` enters a temporary project or harness role, then returns to the
-broader assignment with conversation, model and notes retained. Goals are optional.
-`cd` navigates within that work.
+`work_context` enters a temporary project or harness role and returns with
+conversation, model and notes retained. Goals are optional; `cd` navigates.
 Skills come from project `.snajpagent/skills`, `.agents/skills` and `.claude/skills`,
 then configured roots or `~/.snajpagent/skills`. Use `/skills` for loaded guidance,
 `/skills list` to browse, `/skills paths` for origins and `$my-skill` to invoke one.
@@ -50,10 +47,9 @@ commands alive. Blank Enter starts no work.
 If the model replies while a command is running, the turn waits for your input
 or command completion. Output keeps buffering; `/yield` returns to the model.
 
-Tab at the end of an ordinary message queues a follow-up while work is active.
-Waiting prompts run oldest first; `(N)` counts them. `/next` resumes a paused
-queue, and `/q c` clears it. Tab first completes `/command` names; completion
-never submits text.
+During work, Tab at an ordinary message's end queues a follow-up. Prompts run
+oldest first; `(N)` counts them. `/next` resumes a paused queue; `/q c` clears it.
+Tab first completes `/command` names without submitting.
 
 Use `snajpagent -m none` or `/model none` for local controls and IRC without model
 activity. Model-bound input received in this mode is discarded. Select a real
@@ -82,10 +78,9 @@ defaults in the selected config.
 ### Keep working, or leave and come back
 
 Automatic retry defaults on. `/retry auto` reports its state; `/retry auto on|off`
-sets it explicitly. `[agent] retry_auto` sets the default.
-Failed turns retry five times; `max_turn_retries` changes that budget. With
-automatic retry enabled, active goals retry ordinary errors without a limit,
-while policy stops pause them.
+sets it; `[agent] retry_auto` sets the default. Failed turns retry five times,
+configurable with `max_turn_retries`. With automatic retry enabled, goals retry
+ordinary errors indefinitely; policy stops pause them.
 
 A final answer ends the turn; a goal continues work:
 
@@ -148,16 +143,14 @@ Name sessions with `-N lead` or `/session name lead`; select them with
 
 ### Monitor sessions
 
-Run `snajpagent top` for a live session table with model, turn count, process and
-session token totals, and estimated decode rate. Use Up/Down or `j`/`k`
-to select a session, `r` to refresh, and `q` to leave. Selection follows the
-session when rows reorder, and the table scrolls to keep it visible. The view
-redraws every 0.2 seconds; owner metrics retain their configured sampling interval.
-Cold metadata fills in the background while navigation and quit remain available.
+`snajpagent top` shows models, turns, process/session token totals and estimated
+decode rates. Up/Down or `j`/`k` selects; `r` refreshes; `q` quits. Selection stays
+visible through reordering. The view redraws every 0.2 seconds; owner metrics
+keep their sampling interval. Cold metadata loads without blocking navigation or quit.
 
-`x`, then `y`, requests termination of the selected live owner. The confirmation
-names the session; a replaced owner requires a new confirmation. Stored sessions
-cannot be killed. Redirecting output prints a single snapshot instead:
+`x`, then `y`, requests termination of the selected live owner. Confirmation names
+the session and must be repeated if its owner changes. Stored sessions cannot be
+killed. Redirect output for one snapshot:
 
 ```sh
 snajpagent top --delay 0.2
@@ -185,9 +178,9 @@ For tmux, replace the final command with `tmux attach`. During transfers, keep
 the agent pane focused with one writable client viewing it.
 
 Drop one regular file into the POSIX composer, or use `/receive`. Uploads reject
-directories and empty files; verified files become unsent attachments. In a Vim
-rollout composer, `/receive` and `/attach PATH` return to the workspace after file
-preparation. Review `/attachments` before submitting. `/send PATH` and model
+directories and empty files; verified files become unsent attachments. Attached
+POSIX workspace panes run these commands in their ordinary terminal frontend.
+Review `/attachments` before submitting. `/send PATH` and model
 `send_file` download files, including empty files and `asset:ID` references.
 Transfers yield after the configured tool wait so the agent can continue working;
 pending exports remain inspectable with `download_queue`. Transfers show progress
@@ -419,25 +412,28 @@ updater-free. The manual covers channels, publisher URLs and recovery.
 `./configure` probes the toolchain and the four optional modalities and tunes the
 tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
-`snajpagent vm` saves pane workspaces containing sessions and conversations.
-Click a session pane for INSERT mode; Escape returns to NORMAL, where `:` opens
-workspace commands. The session picker's first entry, **New session**, creates
-a session when you press Enter. `:new [NAME]` also creates one; `:session ID`
-resumes one.
+`snajpagent vm` saves pane workspaces with sessions and conversations. Click a
+session pane for INSERT mode; Escape returns to NORMAL, where `:` opens workspace
+commands. Enter on the picker's **New session** entry or `:new [NAME]` creates a
+session; `:session ID` resumes one.
+Attached POSIX panes run the ordinary terminal frontend with its configured
+prompt, editor, colors and output at the pane's dimensions. Each mirror has its
+own frontend; focus changes transfer the session's shared draft and undo history.
+In NORMAL, `i` returns to terminal input.
 `:workspace detach` saves the layout while agents continue and prints its resume
 command. Restoring a workspace leaves stopped owners stopped. `:q` and `:q!`
 close the current pane and preserve drafts; closing the last pane detaches.
 `:qa` saves and detaches the whole workspace; `:qa!` stops controlled sessions
 and exits, preserving drafts.
 
-Transcripts support search, selection, yanking and retained reports. The
+Use `:history` for retained transcript search, selection and yanking. The
 [manual](snajpagent.1) covers workspace controls, clipboard policy and `:classic`
 terminal access. `WITH_VM=0` omits the frontend. The experimental Windows
 workspace supports one live agent; persistent detach is unavailable.
 
-The POSIX build needs C11 with pthreads, GNU make, pkg-config and
-libcurl/Jansson development files. On the BSDs, install GNU make and use `gmake`
-throughout. On Linux and macOS:
+POSIX builds need C11/pthreads, GNU make, pkg-config and
+[development libraries](DEPENDENCIES.md), including patched snajpagent-vterm for
+Vim mode. On BSD, use `gmake`. On Linux and macOS:
 
 ```sh
 git clone https://github.com/snajpa/snajpagent.git
@@ -513,10 +509,9 @@ Model text goes to stdout, diagnostics and the resume hint to stderr, and
 redirected output has no styling. Use exit status for failure handling; the
 pre-1.0 event-log format can change between versions.
 
-The [user manual](https://agent.snajpa.net/manual.html) and `man snajpagent`
-cover the full reference and troubleshooting, both generated from
-[one source](snajpagent.1). [Design notes](design/architecture.md) cover the
-implementation. GPL-2.0-only; see [COPYING](COPYING).
+The [web manual](https://agent.snajpa.net/manual.html) and `man snajpagent` share
+[one source](snajpagent.1) for reference and troubleshooting.
+[Design notes](design/architecture.md) cover implementation. GPL-2.0-only; see [COPYING](COPYING).
 
 ## Supported providers
 

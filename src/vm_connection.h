@@ -17,6 +17,7 @@ struct snag_vm_buffer {
     struct snag_vm_editor editor;
     size_t cursor;
     json_t *pending, *draft_base, *owner_draft, *conflict_draft;
+    json_t *native_history;
     json_t *report_open, *selection, *origin, *inline_reports;
     char message[256];
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
@@ -47,13 +48,16 @@ struct snag_vm_connection {
     struct snag_vm_buffer *buffers, *rollout, *draft_wait, *inflight, *sync_next;
     json_t *state, *draft_sent, *reports;
     json_t *feedback;
+    uint64_t feedback_deadline;
     char message[256];
-    uint64_t generation, deadline, revision, draft_edit, draft_deadline;
-    bool control, bound, hello, quitting, exited, direct;
+    uint64_t generation, deadline, revision, state_revision, draft_edit, draft_deadline;
+    bool control, bound, hello, quitting, exited, direct, detached, dictation_control;
+    bool frontend_audio;
     bool commands, queue, drafts, terminal_commands, irc_queries, irc_channels, irc_connections;
     bool reports_supported, reports_subscribed, reports_changed, detaching, detach_sent;
-    bool cancel_pending, quit_pending;
-    bool feedback_supported, command_verbosity, command_chains;
+    bool cancel_pending, quit_pending, terminal_drafts, terminal_unrouted, terminal_checkpoints;
+    bool feedback_supported, feedback_origin_supported, command_verbosity, command_chains;
+    bool input_echo, input_local, input_capture;
 };
 
 /* NULL selects the rollout. Returned buffers live until their session closes. */
@@ -74,9 +78,12 @@ void snag_vm_connection_step(struct snag_vm_connection *);
 bool snag_vm_connection_tail(const struct snag_vm_connection *, struct snag_journal_cursor *);
 int snag_vm_connection_wait(const struct snag_vm_connection *, uint64_t now, int timeout);
 int snag_vm_connection_control(struct snag_vm_connection *, const char *intent);
+int snag_vm_connection_presented(struct snag_vm_connection *, uint64_t audio_epoch);
+int snag_vm_connection_input_control(struct snag_vm_connection *, enum snag_term_action,
+    const json_t *capture);
 /* Prepare has no wire effects. Save the workspace before calling send. */
 int snag_vm_buffer_prepare(struct snag_vm_buffer *, struct snag_vm_buffer *source,
-    uint64_t window, bool queued, unsigned int verbosity);
+    uint64_t window, bool queued, unsigned int verbosity, bool echoed, bool local);
 /* A workstation drop uses the existing terminal command receipt and keeps the draft. */
 int snag_vm_buffer_upload(struct snag_vm_buffer *, uint64_t window, bool directory);
 int snag_vm_buffer_send(struct snag_vm_buffer *);

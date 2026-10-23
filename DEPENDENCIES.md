@@ -26,6 +26,32 @@ APIs; no compressor executable or vendored codec is included in first-party code
 can select `WITH_VM=0` or `./configure --without-vm` to omit those objects and
 tables. The flag participates in the existing build-input fingerprint.
 
+Workspace builds link `snajpagent-vterm`, based on libvterm 0.3.3 (MIT).
+`nix/libvterm-source.nix` pins the upstream archive and applies
+`nix/libvterm-frontend.patch`. Production recipes build the dependency separately.
+The patch provides full grapheme cells, history/reflow, faint attributes, parser
+filters and transactional allocation-failure handling. It uses the application's
+Unicode declarations and resolves its Unicode calls against `src/unicode.c` at
+final link, so both sides use the same segmentation and width implementation.
+
+For native builds, unpack the pinned libvterm archive outside this source tree,
+then run these commands from the unpacked directory. Replace `/path/to/snajpagent`
+with this checkout and choose an installation prefix:
+
+```sh
+patch -p1 < /path/to/snajpagent/nix/libvterm-frontend.patch
+cmake -S . -B build -DSNAG_UNICODE_HEADER=/path/to/snajpagent/src/unicode.h \
+  -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCMAKE_INSTALL_LIBDIR=lib
+cmake --build build
+cmake --install build
+export PKG_CONFIG_PATH="$HOME/.local/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+```
+
+Native builds use the `snajpagent-vterm` pkg-config entry, or target
+`VTERM_CFLAGS` and `VTERM_LIBS`. Configure checks the private header ABI; the
+application build checks linkage. An unpatched system libvterm is incompatible.
+Redistribution must preserve the dependency's installed MIT license.
+
 ## Unicode text data
 
 Vim workspace navigation and rendering use first-party Unicode 17 grapheme
@@ -1036,8 +1062,11 @@ setup. Other code uses those owners rather than creating an HTTP client.
 A system-library release build still must archive the concrete executable dependency closure for each shipped platform:
 the selected Jansson library, libcurl library, and libcurl's enabled TLS,
 resolver, compression, HTTP, and other runtime backends. `make depclosurecheck`
-uses the platform loader tools (`ldd` on Linux, `otool -L` on macOS) to reject
-unresolved dependencies and missing libcurl/Jansson linkage; set
+uses the platform loader tools (`readelf`/`ldd` on Linux, `otool` on macOS).
+Dynamic third-party profiles require resolved libcurl and Jansson linkage. A static
+ELF executable has no runtime libraries; a Mach-O executable with statically linked
+third-party dependencies retains only Apple system libraries. The checker verifies
+those closure shapes, while provider fixtures exercise application capabilities. Set
 `SNAJPAGENT_DEP_CLOSURE_JSON=path` or pass `--json-out path` to retain the
 JSON record for release evidence. `make evidencebundle` packages that record
 with the source-audit and terminal-evidence records for the current host, while

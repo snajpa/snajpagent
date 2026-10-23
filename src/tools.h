@@ -55,6 +55,7 @@ void snag_tools_shutdown(void);
 int snag_tools_pinned_start(const char *, const char *, const char *, const char *,
     const int[2], const struct snag_config *, const struct snag_credential *, char *, size_t);
 json_t *snag_tools_pinned_state(const char *);
+int snag_tools_pinned_flush(const char *, char *, size_t);
 int snag_tools_signal(const char *);
 int snag_tools_pinned_input(const char *, const char *, bool, char *, size_t);
 

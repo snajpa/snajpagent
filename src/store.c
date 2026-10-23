@@ -4692,7 +4692,7 @@ close_binary_session(struct snag_session *session)
     /* Drain before descriptor/lock teardown. Closing never releases effects for
      * an otherwise unacknowledged transaction; recovery observes its real bytes. */
     if (binary->io_pending) {
-        struct snag_binary_io_result result;
+        struct snag_binary_io_result result = {0};
         struct snag_buf batch = {0};
         while (binary->io_pending) {
             if (binary_take(binary, &result, &batch) < 0 && binary->io_pending) {

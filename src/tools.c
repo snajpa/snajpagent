@@ -28,6 +28,7 @@
 
 #define SNAG_TOOL_COMMAND_MAX (256u * 1024u)
 #define SNAG_TOOL_STDIN_MAX (1024u * 1024u)
+#define SNAG_TOOL_IO_CHUNK 4096u
 #define SNAG_TOOL_POLL_MS 50u
 #define SNAG_TOOL_CLOSE_GRACE_MS 2000u
 #define SNAG_TOOL_DRAIN_GRACE_MS 2000u
@@ -607,7 +608,7 @@ static int
 process_read(struct managed_process *proc, unsigned int stream, char *error, size_t error_size)
 {
     struct process_output *output = &proc->output[stream];
-    unsigned char bytes[4096];
+    unsigned char bytes[SNAG_TOOL_IO_CHUNK];
     ssize_t n = snag_child_read(&proc->child, stream, bytes, sizeof(bytes));
     if (n > 0) {
         if (snag_buf_append(&output->pending, bytes, (size_t)n) < 0 ||
@@ -1292,6 +1293,32 @@ snag_tools_pinned_state(const char *id)
         "stdin_open", proc->stdin_open, "stdout_bytes", (json_int_t)proc->output_offset[0],
         "stderr_bytes", (json_int_t)proc->output_offset[1],
         "exit_code", (json_int_t)proc->child.exit_code, "signal", proc->child.signal_number);
+}
+
+int
+snag_tools_pinned_flush(const char *id, char *error, size_t size)
+{
+    struct managed_process *proc = find_process(id);
+    if (!proc || !proc->pinned) return 0;
+    for (unsigned int stream = 0u; stream < 2u; ++stream) {
+        size_t reads = proc->output[stream].data.max / SNAG_TOOL_IO_CHUNK;
+        while (proc->output[stream].open && reads--) {
+            struct snag_child_event event = {
+                &proc->child, stream, SNAG_CHILD_READ, 0};
+            int ready;
+            do {
+                ready = snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, 0);
+            } while (ready < 0 && errno == EINTR);
+            if (ready < 0)
+                return snag_errorf(
+                    error, size, "command output poll failed: %s", strerror(errno));
+            if (!ready || !(event.revents & (SNAG_CHILD_READ | SNAG_CHILD_END))) break;
+            if (event.revents & SNAG_CHILD_ERROR)
+                return snag_errorf(error, size, "command output descriptor failed");
+            if (process_read(proc, stream, error, size) < 0) return -1;
+        }
+    }
+    return 0;
 }
 
 int

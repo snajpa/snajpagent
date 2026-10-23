@@ -4,6 +4,44 @@
 #include <limits.h>
 #include <string.h>
 
+struct dispatch {
+    struct snag_vm_input *input;
+    snag_vm_input_emit emit;
+    void *opaque;
+};
+
+static int
+dispatch_event(void *opaque, const struct snag_vm_input_event *event)
+{
+    struct dispatch *dispatch = opaque;
+    struct snag_vm_input_event decoded = *event;
+    decoded.wire = dispatch->input->wire;
+    decoded.wire_length = dispatch->input->wire_length;
+    int rc = dispatch->emit(dispatch->opaque, &decoded);
+    dispatch->input->wire_length = 0u;
+    return rc;
+}
+
+static int
+wire_append(struct dispatch *dispatch, const unsigned char *bytes, size_t length)
+{
+    struct snag_vm_input *input = dispatch->input;
+    while (length) {
+        if (input->wire_length == sizeof(input->wire)) {
+            struct snag_vm_input_event event = {.kind = SNAG_VM_RAW};
+            int rc = dispatch_event(dispatch, &event);
+            if (rc) return rc;
+        }
+        size_t count = sizeof(input->wire) - input->wire_length;
+        if (count > length) count = length;
+        memcpy(input->wire + input->wire_length, bytes, count);
+        input->wire_length += count;
+        bytes += count;
+        length -= count;
+    }
+    return 0;
+}
+
 static int
 key(snag_vm_input_emit emit, void *opaque, unsigned int code, unsigned int modifiers)
 {
@@ -249,9 +287,13 @@ snag_vm_input_feed(struct snag_vm_input *input, const void *data, size_t length,
     const unsigned char *bytes = data;
     int expired = snag_vm_input_expire(input, now, emit, opaque);
     if (expired) return expired;
+    struct dispatch dispatch = {input, emit, opaque};
+    emit = dispatch_event;
+    opaque = &dispatch;
     for (size_t i = 0u; i < length; ++i) {
         unsigned char byte = bytes[i];
-        int rc;
+        int rc = wire_append(&dispatch, &byte, 1u);
+        if (rc) return rc;
         if (input->paste) {
             /* Deliver ordinary paste spans together; only its closing marker
              * needs bytewise matching across read boundaries. */
@@ -259,7 +301,9 @@ snag_vm_input_feed(struct snag_vm_input *input, const void *data, size_t length,
             if (!input->paste_match && byte != 0x1bu && byte != 0x03u) {
                 while (i + 1u < length && bytes[i + 1u] != 0x1bu &&
                     bytes[i + 1u] != 0x03u) ++i;
-                rc = text(emit, opaque, SNAG_VM_PASTE_TEXT, bytes + begin, i - begin + 1u, 0u);
+                rc = wire_append(&dispatch, bytes + begin + 1u, i - begin);
+                if (!rc) rc = text(emit, opaque, SNAG_VM_PASTE_TEXT,
+                    bytes + begin, i - begin + 1u, 0u);
             } else {
                 rc = paste(input, byte, emit, opaque);
             }
@@ -299,5 +343,6 @@ snag_vm_input_expire(struct snag_vm_input *input, uint64_t now,
     unsigned int code = input->sequence_length == 1u ? SNAG_VM_KEY_ESCAPE : SNAG_VM_KEY_UNKNOWN;
     input->sequence_length = 0u;
     input->discard = input->string = input->string_escape = false;
-    return key(emit, opaque, code, 0u);
+    struct dispatch dispatch = {input, emit, opaque};
+    return key(dispatch_event, &dispatch, code, 0u);
 }

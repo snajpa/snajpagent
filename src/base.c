@@ -59,6 +59,20 @@ snag_command_chained(const char *text, size_t length)
     return text && command_end(text, length, 0u, &error) < length;
 }
 
+const char *
+snag_workspace_search(const char *text, size_t length)
+{
+    if (!text) return NULL;
+    while (length && isspace((unsigned char)*text)) { ++text; --length; }
+    if (length < 7u || memcmp(text, "/search", 7u) ||
+        (length > 7u && !isspace((unsigned char)text[7])) ||
+        snag_command_chained(text, length)) return NULL;
+    text += 7u;
+    length -= 7u;
+    while (length && isspace((unsigned char)*text)) { ++text; --length; }
+    return text;
+}
+
 size_t
 snag_command_start(const char *text, size_t length)
 {
@@ -226,6 +240,15 @@ snag_irc_target_parse(const char *text, size_t len, uint32_t *id, size_t *body)
     *body = i;
     if (all) return i < len ? SNAG_IRC_TARGET_ALL : SNAG_IRC_TARGET_INVALID;
     return i < len ? SNAG_IRC_TARGET_SEND : SNAG_IRC_TARGET_SELECT;
+}
+
+bool
+snag_frontend_local_input(const char *text, size_t length)
+{
+    uint32_t destination;
+    size_t body;
+    return (snag_verbosity_input(text, length) && !snag_command_chained(text, length)) ||
+        snag_irc_target_parse(text, length, &destination, &body) == SNAG_IRC_TARGET_SELECT;
 }
 
 char *

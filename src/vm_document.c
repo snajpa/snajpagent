@@ -152,6 +152,17 @@ snag_vm_document_row(const struct snag_vm_document *doc, size_t index,
     return 0;
 }
 
+int
+snag_vm_document_row_next(const struct snag_vm_document *doc, struct snag_vm_document_row *row)
+{
+    if (!doc || row->block >= json_array_size(doc->blocks)) return snag_errno(EINVAL);
+    struct position at = {.block = row->block, .byte = row->begin,
+        .column = row->column, .heading = row->heading};
+    struct snag_vm_document_row previous;
+    if (!next(doc, &at, &previous) || !next(doc, &at, row)) return snag_errno(EINVAL);
+    return 0;
+}
+
 const json_t *
 snag_vm_document_block(const struct snag_vm_document *doc, size_t index)
 {

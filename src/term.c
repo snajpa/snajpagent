@@ -64,6 +64,9 @@ static struct safe_glyph
 safe_glyph(const unsigned char *text, size_t len)
 {
     struct safe_glyph glyph = {0};
+    if (len && text[0] >= 0x20u && text[0] < 0x7fu &&
+        (len == 1u || text[1] < 0x80u))
+        return (struct safe_glyph){.bytes = 1u, .cp = text[0], .width = 1};
     glyph.bytes = snag_utf8_decode(text, len, &glyph.cp);
     if (!glyph.bytes) glyph.cp = *text;
     glyph.width = snag_char_width(glyph.cp);
@@ -71,6 +74,10 @@ safe_glyph(const unsigned char *text, size_t len)
         (glyph.cp >= 0x80u && glyph.cp <= 0x9fu) || format_unsafe(glyph.cp) || glyph.width < 0)
         glyph.width = snprintf(glyph.escape, sizeof(glyph.escape),
             glyph.cp <= 0xffu ? "\\x%02X" : "\\u{%X}", (unsigned int)glyph.cp);
+    if (glyph.bytes && !glyph.escape[0]) {
+        glyph.bytes = snag_grapheme_next(text, len);
+        glyph.width = snag_grapheme_width(text, glyph.bytes, false);
+    }
     if (!glyph.bytes) glyph.bytes = 1u;
     return glyph;
 }
@@ -107,8 +114,9 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len, bool pr
         if (cp == '\n') {
             if (prompt) {
                 if (snag_buf_append(out, "\r\n", 2u) < 0) return -1;
-                for (size_t j = 0u; j < indent; ++j)
-                    if (snag_buf_putc(out, ' ') < 0) return -1;
+                if (snag_buf_reserve(out, indent) < 0) return -1;
+                memset(out->data + out->len, ' ', indent);
+                out->len += indent;
                 col = indent;
                 if (columns >= 20u) col %= columns;
             } else {
@@ -263,7 +271,7 @@ snag_term_set_destinations(struct snag_term *term, const struct snag_irc_destina
         term->destinations = malloc(sizeof(*destinations));
         if (!term->destinations) return -1;
     }
-    *term->destinations = *destinations;
+    if (term->destinations != destinations) *term->destinations = *destinations;
     if (term->destination.id) {
         /* A number names the same endpoint across topology changes; adopt its
          * fresh revision so ordinary chat keeps targeting the selection. */
@@ -1060,12 +1068,20 @@ snag_term_prompt_row(const struct snag_buf *frame, size_t start, unsigned int co
 
     while (row.end < frame->len) {
         uint32_t cp;
-        size_t n = snag_utf8_decode(frame->data + row.end, frame->len - row.end, &cp);
-        int width = snag_char_width(cp);
+        (void)snag_utf8_decode(frame->data + row.end, frame->len - row.end, &cp);
 
         if (cp == '\r') {
             row.next = row.end + 2u; /* append_safe emits CRLF. */
             return row;
+        }
+        /* Prompt indentation is often most of a multiline frame. An ASCII
+         * cell followed by ASCII cannot join a combining or keycap sequence. */
+        size_t n = 1u;
+        int width = 1;
+        if (cp < 0x20u || cp >= 0x7fu || (row.end + 1u < frame->len &&
+            frame->data[row.end + 1u] >= 0x80u)) {
+            n = snag_grapheme_next(frame->data + row.end, frame->len - row.end);
+            width = snag_grapheme_width(frame->data + row.end, n, false);
         }
         if (width > 0 && row.width + (size_t)width > columns) {
             if (row.end == row.start) {
@@ -1247,33 +1263,17 @@ clip_prompt(struct snag_term *term, struct snag_buf *frame, size_t *label, size_
     frame_position(frame, frame->len, term->columns, end_row, end_col);
 }
 
-/* Keep a base character and its combining marks in the same paint span. */
+/* Paint whole graphemes, including joined emoji and variation selectors. */
 static size_t
 prompt_cell_end(const unsigned char *data, size_t start, size_t end)
 {
-    uint32_t cp;
-    size_t pos = start + snag_utf8_decode(data + start, end - start, &cp);
-
-    while (pos < end) {
-        size_t n = snag_utf8_decode(data + pos, end - pos, &cp);
-        if (snag_char_width(cp) != 0) break;
-        pos += n;
-    }
-    return pos;
+    return start + snag_grapheme_next(data + start, end - start);
 }
 
 static size_t
 prompt_cell_start(const unsigned char *data, size_t start, size_t end)
 {
-    uint32_t cp;
-    size_t pos = previous_cp(data, end);
-
-    while (pos > start) {
-        (void)snag_utf8_decode(data + pos, end - pos, &cp);
-        if (snag_char_width(cp) != 0) break;
-        pos = previous_cp(data, pos);
-    }
-    return pos;
+    return start + snag_grapheme_floor(data + start, end - start, end - start - 1u);
 }
 
 static size_t
@@ -1380,13 +1380,20 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label, size_
                 a = ac;
                 b = bc;
             }
-            /* Equal-width rows can retain their unchanged trailing cells too. */
-            while (old.width == next.width && a < ae && b < be) {
-                size_t ac = prompt_cell_start(term->painted_prompt.data, a, ae);
-                size_t bc = prompt_cell_start(frame->data, b, be);
-                if (!same_prompt_cell(term, frame, label, ac, ae, bc, be)) break;
-                ae = ac;
-                be = bc;
+            /* Scan boundaries once; repeated backward floors rescan long rows. */
+            if (old.width == next.width) {
+                size_t ac = a, bc = b, keep_a = ae, keep_b = be;
+                while (ac < ae && bc < be) {
+                    size_t an = prompt_cell_end(term->painted_prompt.data, ac, ae);
+                    size_t bn = prompt_cell_end(frame->data, bc, be);
+                    size_t ar = ae - ac, br = be - bc;
+                    if (ar == br && same_prompt_cell(term, frame, label, ac, an, bc, bn)) {
+                        if (keep_a == ae) { keep_a = ac; keep_b = bc; }
+                    } else { keep_a = ae; keep_b = be; }
+                    if (ar >= br) ac = an;
+                    if (br >= ar) bc = bn;
+                }
+                if (ac == ae && bc == be) { ae = keep_a; be = keep_b; }
             }
             if (a != ae || b != be) {
                 if (prompt_move(&out, &row, &col, y, prefix) < 0 ||
@@ -1568,9 +1575,17 @@ redraw(struct snag_term *term)
     const char *label;
     int rc = -1;
 
+    if (term->defer_redraw) {
+        term->redraw_pending = true;
+        return 0;
+    }
+    if (term->input_only) term->redraw_pending = true;
     /* Native input yields to geometry between bytes. Paint the completed
      * buffered edit once, so old-width frames do not pile up in the relay. */
-    if (term->suspend && term->input_pos < term->input_len) return 0;
+    if (term->suspend && term->input_pos < term->input_len) {
+        term->redraw_pending = true;
+        return 0;
+    }
     if (term->submit_awaiting_activity) return 0;
     if (term->external || term->input_only || !term->opened || !term->prompt_wanted ||
         term->output_depth) {
@@ -1581,6 +1596,8 @@ redraw(struct snag_term *term)
                                    : "output_depth");
         return 0;
     }
+    /* Clear before painting: output backpressure can admit a newer edit. */
+    term->redraw_pending = false;
     if (term->animation.source[0] &&
         snag_term_animation_render(&term->animation, snag_monotonic_ms(), current) < 0)
         return -1;
@@ -1744,6 +1761,9 @@ replace_draft(struct snag_term *term, const char *text)
     size_t len = strlen(text);
 
     if (len > SNAG_MAX_DIRECT_PROMPT) return snag_errno(EOVERFLOW);
+    if (len > term->draft.len && snag_buf_reserve(&term->draft, len - term->draft.len) < 0)
+        return -1;
+    snag_edit_history_free(&term->edits);
     snag_buf_reset(&term->draft);
     if (snag_buf_append(&term->draft, text, len) < 0) return -1;
     term->cursor = len;
@@ -1762,7 +1782,8 @@ snag_term_restore_draft(struct snag_term *term, const char *text)
 }
 
 int
-snag_term_swap_draft(struct snag_term *term, struct snag_buf *draft, size_t *cursor)
+snag_term_swap_draft(struct snag_term *term, struct snag_buf *draft, size_t *cursor,
+    struct snag_edit_history *history)
 {
     history_reset_navigation(term);
     free(term->search_original);
@@ -1771,6 +1792,10 @@ snag_term_swap_draft(struct snag_term *term, struct snag_buf *draft, size_t *cur
     term->completion_armed = false;
     term->utf8_pending_len = 0u;
     term->preferred_column = SIZE_MAX;
+    if (snag_edit_end(&term->edits, &term->draft, term->cursor) < 0) return -1;
+    struct snag_edit_history previous_edits = term->edits;
+    term->edits = *history;
+    *history = previous_edits;
     struct snag_buf previous = term->draft;
     term->viewport_row = 0u;
     size_t previous_cursor = term->cursor;
@@ -2069,6 +2094,7 @@ replace_range(struct snag_term *term, size_t start, size_t end, const void *data
     if (next_len > term->draft.len &&
         snag_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
         return -1;
+    if (snag_edit_begin(&term->edits, &term->draft, term->cursor) < 0) return -1;
     if (end < term->draft.len)
         memmove(term->draft.data + start + len, term->draft.data + end, term->draft.len - end);
     if (len) memcpy(term->draft.data + start, data, len);
@@ -2490,6 +2516,7 @@ complete_action(
         size_t token = strcspn(copy, " \t");
         if (copy[token] && strspn(copy + token, " \t") == strlen(copy + token)) copy[token] = '\0';
     }
+    snag_edit_history_free(&term->edits);
     snag_buf_reset(&term->draft);
     term->cursor = 0u;
     term->prompt_wanted = false;
@@ -2643,6 +2670,8 @@ apply_key(struct snag_term *term, int key)
     term->history_pending = 0u;
     term->history_reader.scanning = false;
     size_t preferred = term->preferred_column;
+    if (((key >= KEY_UP && key <= KEY_END) || key == KEY_WORD_LEFT || key == KEY_WORD_RIGHT) &&
+        snag_edit_end(&term->edits, &term->draft, term->cursor) < 0) return -1;
     mark_input_activity(term);
     switch (key) {
     case KEY_UP:
@@ -2687,6 +2716,42 @@ apply_key(struct snag_term *term, int key)
 }
 
 static int
+pointer_cursor(struct snag_term *term, long delta, unsigned long column)
+{
+    if (!term->prompt_visible || !term->capable || term->searching || term->dictating ||
+        column >= term->columns) return 0;
+    long target = (long)term->rendered_cursor_row + delta;
+    if (target < 0 || (size_t)target >= term->rendered_rows) return 0;
+    if (snag_edit_end(&term->edits, &term->draft, term->cursor) < 0) return -1;
+    struct snag_buf frame = {0};
+    size_t label, row, col, end_row, end_col;
+    int rc = compose_frame(term, NULL, &frame, &label, &row, &col, &end_row, &end_col, NULL);
+    size_t at = 0u;
+    target += (long)term->viewport_row;
+    struct snag_term_prompt_row line = {0};
+    for (long i = 0; rc >= 0 && i <= target; ++i) {
+        line = snag_term_prompt_row(&frame, at, term->columns);
+        if (i < target) at = line.next;
+    }
+    size_t hit = line.start, width = 0u;
+    while (rc >= 0 && hit < line.end) {
+        size_t next = prompt_cell_end(frame.data, hit, line.end);
+        size_t cells = snag_term_text_width((char *)frame.data + hit, next - hit);
+        if (width + cells > column) break;
+        width += cells;
+        hit = next;
+    }
+    snag_buf_free(&frame);
+    if (rc >= 0) {
+        size_t source = hit;
+        rc = compose_frame(term, NULL, &frame, &label, &row, &col, &end_row, &end_col, &source);
+        if (rc >= 0) term->cursor = hit < label ? 0u : source;
+    }
+    snag_buf_free(&frame);
+    return rc < 0 ? -1 : redraw(term);
+}
+
+static int
 feed_escape(struct snag_term *term, unsigned char byte, enum snag_term_action *action, char **text)
 {
     bool prefix = false;
@@ -2704,6 +2769,85 @@ feed_escape(struct snag_term *term, unsigned char byte, enum snag_term_action *a
         *action = SNAG_TERM_VIEW;
         return 1;
     }
+    if (term->escape_len <= 7u &&
+        !memcmp(term->escape, "\033[9007;", term->escape_len)) return 0;
+    if (term->escape_len >= 7u && !memcmp(term->escape, "\033[9007;", 7u)) {
+        if (term->escape_len == 8u && byte >= '0' && byte <= '2') return 0;
+        bool valid = term->escape_len == 9u && byte == '~';
+        unsigned char operation = term->escape[7];
+        term->escape_len = 0u;
+        if (!valid) return 0;
+        int rc = operation == '0' ? snag_edit_end(&term->edits, &term->draft, term->cursor) :
+            snag_edit_undo(&term->edits, &term->draft, &term->cursor, operation == '2', 1u);
+        return rc < 0 ? rc : redraw(term);
+    }
+    /* Apply window-manager entry motions to the editor in input order, rather
+     * than calculating them from an asynchronously observed draft. */
+    if (term->escape_len < 7u &&
+        !memcmp(term->escape, "\033[9006;", term->escape_len)) return 0;
+    if (term->escape_len >= 7u && !memcmp(term->escape, "\033[9006;", 7u)) {
+        if (byte != '~') {
+            if (byte == '-' || byte == ';' || (byte >= '0' && byte <= '9')) return 0;
+            term->escape_len = 0u;
+            return 0;
+        }
+        term->escape[term->escape_len - 1u] = '\0';
+        term->escape_len = 0u;
+        char *end;
+        errno = 0;
+        char *start = (char *)term->escape + 7u;
+        long delta = strtol(start, &end, 10);
+        if (errno || start == end || *end != ';' ||
+            delta < -USHRT_MAX || delta > USHRT_MAX) return 0;
+        start = end + 1u;
+        unsigned long column = strtoul(start, &end, 10);
+        if (errno || start == end || *end || column > USHRT_MAX) return 0;
+        return pointer_cursor(term, delta, column);
+    }
+    if (term->escape_len < 7u &&
+        !memcmp(term->escape, "\033[9005;", term->escape_len)) return 0;
+    if (term->escape_len >= 7u && !memcmp(term->escape, "\033[9005;", 7u)) {
+        if (term->escape_len == 7u ||
+            (term->escape_len == 8u && byte >= '1' && byte <= '3')) return 0;
+        size_t length = term->escape_len;
+        term->escape_len = 0u;
+        if (length != 9u || byte != '~') return 0;
+        if (snag_edit_end(&term->edits, &term->draft, term->cursor) < 0) return -1;
+        size_t at = term->cursor;
+        switch (term->escape[7]) {
+        case '1':
+            while (at && term->draft.data[at - 1u] != '\n') --at;
+            while (at < term->draft.len &&
+                (term->draft.data[at] == ' ' || term->draft.data[at] == '\t')) ++at;
+            break;
+        case '2':
+            while (at < term->draft.len && term->draft.data[at] != '\n') ++at;
+            break;
+        case '3':
+            if (at < term->draft.len && term->draft.data[at] != '\n')
+                at = next_character(term->draft.data, term->draft.len, at);
+            break;
+        default:
+            return 0;
+        }
+        term->cursor = at;
+        return redraw(term);
+    }
+    if (term->escape_len >= 7u && !memcmp(term->escape, "\033[9004;", 7u)) {
+        if (byte == '~' && term->escape_len > 8u) {
+            term->escape[term->escape_len - 1u] = '\0';
+            *text = strdup((char *)term->escape + 7u);
+            term->escape_len = 0u;
+            if (!*text) return -1;
+            *action = SNAG_TERM_CHECKPOINT;
+            return 1;
+        }
+        if (term->escape_len == 7u || (byte >= '0' && byte <= '9')) return 0;
+        term->escape_len = 0u;
+        return 0;
+    }
+    if (term->escape_len < 7u &&
+        !memcmp(term->escape, "\033[9004;", term->escape_len)) return 0;
     /* A private live-client reply is input metadata, never draft text. */
     if (term->escape_len >= 3u && !memcmp(term->escape, "\033[>", 3u)) {
         size_t length = term->escape_len;
@@ -2786,9 +2930,10 @@ snag_term_paste_end(struct snag_term *term)
         len = SNAG_MAX_DIRECT_PROMPT;
         while (len && (term->paste_text.data[len] & 0xc0u) == 0x80u) --len;
     }
+    if (snag_edit_end(&term->edits, &term->draft, term->cursor) < 0) return -1;
     int rc = insert_paste(term, term->paste_text.data, len);
     snag_buf_reset(&term->paste_text);
-    return rc;
+    return rc < 0 ? rc : snag_edit_end(&term->edits, &term->draft, term->cursor);
 }
 
 static int
@@ -2868,6 +3013,7 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
     term->search_found = false;
     snag_buf_reset(&term->search_query);
     snag_buf_reset(&term->search_label);
+    snag_edit_history_free(&term->edits);
     snag_buf_reset(&term->draft);
     term->cursor = 0u;
     term->utf8_pending_len = 0u;
@@ -2895,6 +3041,7 @@ int
 snag_term_feed_byte(
     struct snag_term *term, unsigned char byte, enum snag_term_action *action, char **text)
 {
+    ++term->input_revision;
     if (term->dictating &&
         (byte == 0x03u || (!term->paste && !term->escape_len &&
                               (byte == '\r' || (!term->capable && byte == '\n'))))) {
@@ -2927,6 +3074,10 @@ snag_term_feed_byte(
         byte != 0x12u && search_accept(term, false) < 0)
         return -1;
     switch (byte) {
+    case 0x1fu:
+        if (snag_edit_undo(&term->edits, &term->draft, &term->cursor, false, 1u) < 0)
+            return -1;
+        return redraw(term);
     case 0x01u:
         return apply_key(term, KEY_HOME);
     case 0x05u:
@@ -3068,6 +3219,8 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
         clear_output_baseline(term);
     }
     if (consume_resize(term) < 0 || flush_completions(term) < 0) return -1;
+    if (term->feedback_yield) { term->feedback_yield = false; return 0; }
+    if (!term->input_only && term->redraw_pending && redraw(term) < 0) return -1;
     if (term->prompt_visible && term->capable && !term->searching && !term->output_depth &&
         snag_term_animation_due(&term->animation, snag_monotonic_ms()) && update_spinners(term) < 0)
         return -1;
@@ -3140,6 +3293,10 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
         if (term->input_pos == term->input_len) break;
         rc = snag_term_feed_byte(term, term->input[term->input_pos++], action, text);
         if (rc < 0) return -1;
+        if (term->feedback_yield) {
+            term->feedback_yield = false;
+            return rc > 0 ? 1 : 0;
+        }
         if (rc > 0) return 1;
         /* Let the native UI service output acknowledgements and geometry
          * before painting more buffered input at the previous width. */
@@ -3182,6 +3339,7 @@ snag_term_close(struct snag_term *term)
     json_decref(term->skills_catalog);
     snag_buf_free(&term->search_label);
     snag_buf_free(&term->search_query);
+    snag_edit_history_free(&term->edits);
     snag_buf_free(&term->draft);
     snag_buf_free(&term->output_cell);
     snag_buf_free(&term->output_line);

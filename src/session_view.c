@@ -113,6 +113,7 @@ snag_view_channel_init(struct snag_view_channel *channel, int fd)
 {
     *channel = (struct snag_view_channel){.fd = fd};
     snag_buf_init(&channel->input, SNAG_VIEW_MESSAGE_MAX);
+    snag_buf_init(&channel->encoded, SNAG_VIEW_MESSAGE_MAX);
 }
 
 void
@@ -122,8 +123,8 @@ snag_view_channel_close(struct snag_view_channel *channel)
     if (channel->fd >= 0) (void)close(channel->fd);
     if (channel->input.data) memset(channel->input.data, 0, channel->input.len);
     snag_buf_free(&channel->input);
-    if (channel->output) memset(channel->output, 0, channel->output_len);
-    free(channel->output);
+    if (channel->encoded.data) memset(channel->encoded.data, 0, channel->encoded.len);
+    snag_buf_free(&channel->encoded);
     json_decref(channel->received);
     snag_view_channel_init(channel, -1);
 }
@@ -133,15 +134,14 @@ snag_view_channel_send(struct snag_view_channel *channel, const json_t *value)
 {
     if (channel->output) return snag_errno(EAGAIN);
     if (!json_is_object(value)) return snag_errno(EINVAL);
-    char *text = json_dumps(value, JSON_COMPACT | JSON_ENSURE_ASCII);
-    if (!text) return -1;
-    size_t len = strlen(text);
-    if (len > SNAG_VIEW_MESSAGE_MAX) {
-        free(text);
-        return snag_errno(EOVERFLOW);
+    struct snag_buf *text = &channel->encoded;
+    if (snag_json_append(value, text) < 0) {
+        if (text->data) memset(text->data, 0, text->len);
+        snag_buf_reset(text);
+        return -1;
     }
-    channel->output = text;
-    channel->output_len = len;
+    channel->output = (char *)text->data;
+    channel->output_len = text->len;
     channel->output_offset = 0u;
     channel->write_deadline = snag_monotonic_ms() + VIEW_STALL_MS;
     return 0;
@@ -174,7 +174,7 @@ snag_view_channel_write(struct snag_view_channel *channel)
     channel->outgoing = (struct snag_session_packet){0};
     if (channel->output_offset < channel->output_len) return 0;
     memset(channel->output, 0, channel->output_len);
-    free(channel->output);
+    snag_buf_reset(&channel->encoded);
     channel->output = NULL;
     channel->output_len = channel->output_offset = 0u;
     channel->write_deadline = 0u;
@@ -341,7 +341,7 @@ struct view_draft {
 
 struct view_receipt {
     char id[SNAG_ID_HEX_LEN + 1u], sha256[SNAG_SHA256_HEX_LEN + 1u];
-    bool independent;
+    bool independent, echoed, local;
     json_t *result;
     struct view_draft *draft;
     char *command_text;
@@ -399,9 +399,46 @@ release_peer(struct snag_view_server *server, struct view_peer *peer)
 {
     if (!peer->generation) return;
     if (server->relay) snag_session_relay_view_release(server->relay, peer->generation);
-    if (peer->bound) server->callbacks.bound(server->callbacks.opaque, 0u);
+    if (peer->bound) (void)server->callbacks.bound(server->callbacks.opaque, 0u);
     peer->generation = 0u;
     peer->bound = false;
+}
+
+int
+snag_view_server_draft(struct snag_view_server *server, const json_t *route,
+    const struct snag_buf *text, size_t cursor)
+{
+    struct view_draft *draft = route_draft(server, route);
+    if (!draft) return -1;
+    if (draft->cursor == cursor && json_string_length(draft->text) == text->len &&
+        (!text->len || !memcmp(json_string_value(draft->text), text->data, text->len))) return 0;
+    if (draft->revision == INT64_MAX) return snag_errno(EOVERFLOW);
+    json_t *value = json_stringn(text->len ? (char *)text->data : "", text->len);
+    if (!value) return -1;
+    json_decref(draft->text);
+    draft->text = value;
+    draft->cursor = cursor;
+    ++draft->revision;
+    return 0;
+}
+
+json_t *
+snag_view_server_drafts(const struct snag_view_server *server)
+{
+    if (!server) return NULL;
+    json_t *snapshot = json_pack("{s:s,s:s,s:[]}", "session", server->session,
+        "instance", server->instance, "drafts");
+    if (!snapshot) return NULL;
+    for (const struct view_draft *draft = server->drafts; draft; draft = draft->next) {
+        json_t *row = json_pack("{s:O,s:O,s:I,s:I}", "route", draft->route,
+            "text", draft->text, "cursor", (json_int_t)draft->cursor,
+            "revision", (json_int_t)draft->revision);
+        if (!row || json_array_append_new(json_object_get(snapshot, "drafts"), row) < 0) {
+            json_decref(snapshot);
+            return NULL;
+        }
+    }
+    return snapshot;
 }
 
 static struct snag_view_server *
@@ -550,6 +587,11 @@ finish_receipt(struct snag_view_server *server, struct view_receipt *receipt,
         return -1;
     }
     if (clear) {
+        if (server->callbacks.draft &&
+            server->callbacks.draft(server->callbacks.opaque, draft->route, "", 0u) < 0) {
+            json_decref(result);
+            return -1;
+        }
         json_decref(draft->text);
         draft->text = json_incref(server->empty_draft);
         draft->cursor = 0u;
@@ -576,7 +618,7 @@ snag_view_server_result(struct snag_view_server *server, const char *id,
     json_t *result = json_pack("{s:s,s:s,s:I,s:s}", "id", id,
         "status", status, "seq", (json_int_t)seq, "event", event ? event : "");
     return finish_receipt(server, receipt, result,
-        !strcmp(status, "committed") || !strcmp(status, "discarded"));
+        !strcmp(status, "committed") || !strcmp(status, "discarded") || !strcmp(status, "local"));
 }
 
 int
@@ -640,7 +682,7 @@ snag_view_server_terminal(struct snag_view_server *server, const unsigned char *
         "status", "pending");
     if (!pending) return -1;
     int rc = server->callbacks.submit(server->callbacks.opaque, id, receipt->command_text,
-        receipt->draft->route, server->relay->generation, true, false, -1);
+        receipt->draft->route, server->relay->generation, true, false, -1, false, false, NULL);
     if (rc < 0) { json_decref(pending); return -1; }
     receipt->terminal_dispatched = receipt->pending = true;
     receipt->terminal_generation = server->relay->generation;
@@ -722,11 +764,21 @@ replace_draft(struct snag_view_server *server, struct view_peer *peer, const jso
     if (revision != draft->revision) return draft_snapshot(peer, edit, "conflict");
     if (draft->revision == INT64_MAX)
         return refuse_request(peer, message, "draft revision exhausted");
+    if (server->callbacks.draft &&
+        server->callbacks.draft(server->callbacks.opaque, route, bytes, (size_t)cursor) < 0)
+        return refuse_request(peer, message, "terminal draft cannot be retained");
     json_decref(draft->text);
     draft->text = json_incref((json_t *)text);
     draft->cursor = (size_t)cursor;
     ++draft->revision;
     return draft_snapshot(peer, edit, "accepted");
+}
+
+static int
+capture_digest(const char *bytes, size_t length, void *opaque)
+{
+    snag_sha256_update(opaque, bytes, length);
+    return 0;
 }
 
 static int
@@ -750,18 +802,41 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     if (has_level && (!command || !snag_verbosity_input(text, strlen(text)) ||
         snag_json_integer_u64(message, "verbosity", &level) < 0 || level > SNAG_VERBOSITY_MAX))
         return refuse_request(peer, message, "invalid command verbosity");
+    bool echoed = json_object_get(message, "echoed") != NULL;
+    if (echoed && (independent || !json_is_true(json_object_get(message, "echoed"))))
+        return refuse_request(peer, message, "invalid input echo");
+    const json_t *capture = json_object_get(message, "capture");
+    if (capture && (independent || !json_is_object(capture)))
+        return refuse_request(peer, message, "invalid captured input");
+    bool local = json_object_get(message, "local") != NULL;
+    if (local && (!command || !echoed ||
+        (!has_level && !capture) || !snag_frontend_local_input(text, strlen(text)) ||
+        !json_is_true(json_object_get(message, "local"))))
+        return refuse_request(peer, message, "invalid local input");
     int verbosity = has_level ? (int)level : -1;
     json_t *default_route = route ? NULL : json_string("rollout");
     struct view_draft *draft = route_draft(server, route ? route : default_route);
     json_decref(default_route);
     if (!draft) return -1;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
-    snag_sha256_hex(text, strlen(text), digest);
+    struct snag_sha256 hash;
+    snag_sha256_init(&hash);
+    snag_sha256_update(&hash, text, strlen(text));
+    if (capture) {
+        /* Bind retry identity to the captured intent without retaining another
+         * context or materializing a second serialized frame. */
+        snag_sha256_update(&hash, "", 1u);
+        if (json_dump_callback(capture, capture_digest, &hash,
+                JSON_COMPACT | JSON_SORT_KEYS) < 0) return -1;
+    }
+    snag_sha256_final_hex(&hash, digest);
     struct view_receipt *receipt = find_receipt(server, id);
     if (receipt) {
         if (receipt->command != command || receipt->queued != queued ||
             receipt->independent != independent || receipt->draft != draft ||
-            receipt->verbosity != verbosity || strcmp(receipt->sha256, digest))
+            receipt->verbosity != verbosity || receipt->echoed != echoed ||
+            receipt->local != local ||
+            strcmp(receipt->sha256, digest))
             return refuse_request(peer, message, "request ID already used");
         return reply(peer, json_incref(receipt->result));
     }
@@ -793,13 +868,16 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     receipt->queued = queued;
     receipt->independent = independent;
     receipt->verbosity = verbosity;
+    receipt->echoed = echoed;
+    receipt->local = local;
     receipt->draft_revision = draft_revision;
     receipt->draft = draft;
     receipt->next = server->receipts;
     server->receipts = server->pending = receipt;
     peer->waiting = receipt;
     if (server->callbacks.submit(server->callbacks.opaque, id, text, draft->route,
-        independent ? 0u : peer->generation, false, queued, verbosity) < 0)
+        independent ? 0u : peer->generation, false, queued, verbosity, echoed, local,
+        json_object_get(message, "capture")) < 0)
         return snag_view_server_result(server, id, "rejected", 0u, "admission unavailable");
     /* Pending is deliberately not an acceptance acknowledgement. The final
      * result is published by the engine only after its durable admission. */
@@ -814,10 +892,15 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
     const char *fields = !strcmp(type, "hello") ? "type version" :
         (!strcmp(type, "reserve") || !strcmp(type, "reports")) ? "type" :
         !strcmp(type, "receipt") ? "type id" :
+        !strcmp(type, "presented") ? "type generation audio" :
         !strcmp(type, "send") ? "type id text" :
+        (!strcmp(type, "dictate_done") || !strcmp(type, "dictate_cancel")) ?
+            "type generation capture" :
         !strcmp(type, "draft_get") ? "type generation route" :
         !strcmp(type, "draft") ? "type generation route revision edit text cursor" :
-        !strcmp(type, "editor_feedback") ? "type generation kind route label text" :
+        !strcmp(type, "editor_feedback") ? json_object_get(message, "origin") ?
+            "type generation kind route label text origin" :
+            "type generation kind route label text" :
         !strcmp(type, "command") ? json_object_get(message, "draft_revision") ?
             "type generation id text route draft_revision" : "type generation id text route" :
         (!strcmp(type, "submit") || !strcmp(type, "queue")) ?
@@ -826,7 +909,9 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             "type generation id text route" : "type generation id text" :
             "type generation";
     bool valid = !strcmp(type, "command") ?
-        snag_json_arg_keys(message, fields, "verbosity", NULL, 0u) :
+        snag_json_arg_keys(message, fields, "verbosity echoed local capture", NULL, 0u) :
+        (!strcmp(type, "submit") || !strcmp(type, "queue")) ?
+        snag_json_arg_keys(message, fields, "echoed capture", NULL, 0u) :
         snag_json_exact_keys(message, fields);
     if (!valid) {
         if (!peer->hello) return snag_errno(EPROTO);
@@ -844,12 +929,28 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             "observe", "control", "submit", "cancel", "quit", "receipts", "drafts",
             "commands", "reports", "irc_queries", "irc_channels", "irc_connections");
         json_t *features = json_object_get(capabilities, "features");
-        if (features && server->callbacks.feedback &&
-            json_array_append_new(features, json_string("editor_feedback")) < 0) {
+        if (features && server->callbacks.presented &&
+            json_array_append_new(features, json_string("frontend_audio")) < 0) {
             json_decref(capabilities);
             return -1;
         }
-        if (!features || json_array_append_new(features, json_string("command_verbosity")) < 0 ||
+        if (features && server->callbacks.input_control &&
+            json_array_append_new(features, json_string("dictation_control")) < 0) {
+            json_decref(capabilities);
+            return -1;
+        }
+        if (features && server->callbacks.feedback &&
+            (json_array_append_new(features, json_string("editor_feedback")) < 0 ||
+             json_array_append_new(features, json_string("editor_feedback_origin")) < 0)) {
+            json_decref(capabilities);
+            return -1;
+        }
+        if (!features || json_array_append_new(features, json_string("terminal_checkpoints")) < 0 ||
+            json_array_append_new(features, json_string("terminal_drafts")) < 0 ||
+            json_array_append_new(features, json_string("command_verbosity")) < 0 ||
+            json_array_append_new(features, json_string("input_echo")) < 0 ||
+            json_array_append_new(features, json_string("input_local")) < 0 ||
+            json_array_append_new(features, json_string("input_capture")) < 0 ||
             json_array_append_new(features, json_string("command_chains")) < 0 ||
             json_array_append_new(features, json_string("send")) < 0 ||
             json_array_append_new(features, json_string("queue")) < 0) {
@@ -898,9 +999,10 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             return refuse(peer, "controller cannot bind");
         peer->bound = true;
         peer->deadline = 0u;
-        server->callbacks.bound(server->callbacks.opaque, generation);
-        return reply(peer, json_pack("{s:s,s:I}", "type", "bound", "generation",
-            (json_int_t)generation));
+        int bound = server->callbacks.bound(server->callbacks.opaque, generation);
+        if (bound < 0) return -1;
+        return reply(peer, json_pack("{s:s,s:I,s:b}", "type", "bound", "generation",
+            (json_int_t)generation, "unrouted_drafts", bound > 0));
     }
     if (!strcmp(type, "detach")) {
         if (!server->relay) {
@@ -912,6 +1014,14 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         return reply(peer, json_pack("{s:s}", "type", "detached"));
     }
     if (!peer->bound) return refuse_request(peer, message, "controller is not bound");
+    if (!strcmp(type, "presented")) {
+        uint64_t epoch;
+        if (!server->callbacks.presented ||
+            snag_json_integer_u64(message, "audio", &epoch) < 0 ||
+            server->callbacks.presented(server->callbacks.opaque, epoch) < 0)
+            return refuse(peer, "frontend presentation is stale");
+        return reply(peer, json_pack("{s:s,s:s}", "type", "control", "intent", type));
+    }
     if (!strcmp(type, "editor_feedback")) {
         const json_t *label_value = json_object_get(message, "label");
         const char *label = json_string_value(label_value);
@@ -919,13 +1029,23 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             SNAG_MAX_DIRECT_PROMPT + 2u);
         const char *kind = snag_json_bounded_string(json_object_get(message, "kind"), 9u);
         const json_t *route = json_object_get(message, "route");
+        const json_t *origin = json_object_get(message, "origin");
+        const char *frontend = snag_json_bounded_string(json_object_get(origin, "frontend"),
+            SNAG_ID_HEX_LEN);
+        uint64_t event;
+        if (origin && (!snag_json_exact_keys(origin, "frontend event") || !frontend ||
+            !snag_hex_is_lower(frontend, SNAG_ID_HEX_LEN) || strlen(frontend) != SNAG_ID_HEX_LEN ||
+            snag_json_integer_u64(origin, "event", &event) < 0 || !event || event > INT64_MAX))
+            return refuse(peer, "invalid editor feedback origin");
         if (!label || json_string_length(label_value) >= SNAG_TERM_LABEL_BYTES ||
             strlen(label) != json_string_length(label_value) || !text ||
-            !snag_string_in(kind, "choices cancelled") ||
+            !snag_string_in(kind, "choices cancelled echo local") ||
             !writable_route(route) || !server->callbacks.feedback ||
             server->callbacks.feedback(server->callbacks.opaque, route,
-                !strcmp(kind, "choices") ? SNAG_TERM_CHOICES : SNAG_TERM_CANCELLED,
-                label, text) < 0)
+                !strcmp(kind, "choices") ? SNAG_TERM_CHOICES :
+                    !strcmp(kind, "echo") ? SNAG_TERM_ECHO :
+                    !strcmp(kind, "local") ? SNAG_TERM_LOCAL_FEEDBACK : SNAG_TERM_CANCELLED,
+                label, text, origin) < 0)
             return refuse(peer, "editor feedback cannot be retained");
         return reply(peer, json_pack("{s:s,s:s}", "type", "control", "intent", type));
     }
@@ -937,6 +1057,15 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         return draft_snapshot(peer, 0u, "snapshot");
     }
     if (!strcmp(type, "draft")) return replace_draft(server, peer, message);
+    if (!strcmp(type, "dictate_done") || !strcmp(type, "dictate_cancel")) {
+        const json_t *capture = json_object_get(message, "capture");
+        if (!server->callbacks.input_control || !json_is_object(capture) ||
+            server->callbacks.input_control(server->callbacks.opaque,
+                !strcmp(type, "dictate_done") ? SNAG_TERM_DICTATE_DONE :
+                    SNAG_TERM_DICTATE_CANCEL, capture) < 0)
+            return refuse(peer, "dictation control unavailable");
+        return reply(peer, json_pack("{s:s,s:s}", "type", "control", "intent", type));
+    }
     if (!strcmp(type, "submit") || !strcmp(type, "command") || !strcmp(type, "queue"))
         return submit(server, peer, message);
     if (!strcmp(type, "cancel") || !strcmp(type, "quit")) {
@@ -956,7 +1085,16 @@ step_peer(struct snag_view_server *server, struct view_peer *peer)
         (peer->channel.read_deadline && now >= peer->channel.read_deadline) ||
         (peer->channel.write_deadline && now >= peer->channel.write_deadline)) return -1;
     if (peer->channel.output) return snag_view_channel_write(&peer->channel) < 0 ? -1 : 0;
-    if (peer->closing) return -1;
+    if (peer->closing) {
+        struct snag_view_local *local = peer->channel.local;
+        if (!local) return -1;
+        /* A local write puts the final reply in the peer's receive slot.
+         * Closing before it is read can make its concurrent write fail first. */
+        (void)pthread_mutex_lock(&local->lock);
+        bool unread = local->incoming[1u - peer->channel.local_side].used != 0u;
+        (void)pthread_mutex_unlock(&local->lock);
+        return unread ? 0 : -1;
+    }
     if (peer->waiting && !peer->waiting->pending) {
         struct view_receipt *receipt = peer->waiting;
         peer->waiting = NULL;

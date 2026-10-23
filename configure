@@ -225,6 +225,23 @@ if ! $CC ${CPPFLAGS:-} $zstd_cflags -o "$tmpd/zstd" "$tmpd/zstd.c" \
 	die 'Zstandard headers and library are required; install libzstd-dev or set ZSTD_CFLAGS and ZSTD_LIBS for the target'
 fi
 
+# The workspace uses a private terminal ABI; an unpatched libvterm cannot replace it.
+if [ "$WITH_VM" = 1 ]; then
+	vterm_cflags=${VTERM_CFLAGS:-}
+	if [ -z "$vterm_cflags" ] && pc_exists snajpagent-vterm; then
+		vterm_cflags=$("$PKG_CONFIG" --cflags snajpagent-vterm)
+	fi
+	cat > "$tmpd/vterm.c" <<'EOF'
+#include <vterm.h>
+#if !defined(SNAJPAGENT_VTERM_ABI) || SNAJPAGENT_VTERM_ABI != 1
+#error incompatible terminal library
+#endif
+EOF
+	if ! $CC ${CPPFLAGS:-} $vterm_cflags -c "$tmpd/vterm.c" -o "$tmpd/vterm.o" >/dev/null 2>&1; then
+		die 'the patched snajpagent-vterm dependency is required for Vim mode; see DEPENDENCIES.md or use --without-vm'
+	fi
+fi
+
 # --- linked audio/video (FFmpeg) ----------------------------------------
 WITH_AV=0
 av_note='not found'

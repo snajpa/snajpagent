@@ -10,10 +10,13 @@ and indexed history. Current source creates native sessions and opens them
 through bounded checkpoint admission. Existing JSONL sessions retain their legacy
 recovery path until explicitly converted. Release 0.99.8c uses that legacy format.
 
-The proposed [Vim workspace and pager-retention design](vim-mode.md) adds an
-explicit full-screen frontend over semantic session history. Its windowed
-renderer and attachment protocol are planned work; the streaming interface
-described below remains the default.
+The [Vim workspace and pager-retention design](vim-mode.md) provides an explicit
+full-screen window manager. Each attached POSIX pane runs an independent ordinary
+UI frontend and displays its terminal cells. The workspace holds one exclusive
+controller connection per session; frontends share the owner draft while retaining
+independent dimensions and conversation selection. Retained-history and report
+panes use semantic session documents. The streaming interface described below
+remains the default. Whole-platform and whole-interface qualification continues.
 
 Supported POSIX interactive ANSI sessions have an owner process with a private PTY and a
 replaceable terminal frontend. The owner retains provider requests, commands and

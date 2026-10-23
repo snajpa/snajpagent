@@ -444,19 +444,15 @@ snag_config_prompt_expand(const char *text, unsigned int mode,
     const char *const values[SNAG_PROMPT_FIELD_COUNT], unsigned char marker, char *label,
     size_t label_size)
 {
-    int rc = -1;
-
     if (!text || mode >= 3u || !values || !label || label_size < 2u || marker > 0xfeu)
         return snag_errno(EINVAL);
-    struct snag_buf out = {.max = label_size};
+    /* Reserve cannot grow past this caller-owned buffer. */
+    struct snag_buf out = {
+        .data = (unsigned char *)label, .cap = label_size, .max = label_size};
     if (parse_prompt(text, mode, values, marker, &out) < 0 || !out.len ||
         snag_buf_putc(&out, ' ') < 0 || snag_buf_terminate(&out) < 0)
-        goto out;
-    memcpy(label, out.data, out.len + 1u);
-    rc = 0;
-out:
-    snag_buf_free(&out);
-    return rc;
+        return -1;
+    return 0;
 }
 
 static int

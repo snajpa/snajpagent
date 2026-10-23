@@ -922,7 +922,7 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
             if (getenv(backend_names[i])) rc = snag_errno(EIO);
         }
     }
-    if (rc == 0) rc = snag_child_spawn_terminal(&child, executable, command);
+    if (rc == 0) rc = snag_child_spawn_terminal(&child, executable, command, NULL, 0u, 0u);
     int spawn_errno = errno;
     for (size_t i = 0u; i < 3u; ++i) {
         if (backends[i] && setenv(backend_names[i], backends[i], 1) < 0 && rc == 0) {

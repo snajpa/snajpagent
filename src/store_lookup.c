@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_internal.h"
+#include "store_binary_replay.h"
 #include "media.h"
 #include "base.h"
 #include "context.h"
@@ -939,8 +940,11 @@ load_catalog_row(struct snag_store *store, struct snag_session *snapshot, const 
     snapshot->history_cancel_opaque = cancel_opaque;
     if (read_snapshot(snapshot, native) < 0 || snapshot->delete_requested) goto fail;
     snag_file_info after;
+    /* Native replay verified a prefix even if its owner appended meanwhile.
+     * Cache publication below still requires the original whole-file stamp. */
     if (snag_fstat(snapshot->log_fd, &after) < 0 ||
-        !snag_file_unchanged(&before, &after)) goto fail;
+        !(native ? snag_store_binary_prefix_stable(snapshot, &before, &after) :
+            snag_file_unchanged(&before, &after))) goto fail;
     *summary = (struct catalog_row){.name = snapshot->name,
         .activity_ms = snapshot->last_time_ms};
     /* Identity-only discovery retains the source witness and full name, with

@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 .POSIX:
+# Older GNU make omits command-line definitions from MAKEFLAGS in POSIX mode.
+MAKEFLAGS += $(MAKEOVERRIDES)
 
 include META
 
@@ -94,9 +96,10 @@ COMMON_SRC += src/convert.c src/tools_media.c src/media.c src/tools_document.c s
 COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c src/remote.c
 COMMON_SRC += src/clipboard.c src/clipboard_transfer.c
 COMMON_SRC += src/app_resume.c src/commands.c src/unicode.c src/presentation.c src/presentation_store.c
+COMMON_SRC += src/ui_frontend.c
 COMMON_SRC += src/store_convert.c src/send.c
 COMMON_SRC += src/mcp.c src/mcp_http.c src/mcp_catalog.c src/mcp_snapshot.c src/mcp_auth.c src/mcp_cli.c
-COMMON_SRC += src/irc_address.c src/app_irc.c
+COMMON_SRC += src/irc_address.c src/app_irc.c src/edit_history.c
 COMMON_SRC += src/vm.c
 ifeq ($(WITH_VM),1)
 COMMON_SRC += src/session_view.c src/vm_connection.c src/vm_report.c
@@ -105,6 +108,9 @@ COMMON_SRC += src/vm_reader.c src/vm_search.c src/vm_grid.c src/vm_workspace.c s
 COMMON_SRC += src/vm_input.c src/vm_text.c
 COMMON_SRC += src/vm_public.c src/vm_source.c
 COMMON_SRC += src/vm_transcript.c src/vm_document.c
+COMMON_SRC += src/vm_terminal.c
+override CPPFLAGS += $(VTERM_CFLAGS)
+override LDLIBS += $(VTERM_LIBS)
 VM_TEST_BIN = tests/test_vm_reader tests/test_vm_grid tests/test_unicode tests/test_vm_workspace tests/test_vm_layout
 VM_TEST_BIN += tests/test_vm_input tests/test_vm_text
 VM_TEST_BIN += tests/test_vm_public
@@ -141,7 +147,7 @@ HEADERS += src/vm_input.h
 HEADERS += src/vm_text.h
 HEADERS += src/vm_public.h
 HEADERS += src/vm.h
-HEADERS += src/vm_transcript.h src/vm_document.h
+HEADERS += src/vm_transcript.h src/vm_document.h src/vm_terminal.h
 HEADERS += src/irc_address.h src/commands.h
 HEADERS += src/skills.h src/work_context.h
 FIXTURE_BIN = tests/$(NAME)-fixture

@@ -78,6 +78,51 @@ put_cell(struct snag_vm_grid *grid, size_t row, size_t column, const char *text,
 }
 
 int
+snag_vm_grid_terminal_cell(struct snag_vm_grid *grid, size_t row, size_t column,
+    const uint32_t *characters, size_t count, unsigned int width, unsigned int style,
+    uint32_t foreground, uint32_t background)
+{
+    if (row >= grid->rows || column >= grid->columns || !width || width > grid->columns - column)
+        return 0;
+    if (!grid->back.cells || (!characters && count)) return snag_errno(EINVAL);
+    if (count > SIZE_MAX / 4u) return snag_errno(EOVERFLOW);
+    size_t length = 0u;
+    for (size_t i = 0u; i < count; ++i) {
+        uint32_t cp = characters[i];
+        length += cp < 0x80u ? 1u : cp < 0x800u ? 2u : cp < 0x10000u ? 3u : 4u;
+    }
+    size_t offset = grid->back.text.len;
+    if (snag_buf_reserve(&grid->back.text, length) < 0) return -1;
+    size_t at = offset;
+    for (size_t i = 0u; i < count; ++i) {
+        uint32_t cp = characters[i];
+        unsigned char *text = grid->back.text.data;
+        if (cp < 0x80u) text[at++] = (unsigned char)cp;
+        else if (cp < 0x800u) {
+            text[at++] = (unsigned char)(0xc0u | cp >> 6u);
+            text[at++] = (unsigned char)(0x80u | (cp & 63u));
+        } else if (cp < 0x10000u) {
+            text[at++] = (unsigned char)(0xe0u | cp >> 12u);
+            text[at++] = (unsigned char)(0x80u | ((cp >> 6u) & 63u));
+            text[at++] = (unsigned char)(0x80u | (cp & 63u));
+        } else {
+            text[at++] = (unsigned char)(0xf0u | cp >> 18u);
+            text[at++] = (unsigned char)(0x80u | ((cp >> 12u) & 63u));
+            text[at++] = (unsigned char)(0x80u | ((cp >> 6u) & 63u));
+            text[at++] = (unsigned char)(0x80u | (cp & 63u));
+        }
+    }
+    grid->back.text.len = at;
+    for (size_t i = 0u; i < width; ++i) clear_cell(grid, row, column + i);
+    struct snag_vm_cell *cell = grid->back.cells + row * grid->columns + column;
+    *cell = (struct snag_vm_cell){.offset = offset, .length = length,
+        .width = width, .style = style | SNAG_VM_NATIVE,
+        .foreground = foreground, .background = background};
+    for (size_t i = 1u; i < width; ++i) cell[i] = (struct snag_vm_cell){.continuation = true};
+    return 0;
+}
+
+int
 snag_vm_grid_text_column(struct snag_vm_grid *grid, size_t row, size_t column, size_t width,
     const char *text, size_t length, unsigned int style, size_t logical_column)
 {
@@ -141,20 +186,45 @@ static bool
 cell_equal(const struct snag_vm_frame *a, const struct snag_vm_frame *b, size_t index)
 {
     const struct snag_vm_cell *x = a->cells + index, *y = b->cells + index;
-    if (x->style != y->style || x->width != y->width || x->length != y->length ||
+    if (x->style != y->style || x->foreground != y->foreground || x->background != y->background ||
+        x->width != y->width || x->length != y->length ||
         x->continuation != y->continuation) return false;
     return !x->length || !memcmp(a->text.data + x->offset, b->text.data + y->offset, x->length);
 }
 
 static int
-set_style(struct snag_buf *out, unsigned int style, bool color)
+set_color(struct snag_buf *out, uint32_t color, bool background)
 {
+    if (!color) return 0;
+    if (color & 0x1000000u)
+        return snag_buf_printf(out, ";%u;2;%u;%u;%u", background ? 48u : 38u,
+            (color >> 16u) & 255u, (color >> 8u) & 255u, color & 255u);
+    unsigned int index = color - 1u;
+    if (index < 8u) return snag_buf_printf(out, ";%u", (background ? 40u : 30u) + index);
+    if (index < 16u) return snag_buf_printf(out, ";%u", (background ? 100u : 90u) + index - 8u);
+    return snag_buf_printf(out, ";%u;5;%u", background ? 48u : 38u, index);
+}
+
+static int
+set_style(struct snag_buf *out, const struct snag_vm_cell *cell, bool color)
+{
+    unsigned int style = cell->style;
     if (snag_buf_append(out, "\033[0", 3u) < 0) return -1;
     if ((style & SNAG_VM_BOLD) && snag_buf_append(out, ";1", 2u) < 0) return -1;
     if ((style & SNAG_VM_DIM) && snag_buf_append(out, ";2", 2u) < 0) return -1;
     if ((style & SNAG_VM_ITALIC) && snag_buf_append(out, ";3", 2u) < 0) return -1;
-    if ((style & SNAG_VM_UNDERLINE) && snag_buf_append(out, ";4", 2u) < 0) return -1;
+    if ((style & SNAG_VM_DOUBLE_UNDERLINE) && snag_buf_append(out, ";21", 3u) < 0) return -1;
+    if (!(style & SNAG_VM_DOUBLE_UNDERLINE) && (style & SNAG_VM_UNDERLINE) &&
+        snag_buf_append(out, ";4", 2u) < 0) return -1;
+    if ((style & SNAG_VM_BLINK) && snag_buf_append(out, ";5", 2u) < 0) return -1;
+    if ((style & SNAG_VM_CONCEAL) && snag_buf_append(out, ";8", 2u) < 0) return -1;
+    if ((style & SNAG_VM_STRIKE) && snag_buf_append(out, ";9", 2u) < 0) return -1;
     if ((style & SNAG_VM_REVERSE) && snag_buf_append(out, ";7", 2u) < 0) return -1;
+    if (style & SNAG_VM_NATIVE) {
+        if (set_color(out, cell->foreground, false) < 0 ||
+            set_color(out, cell->background, true) < 0) return -1;
+        return snag_buf_putc(out, 'm');
+    }
     if (color && (style & 240u) && snag_buf_printf(out, ";%u", 29u + ((style >> 4u) & 15u)) < 0)
         return -1;
     if (color && (style & 7680u) && snag_buf_printf(out, ";%u", 39u + ((style >> 9u) & 15u)) < 0)
@@ -172,6 +242,7 @@ snag_vm_grid_flush(struct snag_vm_grid *grid, size_t cursor_row, size_t cursor_c
     struct snag_buf out = {.max = SIZE_MAX};
     size_t row_at = SIZE_MAX, column_at = SIZE_MAX;
     unsigned int style_at = ~0u;
+    uint32_t foreground_at = 0u, background_at = 0u;
     bool cursor_changed = !grid->valid || grid->cursor_row != cursor_row ||
         grid->cursor_column != cursor_column || grid->cursor_visible != cursor_visible;
     int rc = -1;
@@ -184,12 +255,35 @@ snag_vm_grid_flush(struct snag_vm_grid *grid, size_t cursor_row, size_t cursor_c
                 (grid->valid && cell_equal(&grid->front, &grid->back, index))) {
                 continue;
             }
-            if (!grid->valid && !cell->length && !cell->style) continue;
+            if (!grid->valid && !cell->length && !cell->foreground && !cell->background &&
+                !(cell->style & ~SNAG_VM_NATIVE)) continue;
             if (row_at != row || column_at != column) {
                 if (snag_buf_printf(&out, "\033[%zu;%zuH", row + 1u, column + 1u) < 0) goto out;
             }
-            if (style_at != cell->style && set_style(&out, cell->style, grid->color) < 0) goto out;
+            if ((style_at != cell->style || foreground_at != cell->foreground ||
+                background_at != cell->background) && set_style(&out, cell, grid->color) < 0)
+                goto out;
             style_at = cell->style;
+            foreground_at = cell->foreground;
+            background_at = cell->background;
+            if (!cell->length && (cell->style & SNAG_VM_NATIVE)) {
+                /* An erased terminal cell differs from a printed space: keep
+                 * its blank state for copy/selection and trailing attributes. */
+                size_t end = column + 1u;
+                while (end < grid->columns) {
+                    const struct snag_vm_cell *next = grid->back.cells + row * grid->columns + end;
+                    if (next->length || next->continuation || next->style != cell->style ||
+                        next->foreground != cell->foreground ||
+                        next->background != cell->background)
+                        break;
+                    ++end;
+                }
+                if (snag_buf_printf(&out, "\033[%zuX", end - column) < 0) goto out;
+                column_at = column;
+                column = end - 1u;
+                row_at = row;
+                continue;
+            }
             if (snag_buf_append(&out, cell->length ? grid->back.text.data + cell->offset :
                 (const unsigned char *)" ", cell->length ? cell->length : 1u) < 0) goto out;
             row_at = row;

@@ -442,6 +442,12 @@ read_frame(struct upload_io *io, struct upload_frame *frame)
         unsigned char byte;
         if (read_byte(io, deadline, &byte) < 0) goto done;
         if (byte == 0x03u) { errno = ECANCELED; goto done; }
+        if (byte == '#') {
+            snag_buf_reset(&line);
+            if (snag_buf_putc(&line, byte) < 0) goto done;
+            continue;
+        }
+        if (!line.len) continue;
         if (byte == '\n') {
             static const char ack[] = "#SNAJPAGENT-SCREEN:ACK:";
             if (io->title && line.len >= sizeof(ack) - 1u &&

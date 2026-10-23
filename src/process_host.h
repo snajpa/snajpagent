@@ -41,9 +41,15 @@ int snag_child_spawn_argv(
 int snag_child_spawn_host(struct snag_child *child, const char *const *argv);
 /* Host utility with an explicit environment, preserving normal host limits. */
 int snag_child_spawn_host_env(struct snag_child *, const char *const *, char **);
-/* Direct argv in a new controlling terminal, no shell or agent environment. */
+/* Direct argv in a new controlling terminal, no shell or agent environment.
+ * Initial geometry is set before fork; zero rows/columns inherit host geometry. */
 int snag_child_spawn_terminal(
-    struct snag_child *child, const char *executable, const char *const *argv);
+    struct snag_child *child, const char *executable, const char *const *argv, char **environment,
+    unsigned short rows, unsigned short columns);
+/* Also inherit one private descriptor at its existing number. The parent keeps
+ * ownership and its close-on-exec flag; only the child clears that flag. */
+int snag_child_spawn_terminal_channel(struct snag_child *, const char *, const char *const *,
+    char **environment, unsigned short rows, unsigned short columns, int channel);
 void snag_child_signal(struct snag_child *child, enum snag_child_signal signal);
 /* 1 exited without reaping, 0 running, -1 error/lost ownership. */
 int snag_child_exited(struct snag_child *child);
