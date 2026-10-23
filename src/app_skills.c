@@ -249,8 +249,11 @@ snag_app_skills_begin(struct app_state *app, const char *prompt, bool continuing
         }
         arguments += 2u;
         while (isspace((unsigned char)*arguments)) ++arguments;
-        char *id = strndup(start, (size_t)(end - start));
+        size_t length = (size_t)(end - start);
+        char *id = malloc(length + 1u);
         if (!id) return -1;
+        memcpy(id, start, length);
+        id[length] = '\0';
         json_t *skill = activate(app, id, arguments, true, error, size);
         free(id);
         if (!skill) return 1;

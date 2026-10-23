@@ -381,8 +381,10 @@ static int
 resource_reference(const char *root, const char *start, size_t length, bool local,
     char *error, size_t size)
 {
-    char *reference = strndup(start, length);
+    char *reference = malloc(length + 1u);
     if (!reference) return -1;
+    memcpy(reference, start, length);
+    reference[length] = '\0';
     char *suffix = strpbrk(reference, "#?");
     if (suffix) *suffix = 0;
     if (!*reference || (!local && strchr(reference, ':'))) { free(reference); return 0; }

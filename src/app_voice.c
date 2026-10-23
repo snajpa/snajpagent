@@ -3873,7 +3873,7 @@ snag_app_voice_service(struct app_state *app)
         bool done = atomic_load_explicit(&v->done, memory_order_acquire);
         if (!done && !atomic_load_explicit(&v->credential_ready, memory_order_acquire)) {
             /* Existing delegations remain serviceable during replacement auth. */
-            goto interface;
+            goto service_interface;
         }
         if (snag_secret_set_build(&v->secrets, NULL, &v->credential, error, sizeof(error)) < 0) {
             goto failed;
@@ -4031,7 +4031,7 @@ snag_app_voice_service(struct app_state *app)
             if (rc < 0) goto failed;
         }
     }
-interface:
+service_interface:
     if ((!atomic_load(&v->done) || v->retryable) && !atomic_load(&v->stop) &&
         interface_service(app, error, sizeof(error)) < 0)
         goto failed;
