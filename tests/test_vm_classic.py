@@ -31,14 +31,14 @@ class ClassicTests(unittest.TestCase):
 
     def returned(self, child):
         child.output.clear()
-        child.write(b'/s d\r')
+        child.write(b'\x15/s d\r')
         child.until(b'\x1b[?1049h')
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
 
     def test_picker_fast_input_after_command_runs_once_then_returns(self):
         child = self.start('-N', 'classic')
         child.repaint_until(self.owner.sid[:8].encode())
-        child.write(b':classic\rfast-classic-marker\r')
+        child.write(b'j:classic\rfast-classic-marker\r')
         child.until(b'semantic-answer', 10)
         self.owner.wait_event('response_completed')
         self.returned(child)
@@ -47,6 +47,18 @@ class ClassicTests(unittest.TestCase):
         self.assertEqual(len(self.inputs()), 1)
         self.assertIn('fast-classic-marker', json.dumps(self.inputs()[0]))
         self.assertIsNone(self.saved()['classic'])
+
+    def test_classic_on_new_session_row_preserves_workspace_and_owner(self):
+        child = self.start('-N', 'classic-new-row')
+        child.repaint_until(self.owner.sid[:8].encode())
+        child.command('classic')
+        child.repaint_until(b'Use :classic SESSION_ID or select a session')
+        self.assertIsNone(child.process.poll())
+        child.finish('close')
+        self.assertIsNone(self.saved()['classic'])
+        self.owner.status('detached')
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        self.assertEqual(self.inputs(), [])
 
     def test_same_read_prefix_precedes_later_paste_bytes(self):
         child = self.start('-N', 'large-paste')
@@ -92,12 +104,26 @@ class ClassicTests(unittest.TestCase):
         child.attached()
         child.write(b'iunsent semantic draft\x1b:vsp\r:classic\r')
         child.until('›'.encode())
+        child.output.clear()
+        marker = b'\x1b]2;SNAJPAGENT-SCREEN/1:DRAFT:123:'
+        child.write(b'\x1b[9004;123~')
+        child.until(marker)
+        del child.output[:child.output.index(marker)]
+        child.until(b'\x1b\\')
+        checkpoint = json.loads(bytes(child.output[len(marker):]).split(b'\x1b\\', 1)[0])
+        draft = next(row for row in checkpoint['drafts'] if row['route'] == 'rollout')
+        self.assertEqual(draft['text'], 'unsent semantic draft')
+        self.assertEqual(draft['cursor'], len(draft['text']))
+        # The return helper clears this line before typing the detach command.
         self.returned(child)
         child.attached()
-        child.repaint_until(b'unsent semantic draft')
+        child.output.clear()
         child.command('workspace save')
-        self.wait_snapshot(lambda rows: len(next(iter(rows.values()))['state']['windows']) == 2)
-        self.assertEqual(rollout(self.saved()['buffers'][0])['draft'], 'unsent semantic draft')
+        child.repaint_until(b'Workspace saved')
+        self.wait_snapshot(lambda rows:
+            len(next(iter(rows.values()))['state']['windows']) == 2 and
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] == '')
+        self.assertEqual(rollout(self.saved()['buffers'][0])['draft'], '')
         child.command('close')
         child.finish('close')
         self.owner.status('detached')

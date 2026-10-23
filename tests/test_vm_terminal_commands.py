@@ -4,6 +4,7 @@
 import hashlib
 import json
 import os
+import pwd
 import select
 import shutil
 import signal
@@ -20,6 +21,9 @@ from unittest import mock
 import test_vm_control as control
 import test_vm_clipboard as clipboard
 from test_vm_frontend import normalized_modes, rollout
+
+
+SCREEN_COMMANDS = pwd.getpwuid(os.getuid()).pw_name != 'nobody'
 
 
 class Native:
@@ -293,7 +297,30 @@ input()
         if mosh:
             transport.extend(['mosh', '--local', '--predict=never', '127.0.0.1'])
         transport.extend(multiplexer)
-        return self.start('-N', name, columns=200, transport=transport, extra_env=env)
+        child = self.start('-N', name, columns=200, transport=transport, extra_env=env)
+        if mux == 'tmux':
+            # Mosh sends screen differences; a redraw of unchanged cells emits
+            # nothing. Assert the receiving terminal's actual cells instead.
+            child.capture_screen = lambda: subprocess.check_output(
+                [*tmux, 'capture-pane', '-p', '-t', 'transfer'], timeout=5)
+        elif mux == 'screen':
+            hardcopy = self.root / 'screen-cells'
+
+            def capture_screen():
+                hardcopy.unlink(missing_ok=True)
+                subprocess.run(['screen', '-S', 'transfer', '-p', '0', '-X',
+                                'hardcopy', '-h', str(hardcopy)],
+                               env={**os.environ, **env}, check=True, timeout=5,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if hardcopy.is_file() and hardcopy.stat().st_size:
+                        return hardcopy.read_bytes()
+                    time.sleep(.05)
+                raise AssertionError('GNU Screen did not write its hardcopy')
+
+            child.capture_screen = capture_screen
+        return child
 
     def receive_and_send(self, background=False, resize=False, **transport):
         path = self.root / 'notes file.txt'
@@ -455,7 +482,8 @@ input()
     def test_receive_through_remote_keeps_attachment_for_workspace_submit(self):
         self.receive_and_send(background=True)
 
-    @unittest.skipUnless(shutil.which('screen'), 'GNU Screen unavailable')
+    @unittest.skipUnless(shutil.which('screen') and SCREEN_COMMANDS,
+                         'GNU Screen reserves the nobody user without command rights')
     def test_transfers_with_workspace_in_screen(self):
         self.receive_and_send(mux='screen')
 
@@ -464,7 +492,8 @@ input()
         self.receive_and_send(mux='tmux')
 
     @unittest.skipUnless(shutil.which('mosh') and shutil.which('mosh-server') and
-                         shutil.which('screen'), 'Mosh/GNU Screen unavailable')
+                         shutil.which('screen') and SCREEN_COMMANDS,
+                         'Mosh/GNU Screen unavailable to the current user')
     def test_transfers_with_workspace_in_mosh_screen(self):
         self.receive_and_send(mosh=True, mux='screen')
 
@@ -504,7 +533,7 @@ input()
         child.repaint_until(b'Upload cancelled; no files attached.')
         child.command('history')
         child.write(b'i/attachments\r')
-        child.repaint_until(b'0 unsent attachment(s)')
+        child.painted_until(b'0 unsent attachment(s)')
         child.write(b'\x1b')
         child.read(.06)
         child.finish('close')
@@ -744,7 +773,7 @@ input()
         restored.finish('close')
         self.assertEqual((self.root / 'editor-runs').read_text(), 'started\n')
 
-    def test_classic_draft_and_newer_workspace_typing_survive(self):
+    def test_classic_and_workspace_share_draft_through_terminal_handoff(self):
         classic = self.owner.start(['--resume', self.owner.sid])
         classic.until(b'Attached session')
         os.write(classic.master, b'original classic draft')
@@ -760,7 +789,8 @@ input()
         self.assertIsNotNone(classic.process.poll())
         self.owner.status('detached')
         child = self.attached('both-drafts')
-        child.write(b'i/config\rnewer workspace draft')
+        child.repaint_until(b'original classic draft')
+        child.write(b'i\x15/config\rnewer workspace draft')
         child.until(b'terminal-editor-ready', 10)
         child.output.clear()
         child.write(b'done\r')
@@ -777,7 +807,7 @@ input()
                          'newer workspace draft')
         resumed.finish('close')
         classic = self.owner.start(['--resume', self.owner.sid])
-        classic.until(b'original classic draft')
+        classic.until(b'newer workspace draft')
         self.assertEqual(self.inputs(), [])
         self.owner.finish(classic, b'\x15/s d')
 

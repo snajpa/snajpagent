@@ -28,7 +28,8 @@ class QueryWorkspaceTests(QueryFixture):
         self.child.attached()
 
     def workspace_start(self, *args):
-        child = Terminal(self.root, args, rows=30, columns=220)
+        child = Terminal(self.root, args, rows=30, columns=220,
+                         extra_env={'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret', 'PAGER': ''})
         self.addCleanup(child.close)
         children = FixtureChildren(child.process.pid)
         self.addCleanup(children.close)
@@ -60,6 +61,9 @@ class QueryWorkspaceTests(QueryFixture):
         child = self.child
         child.write(b'i/query query-peer\r')
         child.repaint_until(b'[query-peer]')
+        self.wait_snapshot(lambda rows: rows and isinstance(
+            self.state()['windows'][0]['history']['route'], dict))
+        self.assertTrue(self.state()['windows'][0]['native'])
         child.write(b'immediate private reply\r')
         self.wait_wire(self.peer, b'PRIVMSG query-peer :immediate private reply')
         self.assertNotIn('immediate private reply', json.dumps(self.seen))
@@ -172,7 +176,7 @@ class QueryWorkspaceTests(QueryFixture):
         child.repaint_until(b'shared text suffix')
         child.write(b'i\x1b')
         time.sleep(.06)
-        child.repaint_until(b'NORMAL composer')
+        child.repaint_until(b'shared text suffix')
         child.write(b'u')
         self.normal()
         child.command('workspace save')
@@ -255,6 +259,16 @@ class QueryWorkspaceTests(QueryFixture):
         child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.state()['buffers'] and
                            self.buffers().get('query-peer', {}).get('draft') == 'never retarget this draft')
+        child.output.clear()
+        child.write(b'i\r')
+        self.wait_snapshot(lambda rows: rows and self.buffers().get('query-peer', {}).get('pending'))
+        self.normal()
+        child.command('workspace save')
+        self.wait_snapshot(lambda rows: rows and self.buffers().get('query-peer', {}).get('pending'))
+        retained = self.buffers()['query-peer']
+        self.assertEqual(retained['pending']['text'], 'never retarget this draft')
+        self.assertEqual(retained['pending']['capture']['conversation']['route']['peer'],
+                         'query-peer')
         replacement.drain(.1)
         self.peer.drain(.1)
         self.assertNotIn(b'never retarget this draft', bytes(replacement.buf))
@@ -277,7 +291,16 @@ class QueryWorkspaceTests(QueryFixture):
         child.write(b'/private history needle\r')
         child.repaint_until(b'Match')
         inputs = sum(e['type'] == 'input_received' for e in self.events())
-        child.write(b'iprivate reply\r')
+        child.write(b'iprivate reply')
+        self.wait_snapshot(lambda rows: rows and
+                           self.buffers()['query-peer']['draft'] == 'private reply')
+        child.repaint_until(b'private reply')
+        from test_vm_mouse import current_rows
+        prompt, = [row for row in current_rows(child).values() if 'private reply' in row]
+        self.assertIn('[query-peer]', prompt)
+        self.assertIn('queryop@', prompt)
+        self.assertNotIn('fake/host-model/', prompt)
+        child.write(b'\r')
         self.wait_wire(self.peer, b'PRIVMSG query-peer :private reply')
         self.wait(lambda: not self.buffers()['query-peer']['pending'])
         self.assertEqual(sum(e['type'] == 'input_received' for e in self.events()), inputs)

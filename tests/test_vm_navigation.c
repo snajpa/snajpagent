@@ -4,6 +4,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static json_t *
@@ -46,9 +47,52 @@ check(json_t *blocks, enum snag_vm_navigation_kind kind, uint64_t from, uint64_t
     snag_vm_navigation_close(nav);
 }
 
+static void
+same_block_left_test(void)
+{
+    struct snag_vm_navigation_request request = {.kind = SNAG_VM_NAV_LEFT, .count = 3u};
+    (void)snprintf(request.start.key, sizeof(request.start.key), "item/0");
+    request.start.byte = 8u;
+    struct snag_vm_navigation *nav = snag_vm_navigation_open(&request);
+    json_t *current = block(1u, 0u, "0123456789");
+    assert(nav && current);
+    assert(snag_vm_navigation_block(nav, current, NULL, NULL) == 1);
+    struct snag_vm_anchor result;
+    assert(snag_vm_navigation_finish(nav, &result) == 0);
+    assert(result.byte == 5u && !strcmp(result.key, "item/0"));
+    json_decref(current);
+    snag_vm_navigation_close(nav);
+}
+
+static void
+large_block_left_test(void)
+{
+    size_t length = 1024u * 1024u;
+    char *text = malloc(length + 1u);
+    assert(text);
+    memset(text, 'x', length);
+    text[length] = '\0';
+    json_t *current = block(17u, 0u, text);
+    free(text);
+    struct snag_vm_navigation_request request = {.kind = SNAG_VM_NAV_LEFT, .count = 5u};
+    memcpy(request.start.key, "item/0", sizeof("item/0"));
+    request.start.byte = length - 2u;
+    struct snag_vm_navigation *nav = snag_vm_navigation_open(&request);
+    assert(current && nav);
+    assert(snag_vm_navigation_block(nav, current, NULL, NULL) == 1);
+    struct snag_vm_anchor result;
+    assert(snag_vm_navigation_finish(nav, &result) == 0);
+    assert(result.byte == length - 7u && result.seq == 17u && !result.heading &&
+        !strcmp(result.key, "item/0"));
+    snag_vm_navigation_close(nav);
+    json_decref(current);
+}
+
 int
 main(void)
 {
+    same_block_left_test();
+    large_block_left_test();
     json_t *blocks = json_array();
     assert(json_array_append_new(blocks, block(1u, 0u, "one t")) == 0);
     assert(json_array_append_new(blocks, block(2u, 5u, "wo\n   three\nlast")) == 0);

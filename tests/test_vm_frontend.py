@@ -18,7 +18,9 @@ import tempfile
 import termios
 import time
 import unittest
+import unicodedata
 import uuid
+from unittest.mock import patch
 from pathlib import Path
 
 import tmux_terminal as harness
@@ -71,6 +73,35 @@ def rollout(owner):
     if 'buffers' not in owner:
         return owner
     return next(buffer for buffer in owner['buffers'] if buffer['route'] == 'rollout')
+
+
+def current_rows(child):
+    """Apply VM's absolute-addressed paint runs, including overwritten cells."""
+    output = bytes(child.output).decode('utf-8', 'replace')
+    frame = output.rfind('\x1b[2J')
+    if frame >= 0:
+        output = output[frame + 4:]
+    row = column = 0
+    cells = {}
+    for part in re.split(r'(\x1b\[[0-9;?]*[A-Za-z])', output):
+        if part.startswith('\x1b['):
+            match = re.fullmatch(r'\x1b\[(\d+);(\d+)H', part)
+            if match:
+                row, column = (int(x) - 1 for x in match.groups())
+            continue
+        for char in part:
+            if char == '\r':
+                column = 0
+            elif char == '\n':
+                row += 1
+            elif ord(char) >= 32 and not unicodedata.combining(char) and char != '\u200d':
+                cells.setdefault(row, {})[column] = char
+                width = 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
+                if width == 2:
+                    cells[row][column + 1] = ''
+                column += width
+    return {y: ''.join(line.get(x, ' ') for x in range(max(line) + 1))
+            for y, line in cells.items()}
 
 
 class Terminal:
@@ -143,14 +174,31 @@ class Terminal:
         if marker not in self.output:
             raise AssertionError((marker, self.process.poll(), bytes(self.output[-5000:])))
 
+    def painted_until(self, marker, timeout=5):
+        deadline = time.monotonic() + timeout
+        text = marker.decode('utf-8')
+        while not any(text in row for row in current_rows(self).values()):
+            if time.monotonic() >= deadline:
+                raise AssertionError((marker, current_rows(self)))
+            self.read(.05)
+
     def repaint_until(self, marker, timeout=5):
         # A forced frame provides complete visible text. Normal grid diffs can
         # reuse a prefix already on screen and emit only the changed suffix.
         self.output.clear()
         deadline = time.monotonic() + timeout
+        repaint = 0
         while marker not in self.output and time.monotonic() < deadline:
-            self.write(b'\x0c')
-            self.read(.1)
+            capture = getattr(self, 'capture_screen', None)
+            if capture and marker in capture():
+                return
+            # Reads can return immediately during streaming. Rate-limit forced
+            # frames by elapsed time, without changing the editor's input.
+            now = time.monotonic()
+            if now >= repaint:
+                self.signal(signal.SIGWINCH)
+                repaint = now + .1
+            self.read(max(0, min(repaint, deadline) - now))
         if marker not in self.output:
             raise AssertionError((marker, bytes(self.output[-5000:])))
 
@@ -161,6 +209,7 @@ class Terminal:
         labels = set()
         seen = set()
         deadline = time.monotonic() + timeout
+        repaint = 0
         while time.monotonic() < deadline:
             for directory in (self.root / 'state' / 'sessions').iterdir():
                 if directory in seen or not (directory / 'view.sock').exists():
@@ -172,35 +221,54 @@ class Terminal:
                 try:
                     state = observer.until('state')['state']
                     labels.add(state.get('name') or directory.name[:8])
+                    for catalog in ('queries', 'channels'):
+                        for entry in state.get(catalog, []):
+                            route = entry['route']
+                            label = route.get('peer') or route.get('room')
+                            if label:
+                                labels.add(label)
+                                labels.add(entry['endpoint'] + '/' + label)
                     seen.add(directory)
                 finally:
                     observer.close()
-            self.write(b'\x0c')
-            self.read(.05)
+            now = time.monotonic()
+            if now >= repaint:
+                self.signal(signal.SIGWINCH)
+                repaint = now + .1
+            self.read(max(0, min(repaint, deadline) - now))
             # Screen and Mosh can rewrite the paint into relative cursor moves.
-            # Wait for the owner-derived prompt label; cell assertions belong to
-            # the interaction being tested after attachment.
+            # The ordinary frontend uses its configured prompt. Older/direct
+            # frontends still use the owner-derived label below. Exact screen
+            # assertions belong to the interaction being tested.
             output = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '',
                             self.output.decode('utf-8', 'replace'))
-            if 'ATTACHED' in output:
-                return
+            attached = 'ATTACHED' in output or re.search(
+                r'fake/host-model/medium\s+[^\r\n]*[›»] ', output)
             for label in labels:
                 if re.search(r'\[' + re.escape(label) +
                              r'(?:; (?:HOLD|newer|loading|history error, R))*\] ', output):
-                    return
+                    attached = True
+            if attached:
+                # These workspace fixtures issue navigation keys next. Native
+                # frontends attach in INSERT, so choose NORMAL explicitly.
+                self.write(b'\x1b')
+                self.read(.06)
+                return
         raise AssertionError(('controlled session prompt', bytes(self.output[-5000:])))
 
     def write(self, text):
         os.write(self.master, text)
 
-    def command(self, text):
-        self.write(b':' + text.encode() + b'\r')
+    def command(self, text, *, escape=True):
+        # Native editors need Esc; queued history motions must finish in order.
+        self.write((b'\x1b' if escape else b'') + b':' + text.encode() + b'\r')
 
     def finish(self, command='qa'):
         if self.process.poll() is None:
             self.command(command)
         self.wait_exit()
-        assert self.process.poll() == 0, bytes(self.output[-3000:])
+        assert self.process.poll() == 0, (self.process.returncode, self.state(),
+                                          bytes(self.output[-3000:]))
         assert normalized_modes(self.state()['modes']) == self.original, 'terminal modes were not restored'
         if self.alternate_screen:
             assert b'\x1b[?1049l' in self.output, 'alternate screen was not released'
@@ -211,7 +279,10 @@ class Terminal:
         deadline = time.monotonic() + 5
         while self.process.poll() is None and time.monotonic() < deadline:
             self.read()
-        self.read(0)
+        # Child exit leaves queued bytes behind. A short PTY read need not reach
+        # the final OSC cancellation or mode restore, even with a large buffer.
+        while self.read(0) and time.monotonic() < deadline:
+            pass
         assert self.process.poll() is not None, bytes(self.output[-3000:])
 
     def close(self):
@@ -228,6 +299,100 @@ class Terminal:
         finally:
             os.close(self.master)
             os.close(self.slave)
+
+
+class TerminalPollingTests(unittest.TestCase):
+    def test_exit_drains_pending_real_pty_output_after_short_reads(self):
+        with tempfile.TemporaryDirectory(
+                dir='/private/tmp' if sys.platform == 'darwin' else None) as directory:
+            root = Path(directory)
+            program = root / 'output.py'
+            program.write_text('import os\nos.write(1, b"x" * 1024 + b"end-marker")\n')
+            terminal = Terminal(root, transport=[sys.executable, str(program)])
+            try:
+                # Linux permits unread output after exit. Darwin waits for the
+                # queued output on final close, so wait_exit must drain it too.
+                if sys.platform != 'darwin':
+                    terminal.process.wait(timeout=5)
+                read = os.read
+
+                def short_read(fd, size):
+                    return read(fd, min(size, 64) if fd == terminal.master else size)
+
+                with patch.object(os, 'read', short_read):
+                    terminal.wait_exit()
+                self.assertEqual(terminal.process.returncode, 0)
+                self.assertEqual(bytes(terminal.output), b'x' * 1024 + b'end-marker')
+            finally:
+                terminal.close()
+
+    def test_attachment_repaint_frequency_does_not_depend_on_ready_output(self):
+        for streaming in (False, True):
+            with self.subTest(streaming=streaming), tempfile.TemporaryDirectory() as directory:
+                terminal = Terminal.__new__(Terminal)
+                terminal.root = Path(directory)
+                (terminal.root / 'state' / 'sessions').mkdir(parents=True)
+                terminal.output = bytearray()
+                now = 0
+                signals, inputs = [], []
+
+                def read(timeout):
+                    nonlocal now
+                    now += min(timeout, .001) if streaming else timeout
+                    if now >= .35:
+                        terminal.output.extend(b'ATTACHED')
+
+                terminal.read = read
+                terminal.signal = lambda number: signals.append((now, number))
+                terminal.write = inputs.append
+                with patch.object(time, 'monotonic', lambda: now):
+                    terminal.attached(timeout=.5)
+                self.assertEqual(inputs, [b'\x1b'])
+                self.assertEqual(len(signals), 4)
+                self.assertTrue(all(number == signal.SIGWINCH for _, number in signals))
+                self.assertTrue(all(b[0] - a[0] >= .1
+                                    for a, b in zip(signals, signals[1:])))
+
+    def test_painted_wait_joins_split_runs_without_forcing_repaint(self):
+        terminal = Terminal.__new__(Terminal)
+        terminal.output = bytearray(b'\x1b[2J\x1b[12;9H9')
+        marker = b'9e44965374d0faab8ea58d691b4dd60b'
+        updates = iter((b'\x1b[12;11H' + marker[2:13],
+                        b'\x1b[12;10He\x1b[12;22H' + marker[13:]))
+        terminal.read = lambda timeout: terminal.output.extend(next(updates))
+        terminal.signal = lambda number: self.fail('painted wait must not send signals')
+        terminal.painted_until(b'9e44965374d0faab8ea58d691b4dd60b')
+        self.assertIn('9e44965374d0faab8ea58d691b4dd60b', current_rows(terminal)[11])
+
+    def test_painted_wait_rejects_overwritten_old_text_and_is_bounded(self):
+        terminal = Terminal.__new__(Terminal)
+        terminal.output = bytearray(b'\x1b[2J\x1b[1;1Hold-marker\x1b[1;1Hnew-marker')
+        terminal.read = lambda timeout: None
+        with self.assertRaises(AssertionError):
+            terminal.painted_until(b'old-marker', timeout=0)
+
+    def test_repaint_frequency_does_not_depend_on_ready_output(self):
+        for streaming in (False, True):
+            with self.subTest(streaming=streaming):
+                terminal = Terminal.__new__(Terminal)
+                terminal.output = bytearray()
+                now = 0
+                signals = []
+
+                def read(timeout):
+                    nonlocal now
+                    now += min(timeout, .001) if streaming else timeout
+                    if now >= .35:
+                        terminal.output.extend(b'visible-marker')
+
+                terminal.read = read
+                terminal.signal = lambda number: signals.append((now, number))
+                with patch.object(time, 'monotonic', lambda: now):
+                    terminal.repaint_until(b'visible-marker', timeout=.5)
+                self.assertEqual(len(signals), 4)
+                self.assertTrue(all(number == signal.SIGWINCH for _, number in signals))
+                self.assertTrue(all(b[0] - a[0] >= .1
+                                    for a, b in zip(signals, signals[1:])))
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -638,7 +803,13 @@ class WorkspaceTests(unittest.TestCase):
         child.write(b'jo')
         child.until(b'retained-answer-marker')
         child.write(b'gg')
-        child.until(b'retained-question-marker')
+        # Earlier paints can already contain this question. Wait for the
+        # navigation result before asking for a different projection.
+        self.wait_snapshot(lambda values: values and
+            not next(iter(values.values()))['state']['windows'][0].get(
+                'history', {}).get('follow', True) and
+            next(iter(values.values()))['state']['windows'][0]['row'] == 0)
+        child.repaint_until(b'retained-question-marker')
         child.command('verbosity 4')
         child.repaint_until(b'input_received')
         child.command('vsp')
@@ -850,10 +1021,12 @@ class WorkspaceTests(unittest.TestCase):
         value['state']['v'] = 1
         value['state'].pop('buffers')
         value['state'].pop('classic')
+        for window in value['state']['windows']:
+            window.pop('native')
         path.write_text(json.dumps(value))
         child = self.start('--resume', 'legacy-picker')
         child.command('workspace save')
-        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 14)
+        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 16)
         child.finish()
 
     def test_unknown_state_is_preserved_and_terminal_not_entered(self):

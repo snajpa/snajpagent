@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from store_history import journal_paths, read_events
 from test_upload_client import CLIENT, PRODUCT, Session, frame
@@ -58,9 +59,16 @@ class DownloadSession(Session):
 
     def hardcopy(self):
         output = self.home / "hardcopy"
+        output.unlink(missing_ok=True)
         subprocess.run(["screen", "-S", self.screen_name, "-X", "hardcopy", "-h", str(output)],
                        env=self.screen_env, check=True, timeout=5)
-        return output.read_bytes()
+        # Screen acknowledges the command before writing its hardcopy.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if output.is_file() and output.stat().st_size:
+                return output.read_bytes()
+            time.sleep(0.05)
+        raise AssertionError("screen did not write its asynchronous hardcopy")
 
     def events(self):
         journals = journal_paths(self.dotdir)
@@ -109,10 +117,86 @@ class DownloadSession(Session):
         self.write(b"/exit\r")
         if self.screen_name and sys.platform == "darwin":
             # The parent master can hold a macOS screen frontend in E (exiting).
-            self.read_until(b"--resume", 5)
+            try:
+                self.read_until(b"--resume", 5)
+            except AssertionError:
+                # Screen may exit before forwarding the complete final line.
+                if self.process.poll() is None:
+                    raise
             os.close(self.master)
             self.master = None
         assert self.process.wait(timeout=5) == 0
+
+
+class ScreenExitTests(unittest.TestCase):
+    def test_macos_exit_checks_completion_when_the_terminal_ends(self):
+        for status, ended in ((0, True), (1, True), (None, True), (None, False)):
+            with self.subTest(status=status, ended=ended):
+                session = DownloadSession.__new__(DownloadSession)
+                session.master = 1234
+                session.screen_name = "dl"
+                session.write = mock.Mock()
+                session.read_until = mock.Mock(
+                    side_effect=AssertionError("PTY ended") if ended else None)
+                session.process = mock.Mock()
+                session.process.poll.return_value = status
+                session.process.wait.return_value = 0 if status is None else status
+                with mock.patch.object(sys, "platform", "darwin"), \
+                        mock.patch.object(os, "close") as close:
+                    if ended and status != 0:
+                        with self.assertRaises(AssertionError):
+                            session.exit()
+                    else:
+                        session.exit()
+                session.write.assert_called_once_with(b"/exit\r")
+                session.read_until.assert_called_once_with(b"--resume", 5)
+                if ended and status is None:
+                    session.process.wait.assert_not_called()
+                    close.assert_not_called()
+                    self.assertEqual(session.master, 1234)
+                else:
+                    session.process.wait.assert_called_once_with(timeout=5)
+                    close.assert_called_once_with(1234)
+                    self.assertIsNone(session.master)
+
+
+class ScreenHardcopyTests(unittest.TestCase):
+    def test_waits_for_fresh_asynchronous_output(self):
+        for previous in (None, b"", b"stale screen"):
+            with self.subTest(previous=previous), tempfile.TemporaryDirectory() as path:
+                session = DownloadSession.__new__(DownloadSession)
+                session.home = Path(path)
+                session.screen_name = "dl"
+                session.screen_env = {"TERM": "xterm"}
+                output = session.home / "hardcopy"
+                if previous is not None:
+                    output.write_bytes(previous)
+
+                def acknowledge(*args, **kwargs):
+                    self.assertFalse(output.exists())
+
+                with mock.patch.object(subprocess, "run", side_effect=acknowledge) as run, \
+                        mock.patch.object(time, "monotonic", side_effect=(0, 0, 1)), \
+                        mock.patch.object(time, "sleep", side_effect=lambda _: output.write_bytes(
+                            b"fresh screen")) as sleep:
+                    self.assertEqual(session.hardcopy(), b"fresh screen")
+                run.assert_called_once_with(
+                    ["screen", "-S", "dl", "-X", "hardcopy", "-h", str(output)],
+                    env=session.screen_env, check=True, timeout=5)
+                sleep.assert_called_once_with(0.05)
+
+    def test_missing_output_has_a_bounded_failure(self):
+        with tempfile.TemporaryDirectory() as path:
+            session = DownloadSession.__new__(DownloadSession)
+            session.home = Path(path)
+            session.screen_name = "dl"
+            session.screen_env = {}
+            with mock.patch.object(subprocess, "run"), \
+                    mock.patch.object(time, "monotonic", side_effect=(0, 0, 6)), \
+                    mock.patch.object(time, "sleep") as sleep:
+                with self.assertRaisesRegex(AssertionError, "asynchronous hardcopy"):
+                    session.hardcopy()
+            sleep.assert_called_once_with(0.05)
 
 
 class DownloadTests(unittest.TestCase):

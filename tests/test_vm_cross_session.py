@@ -3,6 +3,7 @@
 
 import json
 import signal
+import subprocess
 import unittest
 import uuid
 
@@ -45,11 +46,17 @@ class CrossSessionTests(ChannelFixture):
         self.other.wait_exit()
         self.child = self.workspace_start('-N', 'cross-session')
         self.child.command('attach ' + self.source)
-        self.child.repaint_until(b'[channel-session]')
+        self.child.attached()
+        self.child.repaint_until(('Attached session ' + self.source).encode())
         self.child.command('vsp')
         self.child.command('attach ' + self.target)
-        self.child.repaint_until(b'[other session]')
+        self.child.attached()
+        self.child.repaint_until(('Attached session ' + self.target).encode())
         self.child.write(b'ikeep-target-rollout')
+        # Attachment can paint retained history before its editor receives
+        # queued input. Establish the draft before testing its later lifetime.
+        self.wait_snapshot(lambda rows: rows and len(self.state()['buffers']) == 2 and
+                           self.rollout(self.target)['draft'] == 'keep-target-rollout')
         self.normal()
         self.child.write(b'\x17w')
         self.term = self.child
@@ -105,15 +112,25 @@ class CrossSessionTests(ChannelFixture):
         self.assertTrue(all(link.fileno() >= 0 for link in self.server.links.values()))
         self.assertTrue(self.owner(self.target)['control'])
         self.child.command('attach ' + self.source)
-        self.child.repaint_until(b'[channel-session]')
+        self.child.attached()
+        self.child.repaint_until(('Attached session ' + self.source).encode())
         self.child.finish('qa!')
         self.wait(lambda: all(link.fileno() < 0 for link in self.server.links.values()))
 
     def test_workspace_force_quit_saves_before_stopping_sessions(self):
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
         original = path.with_name('saved-workspace.json')
-        path.rename(original)
-        path.mkdir()
+        # Stop only this disposable workspace while replacing its save target;
+        # an autosave between rename and mkdir would invalidate the fault fixture.
+        pid = self.child.state()['pid']
+        self.child.signal(signal.SIGSTOP)
+        try:
+            self.wait(lambda: 'T' in subprocess.check_output(
+                ['ps', '-o', 'stat=', '-p', str(pid)], text=True))
+            path.rename(original)
+            path.mkdir()
+        finally:
+            self.child.signal(signal.SIGCONT)
         try:
             self.child.command('qa!')
             self.child.repaint_until(b'cannot save workspace')
@@ -151,6 +168,9 @@ class CrossSessionTests(ChannelFixture):
             report['command'] == '/fast off' for report in self.owner(self.source)['reports']))
         self.assertFalse(self.owner(self.target)['reports'])
         self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
+        retained = self.rollout(self.target)
+        at = retained['cursor']
+        expected = retained['draft'][:at] + 'RIGHT' + retained['draft'][at:]
         child.write(b'\x1b')
         child.read(.08)
         child.command('history ' + self.source)
@@ -160,7 +180,7 @@ class CrossSessionTests(ChannelFixture):
         mouse(child, 1, 112, release=True)
         child.write(b'RIGHT')
         self.wait_snapshot(lambda rows: rows and
-                           self.rollout(self.target)['draft'] == 'keep-target-rollouRIGHTt')
+                           self.rollout(self.target)['draft'] == expected)
         self.assertEqual(self.rollout(self.source)['draft'], '')
         self.normal()
         self.assertEqual(len(self.seen), requests)
@@ -254,7 +274,8 @@ class CrossSessionTests(ChannelFixture):
         self.child.write(b'i/query ' + address.encode() + b' hello-once\rnewer-source-draft')
         self.wait(lambda: ('secondop', 'PRIVMSG peer :hello-once') in self.server.lines)
         self.wait_snapshot(lambda rows: rows and self.owner(self.target)['reports'] and
-                           not self.rollout(self.target)['pending'])
+                           not self.rollout(self.target)['pending'] and
+                           self.rollout(self.source)['draft'] == 'newer-source-draft')
         self.assertEqual(self.rollout(self.source)['draft'], 'newer-source-draft')
         self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
         self.assertEqual(self.state()['windows'][0]['history']['session'], self.source)
@@ -333,7 +354,7 @@ class CrossSessionTests(ChannelFixture):
         self.wait_snapshot(lambda rows: rows and self.rollout(self.source)['draft'] == command)
         self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
         self.assertIsNone(self.rollout(self.target)['pending'])
-        self.assertEqual(self.state()['v'], 14)
+        self.assertEqual(self.state()['v'], 16)
         self.assertFalse(any('retained-text' in line for nick, line in self.server.lines))
         self.finish()
 

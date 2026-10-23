@@ -2,6 +2,7 @@
 """Native commands become retained operator-only Vim report buffers."""
 
 import json
+import os
 import unittest
 
 import test_vm_control as control
@@ -15,6 +16,7 @@ class ReportTests(unittest.TestCase):
     inputs = control.ControlTests.inputs
     escape = control.ControlTests.escape
     wait_synced = control.ControlTests.wait_synced
+    presentation = control.ControlTests.presentation
 
     def setUp(self):
         control.ControlTests.setUp(self)
@@ -47,6 +49,11 @@ class ReportTests(unittest.TestCase):
         child.repaint_until(b'/fast on')
         self.escape(child)
         child.finish('workspace detach')
+        attached = self.owner.start(['--resume', self.owner.sid])
+        attached.until(b'/fast off')
+        attached.until(b'/fast on')
+        self.owner.finish(attached, b'/s d')
+        self.owner.status('detached')
         resumed = self.start('--resume', 'inline-commands', expect=b'Workspace restored',
                              columns=120)
         resumed.repaint_until(b'/fast off')
@@ -63,22 +70,33 @@ class ReportTests(unittest.TestCase):
         self.reports(1)
         child.write(b'/status\r')
         references = self.reports(2)
+        records = self.presentation('/status')
+        self.assertEqual(sum(row['op'] == 'submitted' and row['text'] == '/status'
+                             for row in records), 2)
         self.escape(child)
         child.write(b'/session:\r')
         child.repaint_until(b'Match')
+        # The common presentation stream retains each command output operation
+        # at its own source position, rather than using a report-file offset.
         rows = self.wait_snapshot(lambda rows:
             next(iter(rows.values()))['state']['windows'][0]['history']['key']
-            in [r['id'] for r in references] and
+            .startswith('presentation:') and
             not next(iter(rows.values()))['state']['windows'][0]['history']['follow'] and
-            next(iter(rows.values()))['state']['windows'][0]['history']['byte'] == 8)
-        first = next(iter(rows.values()))['state']['windows'][0]['history']['key']
+            next(iter(rows.values()))['state']['windows'][0]['history']['byte'] == 0)
+        first = dict(next(iter(rows.values()))['state']['windows'][0]['history'])
         child.write(b'n')
         rows = self.wait_snapshot(lambda rows:
-            next(iter(rows.values()))['state']['windows'][0]['history']['key'] != first)
-        second = next(iter(rows.values()))['state']['windows'][0]['history']['key']
-        self.assertEqual({first, second}, {r['id'] for r in references})
+            next(iter(rows.values()))['state']['windows'][0]['history']['key'] != first['key'])
+        second = dict(next(iter(rows.values()))['state']['windows'][0]['history'])
+        self.assertTrue(second['key'].startswith('presentation:'))
+        self.assertGreater(second['seq'], first['seq'])
+        self.assertEqual(second['byte'], 0)
+        child.write(b'N')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['windows'][0]['history']['key'] == first['key'])
         inline = rollout(next(iter(rows.values()))['state']['buffers'][0])['inline']
-        self.assertEqual(inline[0]['seq'], inline[1]['seq'])
+        self.assertEqual(inline, [], 'frontend output must not also become a legacy report overlay')
+        self.assertEqual(self.reports(2), references)
         self.assertEqual(self.owner.journal.read_bytes(), before)
         child.finish('workspace detach')
 
@@ -101,8 +119,14 @@ class ReportTests(unittest.TestCase):
         child.write(b'i/status\r')
         self.reports(1)
         self.escape(child)
+        if os.name != 'nt':
+            self.assertTrue(next(iter(self.snapshots().values()))[
+                'state']['windows'][0]['native'])
         child.command('report')
         child.repaint_until(b'REPORT')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['windows'][0]['kind'] == 'report' and
+            not next(iter(rows.values()))['state']['windows'][0]['native'])
         child.repaint_until(b'/status')
         first, = self.reports(1)
         child.write(b'G')
@@ -143,6 +167,8 @@ class ReportTests(unittest.TestCase):
         child.command('report')
         child.repaint_until(b'/help')
         child.write(b'G')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['windows'][0].get('byte', 0) > 0)
         child.finish('close')
         saved = next(iter(self.snapshots().values()))['state']
         self.assertEqual(saved['windows'][0]['kind'], 'report')
@@ -162,6 +188,7 @@ class ReportTests(unittest.TestCase):
                    ('draft', 'cursor', 'pending', 'base', 'conflict')}
             old.update(session=owner['session'], control=owner['control'], reports=owner['reports'])
             snapshot['state']['buffers'][0] = old
+            del snapshot['state']['windows'][0]['native']
             if version == 6:
                 del snapshot['state']['windows'][0]['source']
             path.write_text(json.dumps(snapshot))
@@ -169,7 +196,7 @@ class ReportTests(unittest.TestCase):
             resumed.repaint_until(report['id'][:8].encode())
             resumed.command('workspace save')
             rows = self.wait_snapshot(lambda rows:
-                next(iter(rows.values()))['state']['v'] == 14 and
+                next(iter(rows.values()))['state']['v'] == 16 and
                 next(iter(rows.values()))['state']['windows'][0].get('source'))
             window = next(iter(rows.values()))['state']['windows'][0]
             self.assertEqual(window['byte'], saved['windows'][0]['byte'])

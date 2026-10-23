@@ -42,8 +42,8 @@ class ActivityWorkspaceTests(ChannelFixture):
                 for owner in self.state()['buffers'] for b in owner['buffers']))
         return next(e['seq'] for e in self.events() if e['data'].get('text') == body)
 
-    def directory(self, peer, count, identity='operator'):
-        self.child.command('buffers')
+    def directory(self, peer, count, identity='operator', *, escape=True):
+        self.child.command('buffers', escape=escape)
         label = 'your chat' if identity == 'operator' else "model's chat"
         self.child.repaint_until(f'/{peer} [{label}] [{count} unread]'.encode())
 
@@ -117,8 +117,8 @@ class ActivityWorkspaceTests(ChannelFixture):
         self.child.repaint_until(b'HOLD')
         self.child.write(b'\x1b[OG')
         self.child.repaint_until(b'held-body-two')
-        self.child.command('vsp')
-        self.directory('peer', 2)
+        self.child.command('vsp', escape=False)
+        self.directory('peer', 2, escape=False)
         self.child.command('close')
         self.child.write(b'\x1b[I')
         self.child.repaint_until(b'held-body-two')

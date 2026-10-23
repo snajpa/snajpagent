@@ -161,6 +161,7 @@ class Child:
                         raise
                     chunk = b""
                 child.buf.extend(chunk)
+                child.remember_owner()
                 if child is self:
                     own_read = bool(chunk)
                 elif not chunk:
@@ -7046,7 +7047,31 @@ def test_idle_prompt_after_partial_effort_repaint():
         assert Child.wait_idle_prompt(probe, start=len(previous)) is None
 
 
+def test_owner_discovery_after_first_output():
+    class Probe:
+        fd = 17
+        native_owner = False
+        ready = False
+        buf = bytearray()
+
+        def remember_owner(self):
+            self.native_owner = self.ready
+
+    probe = Probe()
+
+    def first_output(fd, _):
+        assert fd == probe.fd
+        probe.ready = True
+        return b"first owner output"
+
+    with patch("select.select", return_value=([probe.fd], [], [])), \
+            patch("os.read", side_effect=first_output):
+        assert Child.read_once(probe, 1)
+    assert probe.native_owner
+
+
 if __name__ == "__main__":
+    test_owner_discovery_after_first_output()
     test_native_attachment()
     test_native_switch_with_process()
     test_native_active_goal_attachment()

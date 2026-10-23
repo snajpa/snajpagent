@@ -29,17 +29,31 @@
 #endif
 
 static struct snag_vm_read_result *
-await_page(struct snag_vm_reader *reader, uint64_t generation)
+await_page_at(struct snag_vm_reader *reader, uint64_t generation, const char *caller,
+    unsigned int line)
 {
     uint64_t start = snag_monotonic_ms();
     struct snag_vm_read_result *result;
     while (!(result = snag_vm_reader_take(reader))) {
-        assert(snag_monotonic_ms() - start < 10000u);
+        if (snag_monotonic_ms() - start >= 10000u) {
+            uint64_t bytes = 0u, events = 0u, total = 0u;
+            bool progress = snag_vm_reader_progress(reader, generation, &bytes, &events, &total);
+            fprintf(stderr, "vm reader timeout: %s:%u generation %llu", caller, line,
+                (unsigned long long)generation);
+            if (progress)
+                fprintf(stderr, " progress %llu/%llu bytes, %llu events",
+                    (unsigned long long)bytes, (unsigned long long)total,
+                    (unsigned long long)events);
+            fputc('\n', stderr);
+            abort();
+        }
         assert(snag_wakeup_wait(snag_vm_reader_fd(reader), 100) >= 0);
     }
     assert(result->generation == generation);
     return result;
 }
+
+#define await_page(reader, generation) await_page_at((reader), (generation), __func__, __LINE__)
 
 static bool
 cancel_report(void *opaque)
@@ -1248,6 +1262,103 @@ mode_identity_test(struct snag_store *store, const char *root)
 }
 
 static void
+report_subscription_during_attach_test(void)
+{
+#ifndef _WIN32
+    for (unsigned int variant = 0u; variant < 4u; ++variant) {
+        struct snag_view_channel pair[2];
+        if (variant < 2u) assert(snag_view_channel_pair(pair) == 0);
+        else {
+            int sockets[2];
+            assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+            for (unsigned int i = 0u; i < 2u; ++i) {
+                assert(fcntl(sockets[i], F_SETFL, O_NONBLOCK) == 0);
+                snag_view_channel_init(&pair[i], sockets[i]);
+            }
+        }
+        struct snag_vm_connection *connection =
+            snag_vm_connection_new("0123456789abcdef0123456789abcdef");
+        assert(connection);
+        connection->channel = pair[0];
+        connection->hello = connection->reports_supported = true;
+        connection->control = (variant & 1u) != 0u;
+        snag_vm_connection_step(connection);
+        json_t *message = NULL;
+        if (connection->control) {
+            message = json_pack("{s:s,s:i}", "type", "reserved", "generation", 17);
+            assert(message && snag_view_channel_send(&pair[1], message) == 0);
+            json_decref(message);
+            assert(snag_view_channel_write(&pair[1]) == 1);
+            snag_vm_connection_step(connection);
+            assert(snag_view_channel_opened(&connection->channel) &&
+                connection->generation == 17u);
+            message = NULL;
+            assert(snag_view_channel_read(&pair[1], &message) == 1);
+            assert(!strcmp(snag_json_string(message, "type"), "commit") &&
+                json_integer_value(json_object_get(message, "generation")) == 17);
+            json_decref(message);
+            message = json_pack("{s:s,s:i}", "type", "bound", "generation", 17);
+            assert(message && snag_view_channel_send(&pair[1], message) == 0);
+            json_decref(message);
+            assert(snag_view_channel_write(&pair[1]) == 1);
+            snag_vm_connection_step(connection);
+            assert(connection->bound);
+        }
+        snag_vm_connection_step(connection);
+        assert(connection->reports_subscribed);
+        message = NULL;
+        assert(snag_view_channel_read(&pair[1], &message) == 1);
+        assert(!strcmp(snag_json_string(message, "type"), "reports"));
+        json_decref(message);
+        snag_view_channel_close(&pair[1]);
+        snag_vm_connections_free(connection);
+    }
+#endif /* _WIN32 */
+}
+
+static void
+exit_before_pending_write_test(void)
+{
+#ifndef _WIN32
+    for (unsigned int variant = 0u; variant < 4u; ++variant) {
+        struct snag_view_channel pair[2];
+        if (variant < 2u) assert(snag_view_channel_pair(pair) == 0);
+        else {
+            int sockets[2];
+            assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+            for (unsigned int i = 0u; i < 2u; ++i) {
+                assert(fcntl(sockets[i], F_SETFL, O_NONBLOCK) == 0);
+                snag_view_channel_init(&pair[i], sockets[i]);
+            }
+        }
+        struct snag_vm_connection *connection =
+            snag_vm_connection_new("0123456789abcdef0123456789abcdef");
+        assert(connection);
+        connection->channel = pair[0];
+        connection->bound = connection->hello = connection->control = true;
+        connection->generation = 17u;
+        assert(snag_vm_draft_replace(connection->rollout, 0u, 0u, "retained draft", 14u) == 0);
+        assert(snag_vm_connection_control(connection, "quit") == 0);
+        snag_vm_connection_step(connection);
+        assert(connection->channel.output);
+        json_t *message = json_pack("{s:s,s:i}", "type", "exit", "status", 0);
+        assert(message && snag_view_channel_send(&pair[1], message) == 0);
+        json_decref(message);
+        assert(snag_view_channel_write(&pair[1]) == 1);
+        if (variant & 1u)
+            assert(snag_view_channel_read(&connection->channel,
+                &connection->channel.received) == 1);
+        snag_view_channel_close(&pair[1]);
+        snag_vm_connection_step(connection);
+        assert(connection->exited && !snag_view_channel_opened(&connection->channel));
+        assert(connection->rollout->draft.len == 14u &&
+            !memcmp(connection->rollout->draft.data, "retained draft", 14u));
+        snag_vm_connections_free(connection);
+    }
+#endif /* _WIN32 */
+}
+
+static void
 queued_quit_test(void)
 {
 #ifndef _WIN32
@@ -1260,6 +1371,9 @@ queued_quit_test(void)
     assert(connection);
     assert(snag_vm_connection_control(connection, "quit") < 0 && errno == EBUSY);
     assert(snag_vm_draft_replace(connection->rollout, 0u, 0u, "retained draft", 14u) == 0);
+    connection->dictation_control = connection->frontend_audio = true;
+    snag_vm_connection_close(connection);
+    assert(!connection->dictation_control && !connection->frontend_audio);
     snag_view_channel_init(&connection->channel, sockets[0]);
     connection->bound = connection->hello = connection->control = true;
     connection->generation = 17u;
@@ -1384,7 +1498,16 @@ owner_state_test(void)
         struct snag_view_channel peer;
         snag_view_channel_init(&peer, sockets[1]);
         json_t *message = json_pack("{s:s,s:O}", "type", "state", "state", state);
-        assert(message && snag_view_channel_send(&peer, message) == 0);
+        assert(message);
+        if (variant == 20u) {
+            /* Inject invalid wire text after checking the sender also refuses it. */
+            assert(snag_view_channel_send(&peer, message) < 0 && !peer.output);
+            peer.output = json_dumps(message, JSON_COMPACT | JSON_ENSURE_ASCII);
+            assert(peer.output);
+            peer.output_len = strlen(peer.output);
+        } else {
+            assert(snag_view_channel_send(&peer, message) == 0);
+        }
         json_decref(message);
         uint64_t deadline = snag_monotonic_ms() + 5000u;
         uint64_t revision = connection->revision;
@@ -1626,7 +1749,8 @@ conversation_snapshot_test(void)
     assert(json_object_set_new(route, "identity", json_string("agent")) == 0);
     struct snag_vm_buffer *agent = snag_vm_buffer_get(owner, route, true);
     assert(agent && !snag_vm_buffer_writable(agent));
-    assert(snag_vm_buffer_prepare(agent, agent, 1u, false, 0u) < 0 && errno == EACCES);
+    assert(snag_vm_buffer_prepare(agent, agent, 1u, false, 0u, false, false) < 0 && errno ==
+        EACCES);
     assert(!owner->rollout->draft.len && snag_vm_connection_unsaved(owner));
 
     struct snag_irc_conversation_target channel = {.kind = SNAG_IRC_CHANNEL,
@@ -1717,7 +1841,8 @@ forwarded_snapshot_test(void)
     const char *text = "/query other/server/peer hello";
     assert(snag_vm_draft_replace(source->rollout, 0u, 0u, text, strlen(text)) == 0);
     assert(snag_vm_draft_replace(target->rollout, 0u, 0u, "kept", 4u) == 0);
-    assert(snag_vm_buffer_prepare(target->rollout, source->rollout, 7u, false, 0u) == 0);
+    assert(snag_vm_buffer_prepare(target->rollout, source->rollout, 7u, false, 0u, false, false) ==
+        0);
     assert(!source->rollout->draft.len && target->rollout->draft.len == 4u);
     assert(!strcmp(snag_json_string(target->rollout->pending, "text"), text));
     assert(target->rollout->request_window == 7u && target->rollout->origin);
@@ -1766,7 +1891,7 @@ verbosity_pending_test(void)
     strcpy(connection->instance, "22222222222222222222222222222222");
     struct snag_vm_buffer *buffer = connection->rollout;
     assert(snag_vm_draft_replace(buffer, 0u, 0u, "/verbose", 8u) == 0);
-    assert(snag_vm_buffer_prepare(buffer, buffer, 7u, false, 3u) == 0);
+    assert(snag_vm_buffer_prepare(buffer, buffer, 7u, false, 3u, false, false) == 0);
     assert(json_integer_value(json_object_get(buffer->pending, "verbosity")) == 3);
     json_t *saved = snag_vm_connections_json(connection);
     struct snag_vm_connection *restored = NULL;
@@ -1791,6 +1916,48 @@ verbosity_pending_test(void)
 }
 
 static void
+local_input_pending_test(void)
+{
+    struct snag_vm_connection *connection =
+        snag_vm_connection_new("11111111111111111111111111111111");
+    assert(connection);
+    connection->bound = connection->commands = connection->command_verbosity = true;
+    strcpy(connection->instance, "22222222222222222222222222222222");
+    struct snag_vm_buffer *buffer = connection->rollout;
+    const char *text = "/verbose 4";
+    assert(snag_vm_draft_replace(buffer, 0u, 0u, text, strlen(text)) == 0);
+    assert(snag_vm_buffer_prepare(buffer, buffer, 7u, false, 4u, true, true) < 0);
+    assert(errno == ENOTSUP && !buffer->pending && buffer->draft.len == strlen(text));
+    connection->input_echo = connection->input_local = true;
+    assert(snag_vm_buffer_prepare(buffer, buffer, 7u, false, 4u, true, true) == 0);
+    assert(!buffer->draft.len && json_is_true(json_object_get(buffer->pending, "echoed")));
+    assert(json_is_true(json_object_get(buffer->pending, "local")));
+    json_t *saved = snag_vm_connections_json(connection);
+    struct snag_vm_connection *restored = NULL;
+    assert(saved && snag_vm_connections_load(saved, &restored) == 0);
+    json_t *roundtrip = snag_vm_connections_json(restored);
+    assert(roundtrip && json_equal(saved, roundtrip));
+    json_decref(roundtrip);
+    snag_vm_connections_free(restored);
+    restored = NULL;
+    json_t *buffers = json_object_get(json_array_get(saved, 0u), "buffers");
+    json_t *pending = json_object_get(json_array_get(buffers, 0u), "pending");
+    assert(json_object_set_new(pending, "echoed", json_false()) == 0);
+    assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
+    assert(json_object_set_new(pending, "echoed", json_true()) == 0);
+    assert(json_object_set_new(pending, "local", json_false()) == 0);
+    assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
+    assert(json_object_set_new(pending, "local", json_true()) == 0);
+    assert(json_object_set_new(pending, "text", json_string("/fast")) == 0);
+    assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
+    assert(json_object_set_new(pending, "text", json_string(text)) == 0);
+    assert(json_object_del(pending, "verbosity") == 0);
+    assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
+    json_decref(saved);
+    snag_vm_connections_free(connection);
+}
+
+static void
 command_chain_capability_test(void)
 {
     struct snag_vm_connection *connection =
@@ -1801,10 +1968,11 @@ command_chain_capability_test(void)
     struct snag_vm_buffer *buffer = connection->rollout;
     const char *text = "/fast on; verbose 2";
     assert(snag_vm_draft_replace(buffer, 0u, 0u, text, strlen(text)) == 0);
-    assert(snag_vm_buffer_prepare(buffer, buffer, 7u, false, 3u) < 0 && errno == ENOTSUP);
+    assert(snag_vm_buffer_prepare(buffer, buffer, 7u, false, 3u, false, false) < 0 && errno ==
+        ENOTSUP);
     assert(!buffer->pending && !strcmp((const char *)buffer->draft.data, text));
     connection->command_chains = true;
-    assert(snag_vm_buffer_prepare(buffer, buffer, 7u, false, 3u) == 0);
+    assert(snag_vm_buffer_prepare(buffer, buffer, 7u, false, 3u, false, false) == 0);
     assert(json_integer_value(json_object_get(buffer->pending, "verbosity")) == 3);
     json_t *saved = snag_vm_connections_json(connection);
     struct snag_vm_connection *restored = NULL;
@@ -1829,11 +1997,14 @@ main(void)
     assert(pthread_attr_destroy(&attributes) == 0);
 #endif
     projection_test();
+    report_subscription_during_attach_test();
+    exit_before_pending_write_test();
     queued_quit_test();
     owner_state_test();
     conversation_snapshot_test();
     forwarded_snapshot_test();
     verbosity_pending_test();
+    local_input_pending_test();
     command_chain_capability_test();
     char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
         "snajpagent-vm-reader-XXXXXX");

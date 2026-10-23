@@ -376,7 +376,18 @@ sparse_document(void)
                 (uint64_t)json_integer_value(json_object_get(block, "seq")),
                 row.begin, row.heading) == i);
             assert(snag_vm_document_text(doc, &row));
+            if (i + 1u < snag_vm_document_rows(doc)) {
+                struct snag_vm_document_row expected;
+                assert(snag_vm_document_row(doc, i + 1u, &expected) == 0);
+                assert(snag_vm_document_row_next(doc, &row) == 0);
+                assert(row.block == expected.block && row.begin == expected.begin &&
+                    row.end == expected.end && row.column == expected.column &&
+                    row.heading == expected.heading);
+            }
         }
+        struct snag_vm_document_row last;
+        assert(snag_vm_document_row(doc, snag_vm_document_rows(doc) - 1u, &last) == 0);
+        assert(snag_vm_document_row_next(doc, &last) < 0 && errno == EINVAL);
         struct snag_vm_document *copy = snag_vm_document_ref(doc);
         snag_vm_document_free(doc);
         assert(snag_vm_document_locate(copy, "removed", 3u, 0u, true) ==

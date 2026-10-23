@@ -188,7 +188,9 @@ def check_network(binary, previous=None):
                 result = subprocess.run([*base, "-l"], cwd=root, env={**os.environ, **env},
                                         text=True, capture_output=True, timeout=10)
                 assert result.returncode == 0, result.stderr
-                row = result.stdout.splitlines()[1].split("\t")
+                rows = result.stdout.splitlines()
+                assert len(rows) == 2, (result.stdout, result.stderr)
+                row = rows[1].split("\t")
                 assert row[6] == expected, row
 
             first = start(["--config", str(config), "-s", hosted, "-c", clients[0],

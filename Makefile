@@ -113,6 +113,8 @@ override CPPFLAGS += $(VTERM_CFLAGS)
 override LDLIBS += $(VTERM_LIBS)
 VM_TEST_BIN = tests/test_vm_reader tests/test_vm_grid tests/test_unicode tests/test_vm_workspace tests/test_vm_layout
 VM_TEST_BIN += tests/test_vm_input tests/test_vm_text
+VM_TEST_BIN += tests/test_vm_terminal_wire
+VM_TEST_BIN += tests/test_vm_classic_state
 VM_TEST_BIN += tests/test_vm_public
 VM_TEST_BIN += tests/test_vm_transcript tests/test_vm_selection tests/test_vm_navigation
 VM_TEST_BIN += tests/test_session_draft tests/test_session_direct
@@ -265,10 +267,13 @@ tests/test_skills: $(PLATFORM_SRC) src/json.c src/instructions.c src/skills.c te
 tests/test_sse: $(PLATFORM_SRC) src/sse.c tests/test_sse.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/sse.h
 
 tests/test_json: $(PLATFORM_SRC) src/json.c tests/test_json.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-o $@ $(filter-out src/json.c,$(filter %.c,$^)) $(LDLIBS)
 
 tests/test_json_abi: $(PLATFORM_SRC) src/json.c tests/test_json.c $(HEADERS)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-DSNAJPAGENT_FORCE_LOCAL_JANSSON_ABI=1 -o $@ $(filter %.c,$^) $(LDLIBS)
+		-DSNAJPAGENT_FORCE_LOCAL_JANSSON_ABI=1 -o $@ \
+		$(filter-out src/json.c,$(filter %.c,$^)) $(LDLIBS)
 
 tests/test_store_record: $(PLATFORM_SRC) src/json.c src/store_record.c tests/test_store_record.c $(HEADERS) src/store_record.h
 
@@ -340,6 +345,18 @@ tests/test_vm_layout: $(PLATFORM_SRC) src/json.c src/vm_layout.c tests/test_vm_l
 
 tests/test_vm_input: $(PLATFORM_SRC) src/json.c src/vm_input.c tests/test_vm_input.c $(HEADERS)
 
+tests/test_vm_terminal_wire: $(filter-out src/vm_terminal.o,$(COMMON_OBJ)) src/vm_terminal.c tests/test_vm_terminal_wire.c $(HEADERS)
+
+tests/test_vm_terminal_wire:
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-o $@ $(filter-out src/vm_terminal.o,$(COMMON_OBJ)) tests/test_vm_terminal_wire.c $(LDLIBS) $(CURL_LIBS)
+
+tests/test_vm_classic_state: $(filter-out src/vm.o,$(COMMON_OBJ)) src/vm.c tests/test_vm_classic_state.c $(HEADERS)
+
+tests/test_vm_classic_state:
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-o $@ $(filter-out src/vm.o,$(COMMON_OBJ)) tests/test_vm_classic_state.c $(LDLIBS) $(CURL_LIBS)
+
 tests/test_irc_address: $(PLATFORM_SRC) src/json.c src/irc_address.c tests/test_irc_address.c $(HEADERS)
 
 tests/test_irc_address:
@@ -358,6 +375,7 @@ src/unicode.o: src/unicode_tables.inc
 
 tests/test_vm_reader: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c src/instructions.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/history_view.c src/vm_reader.c src/vm_public.c tests/test_vm_reader.c $(HEADERS)
 
+tests/test_render tests/test_vm_reader tests/test_vm_transcript: src/edit_history.c
 tests/test_vm_reader tests/test_vm_transcript: src/history.c src/term.c src/render.c src/render_prepare.c src/presentation.c src/vm_transcript.c src/vm_document.c src/vm_text.c src/unicode.c
 tests/test_vm_reader tests/test_vm_transcript tests/test_vm_public: src/vm_source.c
 tests/test_vm_reader: src/presentation_store.c src/commands.c src/vm_navigation.c src/vm_selection.c src/vm_connection.c src/vm_editor.c src/session_view.c src/vm_report.c src/vm_search.c
@@ -400,7 +418,7 @@ tests/test_base tests/test_sse tests/test_provider_retry tests/test_upload_wire:
 tests/test_metrics:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^) $(LDLIBS)
 
-tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_skills tests/test_json tests/test_store_record $(filter-out tests/test_session_draft,$(VM_TEST_BIN)) tests/test_rules tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_write:
+tests/test_irc tests/test_credential tests/test_instructions tests/test_skills tests/test_store_record $(filter-out tests/test_session_draft tests/test_vm_terminal_wire tests/test_vm_classic_state,$(VM_TEST_BIN)) tests/test_rules tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_write:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c %.o,$^) $(LDLIBS)
 
@@ -413,6 +431,10 @@ tests/test_ui_input: $(filter-out src/ui.o,$(COMMON_OBJ)) tests/test_ui_input.c 
 tests/test_ui_input:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter-out src/ui.c,$(filter %.c %.o,$^)) $(LDLIBS) $(CURL_LIBS)
+
+tests/test_config:
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-o $@ $(filter-out src/config.c,$(filter %.c %.o,$^)) $(LDLIBS) $(CURL_LIBS)
 
 tests/test_batch_poll: $(filter-out src/app.o,$(COMMON_OBJ)) tests/test_batch_poll.c src/app.c $(HEADERS)
 
@@ -432,7 +454,7 @@ tests/test_tools:
 
 tests/test_store:
 	$(CC) $(CPPFLAGS) -DSNAJPAGENT_TEST_FIXTURE=1 $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ $(filter %.c %.o,$^) $(LDLIBS)
+		-o $@ $(filter-out src/store_binary_wire.c,$(filter %.c %.o,$^)) $(LDLIBS)
 
 check: $(BIN) $(TEST_BIN)
 	./tests/test_base
@@ -472,6 +494,8 @@ ifeq ($(WITH_VM),1)
 	./tests/test_vm_workspace
 	./tests/test_vm_layout
 	./tests/test_vm_input
+	./tests/test_vm_terminal_wire
+	./tests/test_vm_classic_state
 	./tests/test_vm_text
 	./tests/test_vm_public
 	./tests/test_vm_transcript
@@ -483,6 +507,7 @@ ifeq ($(WITH_VM),1)
 	python3 tests/test_vm_windows.py ./$(BIN)
 	python3 tests/test_vm_frontend.py ./$(BIN)
 	python3 tests/test_vm_control.py ./$(BIN)
+	python3 tests/test_vm_terminal.py ./$(BIN)
 	python3 tests/test_vm_queries.py ./$(BIN)
 	python3 tests/test_vm_irc_recovery.py ./$(BIN)
 	python3 tests/test_vm_cross_session.py ./$(BIN)
@@ -597,6 +622,7 @@ depscheck:
 	python3 ./tools/check_deps.py
 
 portabilitycheck:
+	python3 ./tests/test_portability.py
 	python3 ./tools/check_portability.py
 
 configurecheck:

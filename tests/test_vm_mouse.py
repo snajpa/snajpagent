@@ -43,34 +43,7 @@ def positions(child, marker, repaint=True):
     return list(dict.fromkeys(found))
 
 
-def current_rows(child):
-    """Apply VM's absolute-addressed paint runs, including overwritten cells."""
-    output = bytes(child.output).decode('utf-8', 'replace')
-    frame = output.rfind('\x1b[2J')
-    if frame >= 0:
-        output = output[frame + 4:]
-    row = column = 0
-    cells = {}
-    for part in re.split(r'(\x1b\[[0-9;?]*[A-Za-z])', output):
-        if part.startswith('\x1b['):
-            match = re.fullmatch(r'\x1b\[(\d+);(\d+)H', part)
-            if match:
-                row, column = (int(x) - 1 for x in match.groups())
-            continue
-        for char in part:
-            if char == '\r':
-                column = 0
-            elif char == '\n':
-                row += 1
-            elif ord(char) >= 32 and not unicodedata.combining(char) and char != '\u200d':
-                cells.setdefault(row, {})[column] = char
-                width = 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
-                if width == 2:
-                    cells[row][column + 1] = ''
-                column += width
-    return {y: ''.join(line.get(x, ' ') for x in range(max(line) + 1))
-            for y, line in cells.items()}
-
+current_rows = frontend.current_rows
 
 def position(child, marker, occurrence=0, minimum=1):
     deadline = time.monotonic() + 5
@@ -93,7 +66,13 @@ class MouseTests(unittest.TestCase):
     open_text = search.SearchTests.open_text
     search = search.SearchTests.search
 
-    def save(self, child):
+    def save(self, child, draft=None):
+        if draft is not None:
+            # Escape in command() cancels pending copy/navigation. Observe the
+            # queued paste before switching to the workspace command line.
+            self.wait_snapshot(lambda rows: rows and any(
+                rollout(buffer)['draft'] == draft
+                for workspace in rows.values() for buffer in workspace['state']['buffers']))
         self.check_number = getattr(self, 'check_number', 0) + 1
         name = 'mouse-check-' + str(self.check_number)
         child.command('workspace name ' + name)
@@ -130,7 +109,7 @@ class MouseTests(unittest.TestCase):
         # A delayed/repeated button release must not cancel an asynchronous yank.
         mouse(child, last[0], last[1] + 5, release=True)
         child.write(b'P')
-        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], selected)
+        self.assertEqual(rollout(self.save(child, selected)['buffers'][0])['draft'], selected)
         self.assertEqual(journal.read_bytes(), before)
         child.finish()
 
@@ -252,7 +231,12 @@ class MouseTests(unittest.TestCase):
         child.command('history ' + journal.parent.name)
         child.repaint_until(b'tail-marker')
         self.search(child, b'/remote-copy\r')
-        row, column = position(child, 'remote-copy')
+        # A same-size SIGWINCH stops at a remote wrapper's child PTY. Ask the
+        # workspace to repaint through its normal input before locating cells.
+        child.output.clear()
+        child.write(b'\x0c')
+        child.until(b'remote-copy')
+        row, column = positions(child, 'remote-copy', repaint=False)[0]
         # Reverse selection, carried byte by byte through two real wrappers.
         sequence = (f'\x1b[<0;{column + 11};{row + 1}M'
                     f'\x1b[<32;{column + 1};{row + 1}M'
@@ -260,7 +244,7 @@ class MouseTests(unittest.TestCase):
         for byte in sequence:
             child.write(bytes([byte]))
         child.write(b'yP')
-        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], 'remote-copy',
+        self.assertEqual(rollout(self.save(child, 'remote-copy')['buffers'][0])['draft'], 'remote-copy',
                          bytes(child.output[-6000:]))
         child.finish()
 
@@ -293,7 +277,7 @@ class MouseTests(unittest.TestCase):
         mouse(child, *where)
         mouse(child, *where, release=True)
         child.write(b'ywP')
-        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], 'marker ',
+        self.assertEqual(rollout(self.save(child, 'marker ')['buffers'][0])['draft'], 'marker ',
                          (where, frame))
         self.assertEqual(journal.read_bytes(), before)
         child.finish()
@@ -322,7 +306,7 @@ class ReportMouseTests(unittest.TestCase):
         mouse(child, row, column + 6, button=32)
         mouse(child, row, column + 6, release=True)
         child.write(b'yP')
-        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], 'status')
+        self.assertEqual(rollout(self.save(child, 'status')['buffers'][0])['draft'], 'status')
         self.assertEqual(self.inputs(), [])
         self.assertEqual(self.owner.journal.read_bytes(), before)
         child.finish('qa!')

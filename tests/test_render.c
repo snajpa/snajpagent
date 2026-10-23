@@ -37,6 +37,34 @@ test_null_output(void)
     assert(close(fd) == 0);
 }
 
+static void
+test_prompt_row_ascii_and_joined_cells(void)
+{
+    const struct {
+        const char *text;
+        unsigned int columns;
+        size_t end, next, width;
+        bool soft;
+    } cases[] = {
+        {"abc", 2u, 2u, 2u, 2u, true},
+        {"abc", 3u, 3u, 3u, 3u, true},
+        {"ab", 3u, 2u, 3u, 2u, false},
+        {"a\r\n", 1u, 1u, 3u, 1u, false},
+        {"    \xcc\x81x\r\n", 4u, 6u, 6u, 4u, true},
+        {"    \xcc\x81x\r\n", 3u, 3u, 3u, 3u, true},
+        {"1\xef\xb8\x8f\xe2\x83\xa3x", 2u, 7u, 7u, 2u, true},
+        {"\xd8\x80 x", 1u, 3u, 3u, 1u, true},
+        {"a\xe4\xb8\xadx", 3u, 4u, 4u, 3u, true},
+    };
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        struct snag_buf frame = {.data = (unsigned char *)cases[i].text,
+            .len = strlen(cases[i].text)};
+        struct snag_term_prompt_row row = snag_term_prompt_row(&frame, 0u, cases[i].columns);
+        assert(row.start == 0u && row.end == cases[i].end && row.next == cases[i].next);
+        assert(row.width == cases[i].width && row.soft == cases[i].soft);
+    }
+}
+
 static struct output_capture
 capture_open(bool stdout_enabled, bool stderr_enabled)
 {
@@ -255,6 +283,49 @@ test_retained_response_reopen(void)
     assert(!snag_unlink_at(dir, SNAG_PRESENTATION_FILE, false));
     assert(!close(dir));
     assert(!rmdir(path));
+}
+
+static void
+test_retained_local_output(void)
+{
+    char path[] = "build/local-presentation-XXXXXX";
+    assert(mkdtemp(path));
+    int dir = snag_open_read(path, true);
+    const char *id = "0123456789abcdef0123456789abcdef";
+    struct snag_presentation_writer *writer = snag_presentation_writer_open(dir, id);
+    assert(writer && !snag_presentation_start(writer, 1u));
+    json_t *route = json_pack("{s:s}", "peer", "private");
+    assert(route);
+    struct snag_ui_command commands[] = {
+        {.kind = SNAG_UI_SUBMITTED, .label = "> ", .text = "/fast on"},
+        {.kind = SNAG_UI_HOST, .text = "older command"},
+        {.kind = SNAG_UI_SUBMITTED, .label = "> ", .text = "model input"},
+        {.kind = SNAG_UI_EVENT, .text = "turn_started", .data.seq = 2u},
+        {.kind = SNAG_UI_HOST, .text = "model output is in canonical history"},
+        {.kind = SNAG_UI_SUBMITTED, .label = "> ", .text = "/fast off"},
+        {.kind = SNAG_UI_HOST, .text = "Fast mode OFF"},
+        {.kind = SNAG_UI_SUBMITTED, .label = "> ", .text = "/status", .route = route},
+        {.kind = SNAG_UI_HOST, .text = "private response", .route = route},
+        {.kind = SNAG_UI_SUBMITTED, .label = "> ", .text = "kept^C", .data.value = 1u}};
+    for (size_t i = 0u; i < sizeof(commands) / sizeof(*commands); ++i)
+        assert(!snag_presentation_append(writer, &commands[i]));
+    json_t *snapshot = snag_presentation_snapshot(writer), *records = NULL;
+    uint64_t origin;
+    struct snag_binary_anchor bound;
+    assert(snapshot && !snag_presentation_bound(snapshot, &origin, &bound));
+    int fd = snag_open_read_at(dir, SNAG_PRESENTATION_FILE, false);
+    assert(fd >= 0 && !snag_presentation_local_records(fd, id, &bound, &records));
+    assert(json_array_size(records) == 3u);
+    assert(!strcmp(snag_json_string(json_array_get(records, 0u), "text"), "/fast off"));
+    assert(!strcmp(snag_json_string(json_array_get(records, 1u), "text"), "Fast mode OFF"));
+    assert(!strcmp(snag_json_string(json_array_get(records, 2u), "text"), "kept^C"));
+    json_decref(records);
+    json_decref(snapshot);
+    json_decref(route);
+    assert(!close(fd));
+    snag_presentation_writer_close(writer);
+    assert(!snag_unlink_at(dir, SNAG_PRESENTATION_FILE, false));
+    assert(!close(dir) && !rmdir(path));
 }
 
 static void
@@ -876,6 +947,46 @@ test_submit_holds_composer_until_activity(void)
 }
 
 static void
+test_pending_redraw_waits_for_deferred_output(void)
+{
+    struct snag_term term;
+    enum snag_term_action action;
+    char *text = NULL;
+    char output[8192];
+    const char *spinners[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
+    int input[2], stdin_fd = dup(STDIN_FILENO);
+    /* Poll an idle input stream, regardless of the test runner's stdin. */
+    assert(stdin_fd >= 0 && pipe(input) == 0 && dup2(input[0], STDIN_FILENO) >= 0);
+    assert(close(input[0]) == 0);
+
+    snag_term_init(&term);
+    term.opened = term.capable = term.raw = true;
+    term.columns = 80u;
+    term.defer_redraw = true;
+    term.redraw_pending = true;
+    assert(snag_term_set_prompt_template(&term, false, "deferred-ready> ", spinners, 8u, 0u) == 0);
+    struct output_capture capture = capture_open(false, true);
+    term.input[0] = '\f';
+    term.input_len = 1u;
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+    assert(!text && action == SNAG_TERM_NONE);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(!strstr(output, "deferred-ready>"));
+    assert(term.redraw_pending && !term.prompt_visible);
+
+    term.defer_redraw = false;
+    capture = capture_open(false, true);
+    term.input_pos = 0u;
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "deferred-ready>"));
+    assert(!term.redraw_pending && term.prompt_visible);
+    snag_term_close(&term);
+    assert(dup2(stdin_fd, STDIN_FILENO) >= 0);
+    assert(close(stdin_fd) == 0 && close(input[1]) == 0);
+}
+
+static void
 test_prompt_spinners(void)
 {
     struct snag_term term;
@@ -1032,6 +1143,198 @@ editor_input(struct snag_term *term, const char *bytes)
     assert(action == SNAG_TERM_NONE && !text);
 }
 
+static void
+test_editor_history_recall_clears_stale_undo(void)
+{
+    struct snag_term term;
+    snag_term_init(&term);
+    term.input_only = term.capable = true;
+    struct snag_history_snapshot history = {0};
+    history.items = calloc(1u, sizeof(*history.items));
+    assert(history.items);
+    history.items[0] = strdup("recalled é");
+    assert(history.items[0]);
+    history.count = history.capacity = 1u;
+    history.bytes = strlen(history.items[0]);
+    assert(snag_term_history_set(&term, &history, false) == 0);
+    editor_input(&term, "unsent");
+    editor_input(&term, "\033[9007;0~\x10\x1f");
+    assert(term.draft.len == strlen("recalled é") &&
+        !memcmp(term.draft.data, "recalled é", term.draft.len));
+    editor_input(&term, "\x0e\x1f");
+    assert(term.draft.len == strlen("unsent") &&
+        !memcmp(term.draft.data, "unsent", term.draft.len));
+    editor_input(&term, "\x12recalled\x07\x1f");
+    assert(term.draft.len == strlen("unsent") &&
+        !memcmp(term.draft.data, "unsent", term.draft.len));
+    editor_input(&term, "\x10 suffix\x1f");
+    assert(term.draft.len == strlen("recalled é") &&
+        !memcmp(term.draft.data, "recalled é", term.draft.len));
+    snag_term_close(&term);
+}
+
+static void
+test_editor_undo_group_boundaries(void)
+{
+    struct snag_term term;
+    snag_term_init(&term);
+    term.input_only = term.capable = true;
+    editor_input(&term, "é\033[Dprefix\x1f");
+    assert(term.draft.len == strlen("é") &&
+        !memcmp(term.draft.data, "é", term.draft.len));
+    editor_input(&term, "\x1f");
+    assert(!term.draft.len);
+    editor_input(&term, "before\033[200~pasted\033[201~after\x1f");
+    assert(term.draft.len == strlen("beforepasted") &&
+        !memcmp(term.draft.data, "beforepasted", term.draft.len));
+    editor_input(&term, "\x1f");
+    assert(term.draft.len == strlen("before") &&
+        !memcmp(term.draft.data, "before", term.draft.len));
+    editor_input(&term, "\x1f");
+    assert(!term.draft.len);
+    snag_term_close(&term);
+}
+
+static void
+test_editor_shared_undo(void)
+{
+    struct snag_term term, mirror;
+    snag_term_init(&term);
+    snag_term_init(&mirror);
+    term.input_only = term.capable = mirror.input_only = mirror.capable = true;
+    editor_input(&term, "draft é");
+    editor_input(&term, "\033[9007;0~");
+    editor_input(&term, " suffix");
+    editor_input(&term, "\033[9007;0~");
+    json_t *saved = snag_edit_history_save(&term.edits);
+    assert(saved && json_array_size(json_object_get(saved, "undo")) == 2u);
+    assert(snag_term_restore_draft(&mirror, "draft é suffix") == 0);
+    assert(snag_edit_history_load(&mirror.edits, saved) == 0);
+    json_decref(saved);
+    editor_input(&mirror, "\033[9007;1~");
+    assert(mirror.draft.len == strlen("draft é") &&
+        !memcmp(mirror.draft.data, "draft é", mirror.draft.len));
+    assert(mirror.cursor == strlen("draft é"));
+    editor_input(&mirror, "\033[9007;2~");
+    assert(mirror.draft.len == strlen("draft é suffix") &&
+        !memcmp(mirror.draft.data, "draft é suffix", mirror.draft.len));
+    editor_input(&mirror, "\x1f");
+    assert(mirror.draft.len == strlen("draft é") &&
+        !memcmp(mirror.draft.data, "draft é", mirror.draft.len));
+    editor_input(&mirror, " branch");
+    editor_input(&mirror, "\033[9007;2~");
+    assert(mirror.draft.len == strlen("draft é branch") &&
+        !memcmp(mirror.draft.data, "draft é branch", mirror.draft.len));
+    saved = json_pack("{s:[[i,s,s,i,i]],s:[]}", "undo", 0, "", "wrong", 0, 5, "redo");
+    assert(saved && snag_edit_history_load(&mirror.edits, saved) == 0);
+    json_decref(saved);
+    size_t cursor = mirror.cursor;
+    assert(snag_edit_undo(&mirror.edits, &mirror.draft, &mirror.cursor, false, 1u) < 0);
+    assert(errno == EINVAL && mirror.cursor == cursor);
+    assert(mirror.draft.len == strlen("draft é branch") &&
+        !memcmp(mirror.draft.data, "draft é branch", mirror.draft.len));
+    saved = json_pack("{s:[[i,s,s,i,i]],s:[]}", "undo", -1, "", "", 0, 0, "redo");
+    assert(saved && snag_edit_history_load(&mirror.edits, saved) < 0 && errno == EINVAL);
+    json_decref(saved);
+    assert(snag_term_restore_draft(&mirror, "adopted") == 0);
+    editor_input(&mirror, "\x1f\033[9007;2~");
+    assert(mirror.draft.len == strlen("adopted") &&
+        !memcmp(mirror.draft.data, "adopted", mirror.draft.len));
+    snag_term_close(&mirror);
+    snag_term_close(&term);
+}
+
+static void
+test_editor_checkpoint_long_sequence(void)
+{
+    struct snag_term term;
+    snag_term_init(&term);
+    term.input_only = term.capable = true;
+    assert(snag_term_restore_draft(&term, "untouched") == 0);
+    static const char request[] = "\033[9004;9223372036854775807~";
+    memcpy(term.input, request, sizeof(request) - 1u);
+    term.input_len = sizeof(request) - 1u;
+    enum snag_term_action action;
+    char *text = NULL;
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 1);
+    assert(action == SNAG_TERM_CHECKPOINT && text);
+    assert(!strcmp(text, "9223372036854775807"));
+    assert(term.draft.len == 9u && !memcmp(term.draft.data, "untouched", 9u));
+    free(text);
+    snag_term_close(&term);
+}
+
+static void
+test_window_navigation_uses_the_current_editor(void)
+{
+    struct snag_term term;
+    snag_term_init(&term);
+    term.input_only = term.capable = true;
+    assert(snag_term_restore_draft(&term, "first\n  suffix\nlast") == 0);
+    term.cursor = 10u;
+    editor_input(&term, "\033[9005;1~prefix ");
+    assert(term.draft.len == 26u);
+    assert(!memcmp(term.draft.data, "first\n  prefix suffix\nlast", 26u));
+    editor_input(&term, "\033[9005;2~!");
+    assert(!memcmp(term.draft.data, "first\n  prefix suffix!\nlast", 27u));
+    term.cursor = 8u;
+    editor_input(&term, "\033[9005;3~X");
+    assert(!memcmp(term.draft.data, "first\n  pXrefix suffix!\nlast", 28u));
+    assert(snag_term_restore_draft(&term, "\t é👩‍💻\nlast") == 0);
+    term.cursor = strlen("\t é");
+    editor_input(&term, "\033[9005;");
+    editor_input(&term, "1");
+    editor_input(&term, "~");
+    assert(term.cursor == 2u);
+    editor_input(&term, "\033[9005;3~");
+    assert(term.cursor == strlen("\t é"));
+    editor_input(&term, "\033[9005;3~");
+    assert(term.cursor == strlen("\t é👩‍💻"));
+    editor_input(&term, "\033[9005;3~");
+    assert(term.cursor == strlen("\t é👩‍💻"));
+    term.cursor = term.draft.len;
+    editor_input(&term, "\033[9005;~");
+    assert(term.cursor == term.draft.len);
+    editor_input(&term, "\033[9005;1~");
+    assert(term.cursor == strlen("\t é👩‍💻\n"));
+    snag_term_close(&term);
+}
+
+static void
+test_pointer_navigation_uses_the_shared_editor(void)
+{
+    struct snag_term term;
+    snag_term_init(&term);
+    term.input_only = term.capable = true;
+    term.columns = 80u;
+    assert(snag_strcpy(term.label, sizeof(term.label), "p > "));
+    assert(snag_term_restore_draft(&term, "head 界 tail") == 0);
+    term.prompt_visible = true;
+    term.rendered_rows = 1u;
+    editor_input(&term, "\033[9006;0;9~X");
+    assert(term.draft.len == strlen("head X界 tail"));
+    assert(!memcmp(term.draft.data, "head X界 tail", term.draft.len));
+    editor_input(&term, "\033[9006;0;11~");
+    assert(term.cursor == strlen("head X"));
+    editor_input(&term, "\033[9006;0;0~");
+    assert(term.cursor == 0u);
+    editor_input(&term, "\033[9006;2;9~");
+    editor_input(&term, "\033[9006;;9~");
+    editor_input(&term, "\033[9006;0;999999999999~");
+    assert(term.cursor == 0u);
+    assert(snag_term_restore_draft(&term, "abcdefghij\n界 end") == 0);
+    term.columns = 12u;
+    term.prompt_visible = true;
+    term.viewport_row = 1u;
+    term.rendered_cursor_row = 1u;
+    term.rendered_rows = 2u;
+    editor_input(&term, "\033[9006;-1;0~");
+    assert(term.cursor == 8u);
+    editor_input(&term, "\033[9006;0;5~");
+    assert(term.cursor == strlen("abcdefghij\n"));
+    snag_term_close(&term);
+}
+
 static int
 unexpected_native_suspend(void *opaque)
 {
@@ -1179,6 +1482,60 @@ resize_input_status(void *opaque)
 {
     struct resize_input *input = opaque;
     return input->reads < 2u ? SNAG_TERM_WAIT_INPUT : 0;
+}
+
+static void
+test_output_checkpoint_repaints_its_pending_editor(void)
+{
+    struct output_capture capture = capture_open(false, true);
+    struct snag_term term;
+    snag_term_init(&term);
+    term.opened = term.capable = term.prompt_wanted = true;
+    term.columns = 80u;
+    term.input_only = true;
+    editor_input(&term, "checkpoint edit");
+    term.input_only = false;
+    struct resize_input input = {.reads = 2u};
+    snag_term_input_redirect(&term.host, resize_input_status, NULL, &input);
+    enum snag_term_action action;
+    char *text = NULL;
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+    snag_term_close(&term);
+    char output[4096];
+    capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "checkpoint edit"));
+}
+
+static void
+test_resize_before_editor_checkpoint_repaints_the_prompt(void)
+{
+    struct output_capture capture = capture_open(false, true);
+    struct snag_term term;
+    snag_term_init(&term);
+    term.opened = term.capable = term.prompt_visible = term.prompt_wanted = true;
+    term.columns = 80u;
+    term.rendered_rows = 1u;
+    term.suspend = unexpected_native_suspend;
+    assert(snag_buf_append(&term.draft, "resize checkpoint draft", 23u) == 0);
+    term.cursor = term.draft.len;
+    const char request[] = "\033[9004;1~";
+    memcpy(term.input, request, sizeof(request) - 1u);
+    term.input_len = sizeof(request) - 1u;
+    struct resize_input input = {.reads = 2u};
+    snag_term_input_redirect(&term.host, resize_input_status, NULL, &input);
+    snag_term_notify_resize();
+    enum snag_term_action action;
+    char *text = NULL;
+    do {
+        assert(snag_term_poll(&term, 0, -1, &action, &text) >= 0);
+    } while (action == SNAG_TERM_NONE && term.input_pos < term.input_len);
+    assert(action == SNAG_TERM_CHECKPOINT && text && !strcmp(text, "1"));
+    free(text);
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+    snag_term_close(&term);
+    char output[4096];
+    capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "resize checkpoint draft"));
 }
 
 static ssize_t
@@ -3876,7 +4233,10 @@ test_safe_text_width(void)
         size_t width;
     } cases[] = {{"\xff", "\\xFF", 4u}, {"\xe2\x82", "\\xE2\\x82", 8u}, {"\xc2\x9b", "\\x9B", 4u},
         {"\xe2\x80\xae", "\\u{202E}", 8u}, {"\x1b[31m", "\\x1B[31m", 8u}, {"a\t", "a   ", 4u},
-        {"café界", "café界", 6u}, {"a\nb", "a\nb", 6u}};
+        {"café界", "café界", 6u}, {"a\nb", "a\nb", 6u},
+        {"ÁB", "ÁB", 2u}, {"👩‍💻", "👩‍💻", 2u}, {"1️⃣", "1️⃣", 2u},
+        {"A\xe2\x80\xaé", "A\\u{202E}́", 9u},
+        {"👩‍\xe2\x81\xa6💻", "👩‍\\u{2066}💻", 12u}};
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         struct snag_buf safe = {.max = 64u};
         const char *input = cases[i].input;
@@ -4151,6 +4511,7 @@ main(int argc, char **argv)
     if (argc == 4 && !strcmp(argv[1], "--read-presentation"))
         return read_presentation_file(argv[2], argv[3]);
     test_null_output();
+    test_prompt_row_ascii_and_joined_cells();
     test_query_markdown_isolation();
     static const char markdown[] = "# **Live** _Markdown_\n"
                                    "- item with `code` and [docs](https://example.test)\n"
@@ -4192,6 +4553,7 @@ main(int argc, char **argv)
     assert(strstr(output, "> POST https://example.test\n"));
 
     test_submit_holds_composer_until_activity();
+    test_pending_redraw_waits_for_deferred_output();
     test_input_model_boundaries();
     test_model_prompt_boundaries();
     test_paragraph_spacing();
@@ -4269,10 +4631,13 @@ main(int argc, char **argv)
     test_prompt_clock();
     test_prompt_spinners();
     test_native_input_yield();
+    test_output_checkpoint_repaints_its_pending_editor();
+    test_resize_before_editor_checkpoint_repaints_the_prompt();
     test_resize_checkpoint_preserves_newly_read_input();
     test_retained_prompt();
     test_styled_sink_matches_terminal();
     test_retained_presentation();
+    test_retained_local_output();
     test_retained_response_reopen();
     test_native_rebind();
     test_history_refresh_cursor();
@@ -4281,6 +4646,12 @@ main(int argc, char **argv)
     test_mention_completion();
     test_completion_choices();
     test_dictation_editor();
+    test_editor_shared_undo();
+    test_editor_history_recall_clears_stale_undo();
+    test_editor_undo_group_boundaries();
+    test_editor_checkpoint_long_sequence();
+    test_window_navigation_uses_the_current_editor();
+    test_pointer_navigation_uses_the_shared_editor();
     test_editor_grapheme_deletion();
     test_editor_literal_paste();
     test_destination_editor();

@@ -1091,12 +1091,14 @@ def run_markdown_case(binary, root):
                 terminal.wait("Stream ready", timeout=2.0, join_wrapped=True)
                 terminal.wait("• split code and [docs] <https://example.test>",
                               timeout=2.0, join_wrapped=True)
-                held = terminal.wait("│ int value = 1;", timeout=2.0,
+                held = terminal.wait("int value = 1;", timeout=2.0,
                                      join_wrapped=True)
                 if any(marker in held for marker in ("**ready**", "```", "](")):
                     raise AssertionError(
                         f"rendered Markdown retained syntax markers:\n{held}"
                     )
+                if re.search(r"(?m)^int value = 1;$", held) is None:
+                    raise AssertionError(f"fenced code gained copyable decoration:\n{held}")
                 _, pending_events = maybe_events(terminal.dotdir)
                 if event_list(pending_events, "response_completed"):
                     raise AssertionError(
@@ -1129,14 +1131,10 @@ def run_markdown_case(binary, root):
                           join_wrapped=True)
             screen = terminal.capture(join_wrapped=True)
             if rendered:
-                if "└─" not in screen:
-                    raise AssertionError("completed Markdown fence was not closed")
                 assert_order(screen, [
                     "Stream ready",
                     "• split code and [docs] <https://example.test>",
-                    "┌─ c",
-                    "│ int value = 1;",
-                    "└─",
+                    "int value = 1;",
                     "• First prose line",
                     "  continued prose",
                     "┌───────┬───────┬───────┐",
@@ -1146,6 +1144,8 @@ def run_markdown_case(binary, root):
                     "• second paragraph",
                     "│ final quoted boundary",
                 ])
+                if "┌─ c" in screen or "│ int value" in screen:
+                    raise AssertionError("fenced code retained a copyable label or border")
                 raw = terminal.capture()
                 if ("• First prose line\n  continued prose\n\n┌" not in raw or
                         "┘\n\n• second paragraph" not in raw):

@@ -73,8 +73,12 @@ class RemoteProcess:
 
     def until(self, marker, timeout=5):
         deadline = time.monotonic() + timeout
+        next_children = 0
         while marker not in self.output and time.monotonic() < deadline:
-            self.remember_children()
+            # Keep draining small PTY reads between expensive macOS process scans.
+            if time.monotonic() >= next_children:
+                self.remember_children()
+                next_children = time.monotonic() + .1
             if select.select([self.master], [], [], 0.1)[0]:
                 self.output.extend(os.read(self.master, 65536))
         self.remember_children()
@@ -139,6 +143,39 @@ class RemoteProcess:
 
 
 class RemoteStartupTests(unittest.TestCase):
+    def test_pty_drain_does_not_scan_descendants_for_each_read(self):
+        with tempfile.TemporaryDirectory(prefix="snag-remote-drain-") as tmp:
+            root = Path(tmp).resolve()
+            peer = textwrap.dedent('''
+                import os
+
+                for _ in range(512):
+                    os.write(1, b"x" * 1024)
+                os.write(1, b"PTY_DRAINED")
+                os.read(0, 1)
+            ''')
+            child = RemoteProcess(root, [sys.executable, "-u", "-c", peer], wrapped=None)
+            remember = child.remember_children
+
+            def slow_remember():
+                # A macOS process-table scan costs about 40 ms on the real host.
+                time.sleep(.04)
+                remember()
+
+            child.remember_children = slow_remember
+            try:
+                try:
+                    output = child.until(b"PTY_DRAINED", timeout=2)
+                except AssertionError:
+                    raise AssertionError(
+                        f"PTY reader stalled after {len(child.output)} bytes") from None
+                self.assertEqual(output, b"x" * (512 * 1024) + b"PTY_DRAINED")
+                os.write(child.master, b"\n")
+                child.wait(0)
+            finally:
+                child.remember_children = remember
+                child.close()
+
     def test_workspace_mosh_prediction_is_disabled_unless_explicit(self):
         with tempfile.TemporaryDirectory(prefix='snag-mosh-prediction-') as tmp:
             root = Path(tmp).resolve()
@@ -258,6 +295,48 @@ class RemoteStartupTests(unittest.TestCase):
                 child.until(b"Select local file")
                 release.touch()
                 child.wait(7)
+            finally:
+                child.close()
+
+    def test_upload_protocol_ignores_terminal_control_before_config(self):
+        with tempfile.TemporaryDirectory(prefix="snag-upload-control-") as tmp:
+            root = Path(tmp).resolve()
+            source = root / "upload.bin"
+            source.write_bytes(b"abc")
+            received = root / "received"
+            peer = textwrap.dedent(r'''
+                import base64
+                import json
+                import sys
+                import tty
+                import zlib
+                from pathlib import Path
+
+                def frame(kind, value):
+                    payload = base64.b64encode(zlib.compress(value))
+                    return b"#" + kind + b":" + payload + b"\n"
+
+                tty.setraw(0)
+                sys.stdout.buffer.write(b"::TRZSZ:TRANSFER:R:1.0.0:0000000000000:0\r\n")
+                sys.stdout.buffer.flush()
+                assert sys.stdin.buffer.readline().startswith(b"#ACT:")
+                config = json.dumps({"protocol": 1, "binary": False,
+                                     "directory": False, "bufsize": 1024},
+                                    separators=(",", ":")).encode()
+                sys.stdout.buffer.write(b"\x1b]0;screen control\x07" +
+                                        frame(b"CFG", config))
+                sys.stdout.buffer.flush()
+                Path(sys.argv[1]).write_bytes(sys.stdin.buffer.readline())
+                sys.stdout.buffer.write(frame(b"fail", b"fixture complete"))
+                sys.stdout.buffer.flush()
+            ''')
+            child = RemoteProcess(root, [sys.executable, "-u", "-c", peer, str(received)])
+            try:
+                child.until(b"Select local file", 8)
+                os.write(child.master, f"{source}\r".encode())
+                self.wait_file(received)
+                self.assertEqual(received.read_bytes(), b"#NUM:1\n")
+                child.wait(0)
             finally:
                 child.close()
 
@@ -1269,7 +1348,13 @@ class RemoteStartupTests(unittest.TestCase):
                 self.assertEqual(target.read_bytes(), source.read_bytes())
                 child.until_after(str(target).encode(), "›".encode(), 8)
                 os.write(child.master, b"/exit\r")
-                child.until(b"--resume", 8)
+                try:
+                    child.until(b"--resume", 8)
+                except AssertionError:
+                    # macOS screen can exit before forwarding its complete final line.
+                    if sys.platform != "darwin" or child.process.poll() != 0:
+                        raise
+                    self.assertIn(b"You can resume this session", child.output)
                 subprocess.run(["screen", "-S", "local", "-X", "quit"],
                                env=dict(os.environ, **env), timeout=5,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

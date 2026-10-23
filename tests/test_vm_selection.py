@@ -143,7 +143,7 @@ class SelectionTests(unittest.TestCase):
         child.write(b'u\tvj\x03')
         child.repaint_until(b'NORMAL')
         child.write(b'v')
-        child.command('verbosity 2')
+        child.command('verbosity 2', escape=False)
         child.repaint_until(b'register preserved')
         child.write(b'P')
         self.assert_draft(child, 'first')

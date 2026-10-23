@@ -76,6 +76,18 @@ else
 fi
 check 'unknown triple is rejected' 1 unchanged --host=zzz-unknown-triple
 
+# Reject both upstream headers and another private ABI before changing config.mk.
+mkdir "$tmp/vterm-include"
+saved_vterm_cflags=${VTERM_CFLAGS-}
+for abi in 0 2; do
+	printf '#define SNAJPAGENT_VTERM_ABI %s\n' "$abi" > "$tmp/vterm-include/vterm.h"
+	VTERM_CFLAGS="-I$tmp/vterm-include" check "incompatible terminal ABI $abi" 1 unchanged --with-vm
+	grep -q 'patched snajpagent-vterm dependency is required' "$tmp/out" ||
+		fail "terminal ABI $abi failed outside the dependency probe"
+done
+# POSIX shells can retain assignments made before a shell function call.
+VTERM_CFLAGS=$saved_vterm_cflags
+
 check 'all-off run' 0 changed \
 	--without-av --without-pdf --without-audio-device \
 	--without-office --without-office-commands

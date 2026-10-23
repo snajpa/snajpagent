@@ -105,7 +105,7 @@ class CommandPagerTests(unittest.TestCase):
         self.assertEqual(len(self.calls.read_text().splitlines()), before + 1)
         child.write(b"q\n")
         self.pager_open = False
-        child.read_until("›".encode())
+        child.read_until(self.ready)
         return text, output
 
     def test_status_uses_pager_in_six_line_terminal(self):
@@ -228,6 +228,28 @@ class CommandPagerTests(unittest.TestCase):
         child.read_until(b" complete", seconds=12)
         child.read_until("›".encode())
         self.report(child, "/history", "user: slow", "slow complete", "1 completed")
+
+    def test_selected_channel_history_uses_pager_without_model_submission(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        child = self.start(arguments=("-s", f"127.0.0.1:{port}", "-r", "lab",
+                                      "-n", "pagerbot", "-o", "pagerop"),
+                           ready=b"pagerop@")
+        peer = IRCClient(port, "pagerpeer")
+        self.addCleanup(peer.close)
+        peer.message("pager-channel-history")
+        child.read_until(b"pager-channel-history")
+        child.write(b"/chat\r")
+        child.read_until(b"pagerop@")
+        self.report(child, "/history 20", "pager-channel-history", "pagerpeer")
+        events = read_events(next(iter(journal_paths(self.dotdir))))
+        # Incoming IRC can start a background turn. The report command must stay local.
+        for row in events:
+            if row["type"] == "turn_started":
+                text = row["data"]["text"]
+                self.assertTrue(text.startswith("[IRC endpoint="), text)
+                self.assertNotIn("/history", text)
 
     @staticmethod
     def available_output(child):

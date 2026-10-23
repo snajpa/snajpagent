@@ -83,17 +83,19 @@ struct engine {
     unsigned int submissions;
 };
 
-static void
+static int
 bound(void *opaque, uint64_t generation)
 {
     ((struct engine *)opaque)->generation = generation;
+    return 0;
 }
 
 static int
 engine_submit(void *opaque, const char *id, const char *text, const json_t *route,
-    uint64_t generation, bool terminal, bool queued, int verbosity)
+    uint64_t generation, bool terminal, bool queued, int verbosity, bool echoed, bool local,
+    const json_t *capture)
 {
-    assert(!queued && verbosity == -1);
+    assert(!queued && verbosity == -1 && !echoed && !local && !capture);
     assert(!terminal && route);
     struct engine *engine = opaque;
     assert(strlen(id) == SNAG_ID_HEX_LEN && *text &&
@@ -293,7 +295,8 @@ test_admission_edit_order(void)
     struct snag_session_relay relay;
     assert(snag_session_relay_init(&relay, pipe_fd[0], -1) == 0);
     struct engine engine = {0};
-    struct snag_view_callbacks callbacks = {bound, engine_submit, control, &engine, NULL};
+    struct snag_view_callbacks callbacks = {bound, engine_submit, control, &engine, NULL, NULL,
+        NULL, NULL};
     struct snag_view_server *server = snag_view_server_open(dir, root, lock,
         "0123456789abcdef0123456789abcdef", &relay, callbacks);
     assert(server);

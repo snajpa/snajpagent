@@ -9,6 +9,44 @@
 
 void test_store_binary_wire(void);
 
+static bool decode_storage_probe;
+static uintptr_t decoded_storage;
+
+static int
+wire_buf_reserve(struct snag_buf *buf, size_t extra)
+{
+    int rc = snag_buf_reserve(buf, extra);
+    if (!rc && decode_storage_probe) decoded_storage = (uintptr_t)buf->data;
+    return rc;
+}
+
+#define snag_buf_reserve wire_buf_reserve
+#include "../src/store_binary_wire.c"
+#undef snag_buf_reserve
+
+static void
+test_empty_destination_adopts_decoded_storage(void)
+{
+    unsigned char data[512];
+    for (size_t i = 0u; i < sizeof(data); ++i) data[i] = (unsigned char)i;
+    struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
+    assert(!snag_binary_wire_encode(&wire, data, sizeof(data)));
+    for (unsigned int retained = 0u; retained < 3u; ++retained) {
+        struct snag_buf out = {.max = 1024u};
+        if (retained) assert(!snag_buf_reserve(&out, retained == 1u ? 1u : 1024u));
+        uintptr_t before = (uintptr_t)out.data;
+        decode_storage_probe = true;
+        decoded_storage = 0u;
+        assert(!snag_binary_wire_decode(&out, wire.data, wire.len));
+        decode_storage_probe = false;
+        assert(out.len == sizeof(data) && out.max == 1024u);
+        assert(!memcmp(out.data, data, sizeof(data)));
+        assert((uintptr_t)out.data == (retained == 2u ? before : decoded_storage));
+        snag_buf_free(&out);
+    }
+    snag_buf_free(&wire);
+}
+
 static void
 check_header(const unsigned char *data, size_t size, const struct snag_buf *wire)
 {
@@ -233,6 +271,7 @@ test_batch_envelope(void)
 void
 test_store_binary_wire(void)
 {
+    test_empty_destination_adopts_decoded_storage();
     test_vectors();
     test_rejections();
     test_alias_and_maximum();

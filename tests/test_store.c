@@ -37,13 +37,16 @@ static off_t catalog_read_marker;
 static size_t catalog_marker_reads;
 static bool storage_read_watch;
 static uint64_t storage_read_calls, storage_read_bytes;
+static void (*catalog_after_stat)(int, const struct stat *);
 
 /* Count actual metadata transfers, including the privacy helper's libc call. */
 int
 fstat(int fd, struct stat *info)
 {
     ++private_fstat_count;
-    return (int)syscall(SYS_fstat, fd, info);
+    int rc = (int)syscall(SYS_fstat, fd, info);
+    if (!rc && catalog_after_stat) catalog_after_stat(fd, info);
+    return rc;
 }
 
 ssize_t
@@ -349,6 +352,99 @@ test_long_session_list(struct snag_store *store, const char *cwd)
     assert_session_lock_retained(&session, "after failed listing long prompt");
     snag_session_close(&session);
 }
+
+#if defined(__linux__) && defined(__x86_64__)
+enum catalog_change {
+    CATALOG_APPEND,
+    CATALOG_CORRUPT_APPEND,
+    CATALOG_TRUNCATE,
+    CATALOG_MODE_CHANGE,
+    CATALOG_LEGACY_APPEND
+};
+
+static struct {
+    struct snag_session *owner;
+    struct stat before;
+    unsigned int reads;
+    enum catalog_change action;
+} catalog_race;
+
+static void
+change_catalog_source(int fd, const struct stat *info)
+{
+    if (info->st_dev != catalog_race.before.st_dev ||
+        info->st_ino != catalog_race.before.st_ino ||
+        (fcntl(fd, F_GETFL) & O_ACCMODE) != O_RDONLY) return;
+    /* Open/type and privacy inspections precede the catalog's source stamp.
+     * Change the writer after that stamp has been copied, before native replay. */
+    if (++catalog_race.reads != 3u) return;
+    catalog_after_stat = NULL;
+    struct snag_session *owner = catalog_race.owner;
+    if (catalog_race.action == CATALOG_APPEND || catalog_race.action == CATALOG_CORRUPT_APPEND ||
+        catalog_race.action == CATALOG_LEGACY_APPEND) {
+        commit_event(owner, "session_named",
+            checked_json(json_pack("{s:s}", "name", "append-race")));
+        if (catalog_race.action == CATALOG_CORRUPT_APPEND)
+            assert(pwrite(owner->log_fd, "!", 1u, 0) == 1);
+    } else if (catalog_race.action == CATALOG_TRUNCATE) {
+        assert(ftruncate(owner->log_fd, 1) == 0);
+    } else {
+        assert(fchmod(owner->log_fd, 0400) == 0);
+    }
+}
+
+static void
+test_catalog_concurrent_append(const char *cwd)
+{
+    struct snag_store storage, *store = &storage;
+    char error[256];
+    char *root = snag_path_join(cwd, "catalog-race");
+    assert(root && !mkdir(root, 0700));
+    snag_store_init(store);
+    assert(!snag_store_open(store, root, error, sizeof(error)));
+    for (enum catalog_change action = CATALOG_APPEND; action <= CATALOG_LEGACY_APPEND; ++action) {
+        struct snag_session owner;
+        char prefix[9];
+        snag_session_init(&owner);
+        if (action == CATALOG_LEGACY_APPEND) {
+            assert(!legacy_fixture_create(store, &owner, cwd, "default", "fixture", "default",
+                error, sizeof(error)));
+        } else {
+            assert(!snag_session_create(store, &owner, cwd, "default", "fixture", "default",
+                error, sizeof(error)));
+        }
+        assert((owner.binary != NULL) == (action != CATALOG_LEGACY_APPEND));
+        memcpy(prefix, owner.id, 8u);
+        prefix[8] = '\0';
+        catalog_race.owner = &owner;
+        catalog_race.action = action;
+        catalog_race.reads = 0u;
+        assert(!fstat(owner.log_fd, &catalog_race.before));
+        catalog_after_stat = change_catalog_source;
+        struct listed_session listed = {.prefix = prefix};
+        assert(!snag_store_list(store, &owner, UINT64_MAX, 0u,
+            find_listed_session, &listed, error, sizeof(error)));
+        assert(!catalog_after_stat && catalog_race.reads == 3u);
+        assert(listed.found == (action == CATALOG_APPEND));
+        assert_session_lock_retained(&owner, "after concurrent catalog source change");
+        /* An appended snapshot is usable, but cannot publish a cache under
+         * the old stamp. A later stable read sees and caches the new name. */
+        if (action == CATALOG_APPEND) {
+            assert(snag_open_read_at(owner.dir_fd, "catalog.json", false) < 0 && errno == ENOENT);
+            struct snag_buf text = {.max = SIZE_MAX};
+            listed = (struct listed_session){.prefix = prefix, .text = &text};
+            assert(!snag_store_list(store, &owner, UINT64_MAX, 0u,
+                find_listed_session, &listed, error, sizeof(error)));
+            assert(listed.found && listed.header && !snag_buf_terminate(&text));
+            assert(strstr((const char *)text.data, "\tappend-race\t"));
+            snag_buf_free(&text);
+        }
+        snag_session_close(&owner);
+    }
+    snag_store_close(store);
+    free(root);
+}
+#endif
 
 static json_t *
 goal_started_data(const char *goal_id, const char *prompt)
@@ -3386,6 +3482,9 @@ main(int argc, char **argv)
 #endif
     test_pending_session(&store, cwd);
     test_long_session_list(&store, cwd);
+#if defined(__linux__) && defined(__x86_64__)
+    test_catalog_concurrent_append(cwd);
+#endif
     test_reverse_history(&store, cwd);
     test_forward_history(&store, cwd);
     test_history_prefix(&store, cwd);

@@ -64,7 +64,7 @@ def main() -> int:
             "PTY helper implementation must be guarded by capability, not by one OS")
     require(tools.count(
         "#if defined(SNAJPAGENT_HAVE_PTY)\n"
-        "            if (argv) exec_terminal_child(shell, argv, slave);\n"
+        "            if (argv) exec_terminal_child(shell, argv, slave, environment, channel);\n"
         "            exec_pty_child(shell, command, argv, directory, slave, environment);\n"
         "#else\n            _exit(125);\n#endif") == 1,
         "native and managed PTY child paths must share the capability guard and fallback")

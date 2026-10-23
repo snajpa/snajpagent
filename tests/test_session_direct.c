@@ -94,6 +94,48 @@ test_pair(void)
 }
 
 static void
+test_output_reuse(void)
+{
+    struct snag_view_channel pair[2];
+    assert(snag_view_channel_pair(pair) == 0);
+    json_t *message = json_pack("{s:s}", "text", "reused private message");
+    assert(message);
+    unsigned char *storage = NULL;
+    size_t capacity = 0u;
+    size_t length = 0u;
+    for (unsigned int i = 0u; i < 3u; ++i) {
+        assert(snag_view_channel_send(&pair[0], message) == 0);
+        if (i) {
+            assert(pair[0].encoded.data == storage && pair[0].encoded.cap == capacity);
+        } else {
+            storage = pair[0].encoded.data;
+            capacity = pair[0].encoded.cap;
+            assert(storage && capacity);
+        }
+        length = pair[0].output_len;
+        assert(snag_view_channel_write(&pair[0]) == 1);
+        assert(!pair[0].output && !pair[0].encoded.len);
+        assert(pair[0].encoded.data == storage && pair[0].encoded.cap == capacity);
+        for (size_t j = 0u; j < length; ++j) assert(storage[j] == 0u);
+        json_t *received = receive(&pair[1]);
+        assert(json_equal(received, message));
+        json_decref(received);
+    }
+    json_t *invalid = json_pack("{s:o}", "text", json_stringn_nocheck("\xff", 1u));
+    assert(invalid && snag_view_channel_send(&pair[0], invalid) < 0 && errno == EILSEQ);
+    assert(!pair[0].output && !pair[0].encoded.len);
+    for (size_t i = 0u; i < length; ++i) assert(storage[i] == 0u);
+    json_decref(invalid);
+    send_value(&pair[0], message);
+    json_t *received = receive(&pair[1]);
+    assert(json_equal(received, message) && pair[0].encoded.data == storage);
+    json_decref(received);
+    json_decref(message);
+    snag_view_channel_close(&pair[0]);
+    snag_view_channel_close(&pair[1]);
+}
+
+static void
 test_partial_close(void)
 {
     struct snag_view_channel pair[2];
@@ -158,20 +200,22 @@ test_duplex(void)
 
 struct engine {
     uint64_t generation;
-    unsigned int submissions, cancels, quits;
+    unsigned int submissions, cancels, quits, dictation_controls;
 };
 
-static void
+static int
 bound(void *opaque, uint64_t generation)
 {
     ((struct engine *)opaque)->generation = generation;
+    return 0;
 }
 
 static int
 submit(void *opaque, const char *id, const char *text, const json_t *route,
-    uint64_t generation, bool terminal, bool queued, int verbosity)
+    uint64_t generation, bool terminal, bool queued, int verbosity, bool echoed, bool local,
+    const json_t *capture)
 {
-    assert(!queued && verbosity == -1);
+    assert(!queued && verbosity == -1 && !echoed && !local && !capture);
     struct engine *engine = opaque;
     assert(generation == engine->generation && generation && !terminal);
     assert(strlen(id) == SNAG_ID_HEX_LEN && !strcmp(text, "direct prompt ž"));
@@ -186,6 +230,16 @@ control(void *opaque, bool quit)
     struct engine *engine = opaque;
     if (quit) ++engine->quits;
     else ++engine->cancels;
+    return 0;
+}
+
+static int
+input_control(void *opaque, enum snag_term_action action, const json_t *capture)
+{
+    struct engine *engine = opaque;
+    assert(action == SNAG_TERM_DICTATE_DONE || action == SNAG_TERM_DICTATE_CANCEL);
+    assert(json_integer_value(json_object_get(capture, "received")) == 1234);
+    ++engine->dictation_controls;
     return 0;
 }
 
@@ -225,7 +279,8 @@ test_server(void)
     struct snag_view_channel pair[2];
     assert(snag_view_channel_pair(pair) == 0);
     struct engine engine = {0};
-    struct snag_view_callbacks callbacks = {bound, submit, control, &engine, NULL};
+    struct snag_view_callbacks callbacks = {bound, submit, control, &engine, NULL, NULL,
+        input_control, NULL};
     const char *session = "11111111111111111111111111111111";
     const char *request = "22222222222222222222222222222222";
     struct snag_view_server *server = snag_view_server_direct(&pair[1], session, callbacks);
@@ -280,6 +335,12 @@ test_server(void)
         "id", request, "text", "direct prompt ž"), "result");
     assert(!strcmp(snag_json_string(reply, "status"), "committed") && engine.submissions == 1u);
     json_decref(reply);
+    /* A receipt identifies the original frontend intent, not just its text. */
+    reply = exchange(server, peer, json_pack("{s:s,s:I,s:s,s:s,s:s,s:{s:i}}",
+        "type", "submit", "generation", (json_int_t)generation, "route", "rollout",
+        "id", request, "text", "direct prompt ž", "capture", "turn", 17), "error");
+    assert(strstr(snag_json_string(reply, "message"), "already used"));
+    json_decref(reply);
     reply = exchange(server, peer, json_pack("{s:s,s:I,s:s,s:s,s:s}",
         "type", "submit", "generation", (json_int_t)generation, "route", "rollout",
         "id", request, "text", "changed request body"), "error");
@@ -300,6 +361,19 @@ test_server(void)
         "generation", (json_int_t)generation), "control");
     json_decref(reply);
     assert(engine.cancels == 1u && !engine.quits);
+    reply = exchange(server, peer, json_pack("{s:s,s:I,s:{s:i}}", "type", "dictate_done",
+        "generation", (json_int_t)generation, "capture", "received", 1234), "control");
+    assert(!strcmp(snag_json_string(reply, "intent"), "dictate_done"));
+    json_decref(reply);
+    assert(engine.dictation_controls == 1u);
+    reply = exchange(server, peer, json_pack("{s:s,s:I,s:{s:i}}", "type", "dictate_cancel",
+        "generation", (json_int_t)(generation + 1u), "capture", "received", 1234), "error");
+    json_decref(reply);
+    assert(engine.dictation_controls == 1u);
+    reply = exchange(server, peer, json_pack("{s:s,s:I,s:{s:i}}", "type", "dictate_cancel",
+        "generation", (json_int_t)generation, "capture", "received", 1234), "control");
+    json_decref(reply);
+    assert(engine.dictation_controls == 2u);
     reply = exchange(server, peer, json_pack("{s:s,s:I}", "type", "quit",
         "generation", (json_int_t)generation), "control");
     json_decref(reply);
@@ -307,6 +381,15 @@ test_server(void)
     snag_view_server_exit(server, 7u);
     snag_view_server_step(server);
     snag_view_server_step(server);
+    /* A client can still finish its draft write before reading EXIT. Keep the
+     * local peer open until that final reply leaves its receive slot. */
+    snag_view_server_step(server);
+    assert(snag_view_server_busy(server));
+    json_t *late = json_pack("{s:s,s:I,s:s}", "type", "draft_get",
+        "generation", (json_int_t)generation, "route", "rollout");
+    assert(late);
+    send_value(peer, late);
+    json_decref(late);
     reply = receive(peer);
     assert(!strcmp(snag_json_string(reply, "type"), "exit"));
     assert(json_integer_value(json_object_get(reply, "status")) == 7);
@@ -323,7 +406,8 @@ test_lost_workspace(void)
     struct snag_view_channel pair[2];
     assert(snag_view_channel_pair(pair) == 0);
     struct engine engine = {0};
-    struct snag_view_callbacks callbacks = {bound, submit, control, &engine, NULL};
+    struct snag_view_callbacks callbacks = {bound, submit, control, &engine, NULL, NULL,
+        input_control, NULL};
     struct snag_view_server *server = snag_view_server_direct(&pair[1],
         "11111111111111111111111111111111", callbacks);
     assert(server);
@@ -339,6 +423,7 @@ int
 main(void)
 {
     test_pair();
+    test_output_reuse();
     test_partial_close();
     test_duplex();
     test_server();

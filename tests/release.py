@@ -58,7 +58,9 @@ with tempfile.TemporaryDirectory(prefix="portable-stale-", dir=root / "build") a
                           "#else\nenum { expected_stale = EAGAIN };\n#endif\n")
         flags = ["cc", "-std=c11", "-D_GNU_SOURCE", "-DSNAJPAGENT_VM=1",
                  "-Werror", "-include", str(header)]
-        subprocess.run(flags + ["-fsyntax-only", str(root / "src/ui.c")], check=True)
+        for abi in ([], ["-DSNAJPAGENT_FORCE_LOCAL_JANSSON_ABI=1"]):
+            subprocess.run(flags + abi + ["-fsyntax-only", str(root / "src/ui.c")],
+                           check=True)
         for include in ("base.h", "fs.h"):
             probe.write_text(f'#include "{include}"\n'
                              '_Static_assert(ESTALE == expected_stale, "stale errno changed");\n'
@@ -76,8 +78,11 @@ with tempfile.TemporaryDirectory(prefix="windows-attachments-", dir=root / "buil
     header.write_text(''.join(f'#include "{name}.h"\n' for name in
                              ("app_internal", "fs", "media", "tools", "upload")) +
                       '#define _WIN32 1\n')
+    curl_flags = shlex.split(subprocess.check_output(
+        shlex.split(os.environ.get("PKG_CONFIG", "pkg-config")) + ["--cflags", "libcurl"],
+        text=True))
     subprocess.run(["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-fsyntax-only",
-                    "-I" + str(root / "src"), "-include", str(header),
+                    *curl_flags, "-I" + str(root / "src"), "-include", str(header),
                     str(root / "src/app_upload.c")], check=True)
 print("PASS: Windows queued attachments retain the common media checkpoint")
 
@@ -1464,7 +1469,7 @@ assert '"--host-cc=${pkgs.stdenv.cc}/bin/cc"' in mac_av
 assert '"--cc=${compiler} --target=${target} -isysroot ${sdk}"' in mac_av
 assert '"--disable-postproc"' not in mac_av  # Removed in pinned FFmpeg 8.
 assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale)"' in macos
-assert ('buildInputs = [ libyaml jansson curl av pdf png freetype expat fontconfig '
+assert ('buildInputs = [ vterm libyaml jansson curl av pdf png freetype expat fontconfig '
         'jpeg openjpeg xml archive ] ++ voiceRtc.dependencies ++ networkLibraries;') in macos
 assert 'libyaml = cmakeLibrary sourcePkgs.libyaml [' in macos
 assert '"YAML_CFLAGS=-I${libyaml}/include"' in macos
@@ -1697,7 +1702,7 @@ print("PASS: FreeBSD PDF selects its static C++ runtime and legacy native entrop
 freebsd_archive = freebsd.split("  archive = ", 1)[1].split("  brotli = ", 1)[0]
 assert '"-DLIBMD_LIBRARY=${sdk}/usr/lib/libmd.a"' in freebsd_archive
 assert '] [ zlib iconv ];' in freebsd_archive
-assert 'buildInputs = [ libyaml jansson curl av xml archive ]' in freebsd
+assert 'buildInputs = [ vterm libyaml jansson curl av xml archive ]' in freebsd
 assert '"-DLIBXML2_WITH_MODULES=OFF"' in freebsd and '"-DENABLE_TEST=OFF"' in freebsd_archive
 print("PASS: FreeBSD Office readers use static SDK digests and application dependency wiring")
 assert '-Dstatic_assert=_Static_assert' in freebsd
@@ -2227,7 +2232,7 @@ int main(void) {
                     "-o", str(tmp / "wide")], check=True)
     subprocess.run([str(tmp / "wide")], check=True)
 openbsd = (root / "nix/openbsd.nix").read_text()
-assert 'buildInputs = [ libyaml jansson curl av xml archive ]' in openbsd
+assert 'buildInputs = [ vterm libyaml jansson curl av xml archive ]' in openbsd
 assert 'lib.optional early ./libarchive-wide-fallbacks.patch' in openbsd
 print("PASS: libarchive shared wide-string helpers preserve Unicode, terminators and searches")
 
@@ -2851,7 +2856,7 @@ assert '"--host-cc=${pkgs.stdenv.cc}/bin/cc"' in netbsd_av
 assert 'lib.optionals early [ ./ffmpeg-legacy-libm.patch ./ffmpeg-openbsd35-hls.patch ]' in netbsd_av
 assert 'lib.optionalString legacy " -Dstatic_assert=_Static_assert"' in netbsd_av
 assert 'lib.optionalString early " -fno-builtin-pow -fno-builtin-powf"' in netbsd_av
-assert 'buildInputs = [ libyaml jansson curl av xml archive ]' in netbsd
+assert 'buildInputs = [ vterm libyaml jansson curl av xml archive ]' in netbsd
 assert 'MINIAUDIO_CFLAGS=-isystem ${miniaudio}' in netbsd
 assert 'patch -d "$out" -p1 < ${./miniaudio-openbsd35-headers.patch}' in netbsd
 assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale' in netbsd

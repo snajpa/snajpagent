@@ -117,7 +117,7 @@ class LaunchTests(unittest.TestCase):
             time.sleep(.02)
         self.fail((sid, wanted, status))
 
-    def barrier(self):
+    def barrier(self, fail=False):
         # Replace only this fixture's executable path after the VM has loaded it.
         # The fresh bootstrap pauses before exec; production code needs no hooks.
         copy = self.root / 'launch-binary'
@@ -141,6 +141,8 @@ Path({str(receipt)!r}).write_text(json.dumps(dict(pid=os.getpid(), modes=mode,
 deadline = time.monotonic() + 15
 while not Path({str(release)!r}).exists() and time.monotonic() < deadline:
     time.sleep(.01)
+if {fail!r}:
+    raise SystemExit(17)
 os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
 ''')
         replacement.chmod(0o700)
@@ -156,6 +158,80 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
             time.sleep(.01)
         self.assertTrue(path.exists(), path)
         return json.loads(path.read_text())
+
+    def test_stored_session_typeahead_waits_for_startup(self):
+        journal = self.seed()
+        sid = journal.parent.name
+        child, receipt, release = self.barrier()
+        child.command('session ' + sid)
+        self.wait_file(receipt)
+        child.write(b'iinput-during-owner-startup\r')
+        release.touch()
+        child.repaint_until(b'launch-answer-marker', timeout=10)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            inputs = [e['data']['text'] for e in self.events(journal)
+                      if e['type'] == 'input_received']
+            if 'input-during-owner-startup' in inputs:
+                break
+            child.read(.02)
+        self.assertEqual(inputs.count('input-during-owner-startup'), 1)
+        child.finish('qa!')
+        self.status(sid, 'stored')
+
+    def test_startup_typeahead_keeps_escape_and_background_draft(self):
+        journal = self.seed()
+        sid = journal.parent.name
+        child, receipt, release = self.barrier()
+        child.command('session ' + sid)
+        self.wait_file(receipt)
+        child.write(b'ikept-before-owner-ready\x1b')
+        child.command('sessions')
+        release.touch()
+        self.status(sid, 'detached')
+        child.repaint_until(b'New session')
+        child.command('attach ' + sid)
+        child.attached()
+        child.repaint_until(b'kept-before-owner-ready')
+        self.assertFalse(any(e['type'] == 'input_received' and
+                             e['data']['text'] == 'kept-before-owner-ready'
+                             for e in self.events(journal)))
+        child.write(b'i\r')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            inputs = [e['data']['text'] for e in self.events(journal)
+                      if e['type'] == 'input_received']
+            if 'kept-before-owner-ready' in inputs:
+                break
+            child.read(.02)
+        self.assertEqual(inputs.count('kept-before-owner-ready'), 1)
+        child.finish('qa!')
+        self.status(sid, 'stored')
+
+    def test_failed_startup_keeps_typeahead_for_explicit_recovery(self):
+        journal = self.seed()
+        sid = journal.parent.name
+        child, receipt, release = self.barrier(fail=True)
+        child.command('session ' + sid)
+        self.wait_file(receipt)
+        child.write(b'ikept-after-startup-failure\r')
+        release.touch()
+        child.repaint_until(b'Owner attachment unavailable', timeout=10)
+        self.assertEqual(self.owner_pids(), [])
+        child.command('workspace save')
+        self.wait_snapshot(lambda rows: rows and any(
+            row['state'].get('native_input') for row in rows.values()))
+        child.command('recover')
+        child.repaint_until(b'Frontend input recovered as unsent text')
+        child.command('workspace save')
+        self.wait_snapshot(lambda rows: rows and any(
+            any(b['draft'] == 'kept-after-startup-failure\n'
+                for owner in row['state']['buffers'] for b in owner['buffers'])
+            for row in rows.values()))
+        self.assertFalse(any(e['type'] == 'input_received' and
+                             e['data']['text'] == 'kept-after-startup-failure'
+                             for e in self.events(journal)))
+        child.finish('close')
 
     def test_session_picker_first_entry_starts_a_new_session(self):
         child = self.start('-N', 'picker-new')

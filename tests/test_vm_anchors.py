@@ -89,7 +89,7 @@ class AnchorTests(unittest.TestCase):
         terminal = frontend.Terminal(self.root, ['--config', str(config), '--resume',
             journal.parent.name], subcommand=None)
         self.addCleanup(terminal.close)
-        terminal.until(b'session id')
+        terminal.until(b'fake/host-model')
         terminal.write(b'new retained response\r')
         deadline = time.monotonic() + 5
         while not any(event['seq'] > previous and event['type'] == 'turn_completed'
@@ -139,17 +139,18 @@ class AnchorTests(unittest.TestCase):
         for window in saved['state']['windows']:
             window['history']['byte'] = display_byte
             del window['history']['source'], window['history']['route']
+            window.pop('native', None)
         path.write_text(json.dumps(saved))
         child = self.start('--resume', 'source', columns=100, expect=b'Workspace restored')
         child.repaint_until(b'anchor-marker-')
         # Split documents load independently; the first frame can precede
         # conversion of the other window's older coordinate.
         values = self.wait_snapshot(lambda rows:
-            next(iter(rows.values()))['state']['v'] == 14 and
+            next(iter(rows.values()))['state']['v'] == 16 and
             all(window['history']['source'] for window in
                 next(iter(rows.values()))['state']['windows']))
         upgraded = next(iter(values.values()))['state']
-        self.assertEqual(upgraded['v'], 14)
+        self.assertEqual(upgraded['v'], 16)
         for window in upgraded['windows']:
             self.assertTrue(window['history']['source'])
             self.assertEqual(window['history']['byte'], len(prefix.encode()))
@@ -201,7 +202,7 @@ class AnchorTests(unittest.TestCase):
         owner = frontend.Terminal(self.root, ['--config', str(config), '--resume',
             journal.parent.name], subcommand=None)
         self.addCleanup(owner.close)
-        owner.until(b'session id')
+        owner.until(b'fake/host-model')
         owner.write(b'generate retained stream\r')
         deadline = time.monotonic() + 5
         while not any(event['seq'] > previous and event['type'] == 'turn_completed'

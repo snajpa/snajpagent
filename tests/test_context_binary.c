@@ -461,6 +461,21 @@ write_source_byte(int fd, int64_t offset, unsigned char byte)
     assert(snag_seek(fd, position, SEEK_SET) == position);
 }
 
+static void
+advance_source_stamp(int fd, const snag_file_info *before)
+{
+    /* Automatic write stamps may share a filesystem clock tick. Force
+     * a distinct fractional stamp in the same second to test the guard
+     * deterministically; metadata never substitutes for source locking. */
+    struct timespec times[2] = {{.tv_nsec = UTIME_OMIT}, {.tv_sec = before->st_mtime}};
+#ifdef __APPLE__
+    times[1].tv_nsec = (before->st_mtimespec.tv_nsec + 1l) % 1000000000l;
+#else
+    times[1].tv_nsec = (before->st_mtim.tv_nsec + 1l) % 1000000000l;
+#endif
+    assert(futimens(fd, times) == 0);
+}
+
 struct direct_mutation {
     struct provider_cancel cancel;
     int fd;
@@ -477,7 +492,10 @@ mutate_materialization(void *opaque)
     if (++mutation->cancel.calls != mutation->cancel.fail_at) return false;
     mutation->changed = true;
     if (!mutation->kind) {
+        snag_file_info before;
+        assert(snag_fstat(mutation->fd, &before) == 0);
         write_source_byte(mutation->fd, 0, mutation->first ^ 1u);
+        advance_source_stamp(mutation->fd, &before);
     } else {
         assert(!snag_truncate(mutation->fd, mutation->size + (mutation->kind == 1u ? 1 : -1)));
     }
@@ -1844,18 +1862,7 @@ observe_capture(void *opaque)
         if (hook->overwrite) assert(snag_fstat(hook->fd, &before) == 0);
         const void *data = hook->overwrite ? (const void *)&hook->byte : (const void *)"X";
         assert(pwrite(hook->fd, data, 1u, (off_t)hook->end) == 1);
-        if (hook->overwrite) {
-            /* Automatic write stamps may share a filesystem clock tick. Force
-             * a distinct fractional stamp in the same second to test the guard
-             * deterministically; metadata never substitutes for source locking. */
-            struct timespec times[2] = {{.tv_nsec = UTIME_OMIT}, {.tv_sec = before.st_mtime}};
-#ifdef __APPLE__
-            times[1].tv_nsec = (before.st_mtimespec.tv_nsec + 1l) % 1000000000l;
-#else
-            times[1].tv_nsec = (before.st_mtim.tv_nsec + 1l) % 1000000000l;
-#endif
-            assert(futimens(hook->fd, times) == 0);
-        }
+        if (hook->overwrite) advance_source_stamp(hook->fd, &before);
     }
     return false;
 }

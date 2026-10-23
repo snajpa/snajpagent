@@ -981,12 +981,17 @@ test_client_error(bool bound)
     assert(snag_irc_core_tick(client, 0, wake[0], error, sizeof(error)) == 0);
     unsigned int before = capture.events[SNAG_IRC_DISCONNECTED];
     assert(snag_irc_core_view(client, &view) == 0 && !view.joined && view.connecting);
-    for (size_t i = 0u; i < 2u; ++i) {
-        peers[i] = snag_socket_accept(listener);
-        assert(peers[i] != SNAG_SOCKET_INVALID);
-        send_text(peers[i], "ERROR :Server full (1024 client connections)\r\n");
-    }
     uint64_t deadline = snag_monotonic_ms() + 500u;
+    for (size_t i = 0u; i < 2u; ++i) {
+        while ((peers[i] = snag_socket_accept(listener)) == SNAG_SOCKET_INVALID) {
+            assert(errno == EAGAIN || errno == EWOULDBLOCK);
+            assert(snag_monotonic_ms() < deadline);
+            assert(snag_irc_core_tick(client, 1, wake[0], error, sizeof(error)) == 0);
+        }
+    }
+    for (size_t i = 0u; i < 2u; ++i)
+        send_text(peers[i], "ERROR :Server full (1024 client connections)\r\n");
+    deadline = snag_monotonic_ms() + 500u;
     while (capture.events[SNAG_IRC_DISCONNECTED] < before + (bound ? 2u : 1u)) {
         assert(snag_monotonic_ms() < deadline);
         assert(snag_irc_core_tick(client, 1, wake[0], error, sizeof(error)) == 0);
@@ -1375,6 +1380,8 @@ test_client_nick_collision(bool explicit_zero)
     assert(snag_irc_open(&client, &client_config, "/client", capture_event, capture_trace,
                &client_capture, error, sizeof(error)) == 0);
     wait_pair_event(server, client, &client_capture, SNAG_IRC_HISTORY_READY, 1u);
+    /* The two identity sockets complete registration independently. */
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_CONNECTED, 1u);
     assert(client_capture.events[SNAG_IRC_HISTORY_READY] != 0u);
     assert(client_capture.events[SNAG_IRC_CONNECTED] == 1u);
     assert(client_capture.events[SNAG_IRC_DISCONNECTED] == 0u);
@@ -2080,6 +2087,12 @@ test_private_sends(void)
     wait_wire(server, peer, wire, sizeof(wire), " :\001ACTION second\001\r\n");
     assert(strstr(wire, ":operator!operator@"));
     assert(strstr(wire, " PRIVMSG peer :\001ACTION private-body one"));
+    /* Socket receipt can precede the engine's admission of the owner's callback. */
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    while (capture.delivery[SNAG_IRC_OPERATOR][SNAG_IRC_ACKNOWLEDGED] < 2u) {
+        assert(snag_monotonic_ms() < deadline);
+        tick(server, 1u);
+    }
     assert(capture.delivery[SNAG_IRC_OPERATOR][SNAG_IRC_PENDING] == 2u);
     assert(capture.delivery[SNAG_IRC_OPERATOR][SNAG_IRC_WRITTEN] == 2u);
     assert(capture.delivery[SNAG_IRC_OPERATOR][SNAG_IRC_ACKNOWLEDGED] == 2u);

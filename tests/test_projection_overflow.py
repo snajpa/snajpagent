@@ -9,6 +9,7 @@ import select
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -168,7 +169,7 @@ def check(binary, native, turns=20, context=12000000, exact=False):
         provider.close()
 
 
-def check_source_fit(binary, native, exact, reject_all=False):
+def check_source_fit(binary, native, exact, reject_all=False, model_switch=None):
     provider = FakeResponses()
     sources, compacts = [], []
     hard, target = 12000000, 80000
@@ -180,6 +181,11 @@ def check_source_fit(binary, native, exact, reject_all=False):
         return not reject_all and size <= target
 
     def count(handler, request):
+        if model_switch and any(item.get('role') == 'system' for item in request['input']):
+            provider.reply(handler, json.dumps({'object': 'response.input_tokens',
+                'input_tokens': 42 if request['model'] == 'host-model' else 42000
+            }).encode(), 'application/json')
+            return
         provider.reply(handler, json.dumps({'object': 'response.input_tokens',
             'input_tokens': 42 if fits(request) else hard + 1}).encode(), 'application/json')
 
@@ -215,7 +221,7 @@ def check_source_fit(binary, native, exact, reject_all=False):
             seed = subprocess.run([*prefix, '--resume', sid, '-e', '--', 'seed question'],
                                   cwd=root, env=env, capture_output=True, timeout=30)
             assert seed.returncode == 0, seed.stderr
-            expand_history(journal, 2200, answer_bytes=5000)
+            expand_history(journal, 40 if model_switch else 2200, answer_bytes=5000)
             archive_tail = read_events(journal)[-1]['seq']
             if native:
                 result = subprocess.run([str(binary), 'convert', '--dotdir', str(state)],
@@ -224,6 +230,81 @@ def check_source_fit(binary, native, exact, reject_all=False):
                 journal = journal.with_name('journal.bin')
             provider.runtime_count_handler = count
             provider.runtime_compact_handler = compact
+            if model_switch:
+                config.write_text(config.read_text().replace('auto_compact_input_tokens = 0',
+                    'auto_compact_input_tokens = 40000'))
+                if model_switch == 'resume':
+                    resumed = subprocess.run([*prefix, '--resume', sid, '-m',
+                        'fake/two-model/high:100000', '-e', '--', 'continue after model switch'],
+                        cwd=root, env=env, capture_output=True, timeout=30)
+                    assert resumed.returncode == 0, resumed.stderr
+                else:
+                    assert model_switch == 'active'
+                    held, release = threading.Event(), threading.Event()
+
+                    def respond(handler, request, sequence):
+                        if request['model'] == 'two-model':
+                            body = provider.response_body(sequence, 'active switch finished')
+                        elif not any(item.get('type') == 'function_call_output'
+                                     for item in request['input']):
+                            body = provider.function_body(sequence, 'active_switch_tool',
+                                'exec_command', {'command': 'printf active-tool-progress',
+                                                 'yield_ms': 1000})
+                        else:
+                            held.set()
+                            release.wait(15)
+                            body = provider.response_body(sequence, 'old model released')
+                        try:
+                            provider.reply(handler, body.encode(), close_header=True)
+                        except (BrokenPipeError, ConnectionResetError):
+                            pass
+
+                    provider.runtime_handler = respond
+                    child = RemoteProcess(root, [*prefix, '--resume', sid], wrapped=None,
+                                          extra_env=env, winsize=(24, 180))
+                    try:
+                        child.until('›'.encode(), timeout=10)
+                        child.output.clear()
+                        os.write(child.master, b'continue after model switch\r')
+                        deadline = time.monotonic() + 15
+                        while not held.is_set() and time.monotonic() < deadline:
+                            child.remember_children()
+                            if select.select([child.master], [], [], .05)[0]:
+                                child.output.extend(os.read(child.master, 65536))
+                        assert held.is_set(), bytes(child.output)
+                        os.write(child.master, b'/model fake/two-model/high:100000\r')
+                        child.until(b'finished', timeout=15)
+                        child.until_after(b'finished', '›'.encode(), timeout=10)
+                        os.write(child.master, b'/exit\r')
+                        child.wait(0)
+                    finally:
+                        release.set()
+                        child.close()
+                events = read_events(journal)
+                completed = [e for e in events if e['type'] == 'compaction_completed']
+                assert len(completed) == 1, ('repeated proactive compaction', len(completed))
+                assert completed[0]['seq'] < next(e['seq'] for e in events
+                    if e['type'] == 'response_started' and e['data']['model'] == 'two-model')
+                request = provider.requests[-1]['body']
+                assert request['model'] == 'two-model'
+                assert 'fitting-prefix' in json.dumps(request['input'])
+                assert 'fixture answer 39:' in json.dumps(request['input'])
+                assert 'continue after model switch' in json.dumps(request['input'])
+                if model_switch == 'active':
+                    assert 'active-tool-progress' in json.dumps(request['input'])
+                    active_turn = [e for e in events if e['type'] == 'turn_started'][-1]
+                    active_events = [e for e in events if e['seq'] > active_turn['seq']]
+                    assert len([e for e in active_events if e['type'] == 'tool_finished']) == 1
+                    assert len([e for e in active_events if e['type'] == 'turn_completed']) == 1
+                    assert not any(e['type'] == 'response_completed' and
+                        completed[0]['seq'] < e['seq'] < next(start['seq'] for start in events
+                        if start['type'] == 'response_started' and
+                        start['data']['model'] == 'two-model') for e in active_events)
+                assert not any(e['type'] in ('context_rebased', 'turn_failed') for e in events)
+                assert provider.failure is None, provider.failure
+                print('model switch', model_switch, 'native' if native else 'legacy',
+                      'continues after one proactive prefix: PASS', flush=True)
+                return
             child = RemoteProcess(root, [*prefix, '--resume', sid], wrapped=None,
                                   extra_env=env, winsize=(24, 180))
             try:
@@ -294,3 +375,6 @@ if __name__ == '__main__':
             check_source_fit(binary, native, exact)
     for exact in (False, True):
         check_source_fit(binary, True, exact, reject_all=True)
+    for native in (False, True):
+        for model_switch in ('resume', 'active'):
+            check_source_fit(binary, native, True, model_switch=model_switch)

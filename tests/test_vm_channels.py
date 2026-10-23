@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Channel panes share an owner while retaining their exact send destinations."""
 
+import json
 import unittest
 
 from test_irc_channels import ChannelFixture
@@ -41,16 +42,26 @@ class ChannelWorkspaceTests(ChannelFixture):
                              for e in self.events()))
 
         def history_report(included, excluded):
-            before = len(self.state()['buffers'][0].get('reports', []))
+            catalogue = self.path.parent / '.view-reports.jsonl'
+            previous = catalogue.read_text() if catalogue.exists() else ''
+            self.child.output.clear()
             self.child.write(b'i/history 100\r')
-            self.wait_snapshot(lambda rows:
-                len(self.state()['buffers'][0].get('reports', [])) > before)
-            self.normal()
-            self.child.command('report')
+            self.wait(lambda: catalogue.exists() and catalogue.read_text() != previous
+                      and json.loads(catalogue.read_text().splitlines()[-1])['command']
+                      == '/history 100')
+            report = json.loads(catalogue.read_text().splitlines()[-1])
+            # The retained conversation can already contain the marker. Wait
+            # for this command's rendered report before checking its contents.
             self.child.repaint_until(b'IRC history:')
-            self.assertIn(included, self.child.output)
-            self.assertNotIn(excluded, self.child.output)
-            self.child.command('history')
+            self.assertIn(b'IRC history:', self.child.output)
+            # Standalone scrollback retains output printed in the previous tab.
+            # Check privacy in the new immutable command report itself.
+            body = (self.path.parent / ('.view-report-' + report['id'])).read_bytes()
+            self.assertIn(included, body)
+            self.assertNotIn(excluded, body)
+            self.assertRegex(body.decode('utf-8'),
+                             r'IRC history: [0-9]+ selected conversation records\.\n\Z')
+            self.normal()
 
         self.channel('#side')
         history_report(b'pane-public-marker', b'pane-private-marker')
@@ -109,11 +120,16 @@ class ChannelWorkspaceTests(ChannelFixture):
         child.repaint_until(b'No matches')
         child.write(b'i/query 1/private-peer\r')
         child.repaint_until(b'[private-peer]')
+        self.normal()
+        child.write(b'/private-cancelled-draft\r')
+        child.repaint_until(b'Match')
         child.repaint_until(b'private-cancelled-draft^C')
         self.normal()
         child.finish('workspace detach')
         self.child = self.workspace_start('--resume', 'channel-panes')
         self.child.attached()
+        self.child.write(b'/private-cancelled-draft\r')
+        self.child.repaint_until(b'Match')
         self.child.repaint_until(b'private-cancelled-draft^C')
         self.assert_no_wire('private-cancelled-draft')
         self.assertFalse(any('private-cancelled-draft' in str(request)
@@ -177,6 +193,9 @@ class ChannelWorkspaceTests(ChannelFixture):
         self.child.repaint_until(b'lab-public-body')
         self.child.write(b'i/query 1/peer\r')
         self.child.repaint_until(b'[peer]')
+        self.normal()
+        self.child.write(b'/private-hidden-body\r')
+        self.child.repaint_until(b'Match')
         self.child.repaint_until(b'private-hidden-body')
         self.normal()
         self.child.command('close')
@@ -198,6 +217,13 @@ class StandaloneFeedbackTests(ChannelFixture):
         child.attached()
         child.write(b'i/query 1/private-peer\r')
         child.repaint_until(b'[private-peer]')
+        child.write(b'\x1b')
+        child.command('history')
+        child.write(b'/classic-private-draft\r')
+        child.repaint_until(b'No matches')
+        child.command('buffer channel-session/' + self.server.endpoint + '/private-peer')
+        child.write(b'/classic-private-draft\r')
+        child.repaint_until(b'Match')
         child.repaint_until(b'classic-private-draft^C')
         self.assert_no_wire('classic-private-draft')
         child.write(b'\x1b')
@@ -258,6 +284,8 @@ class HostedChannelWorkspaceTests(QueryFixture):
         child.write(b'i/query 1/query-peer\r')
         child.repaint_until(b'[query-peer]')
         self.normal()
+        child.write(b'/hosted-pane-private\r')
+        child.repaint_until(b'Match')
         child.repaint_until(b'hosted-pane-private')
         child.write(b'ihosted-private-draft')
         self.normal()

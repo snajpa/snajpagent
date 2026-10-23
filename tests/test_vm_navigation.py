@@ -10,7 +10,12 @@ import test_vm_selection as selection
 
 class NavigationTests(unittest.TestCase):
     setUp = selection.SelectionTests.setUp
-    start = selection.SelectionTests.start
+    def start(self, *args, **kwargs):
+        child = selection.SelectionTests.start(self, *args, **kwargs)
+        command = child.command
+        child.command = lambda text: command(text, escape=False)
+        return child
+
     snapshots = selection.SelectionTests.snapshots
     wait_snapshot = selection.SelectionTests.wait_snapshot
     seed_session = selection.SelectionTests.seed_session

@@ -103,11 +103,15 @@ class RecoveryTests(ChannelFixture):
     def test_resume_and_visual_recovery_require_explicit_send(self):
         text = 'uncertain private é界 body'
         self.uncertain(text)
+        previous = self.focused_buffer()['route']
         self.child.finish('close')
         self.child = self.workspace_start('--resume', 'irc-recovery')
         self.term = self.child
         self.child.attached()
-        self.child.repaint_until(b'uncertain')
+        self.wait_snapshot(lambda rows: rows and
+            self.focused_buffer()['route'] == previous)
+        # Standalone attachment leaves private bodies in retained history.
+        # Search and copy the recorded body before explicitly sending it again.
         self.assertEqual(len(self.wire(text)), 1)
         self.recover_body(text)
         self.assertEqual(len(self.wire(text)), 1)

@@ -27,7 +27,7 @@ class SearchTests(unittest.TestCase):
 
     def search(self, child, keys, expected=b'Match', timeout=5):
         child.command('workspace')
-        child.repaint_until(next(iter(self.snapshots())).encode())
+        child.painted_until(next(iter(self.snapshots())).encode())
         child.output.clear()
         child.write(keys)
         child.repaint_until(expected, timeout=timeout)
@@ -180,11 +180,37 @@ class ReportSearchTests(unittest.TestCase):
         before = self.owner.journal.read_bytes()
         child.write(b'i\x1b[200~/search private-query\nsecond-line\x1b[201~\r')
         child.repaint_until(b'No matches')
-        self.assertIn('command › /search private-query'.encode(), child.output)
+        child.repaint_until('command › /search private-query'.encode())
         self.assertEqual(self.inputs(), [])
         self.assertEqual(self.owner.journal.read_bytes(), before)
         child.finish('close')
         self.owner.status('detached')
+
+    def test_native_search_entry_stays_local_and_can_reopen_the_editor(self):
+        child = self.attached('local-search-entry')
+        before = self.owner.journal.read_bytes()
+        child.write(b'i/search\r')
+        child.repaint_until('command › /search'.encode())
+        child.write(b'private-entry-query\r')
+        child.repaint_until(b'No matches')
+        self.assertEqual(self.inputs(), [])
+        self.assertEqual(self.owner.journal.read_bytes(), before)
+        child.write(b'iordinary-after-local-search\r')
+        child.repaint_until(b'semantic-answer')
+        self.assertEqual(len(self.inputs()), 1)
+        self.assertEqual(self.inputs()[0]['data']['text'], 'ordinary-after-local-search')
+        child.finish('close')
+
+    def test_native_search_text_and_leading_space_never_reach_the_owner(self):
+        child = self.attached('local-search-text')
+        before = self.owner.journal.read_bytes()
+        for command in (b'/search private-single', b'   /search private-leading'):
+            with self.subTest(command=command):
+                child.write(b'i' + command + b'\r')
+                child.repaint_until(b'No matches')
+                self.assertEqual(self.inputs(), [])
+                self.assertEqual(self.owner.journal.read_bytes(), before)
+        child.finish('close')
 
     def test_report_search_is_scoped_and_keeps_owner_idle(self):
         child = self.attached('report-search')

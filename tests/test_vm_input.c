@@ -19,6 +19,7 @@ struct capture {
 static int
 collect(void *opaque, const struct snag_vm_input_event *event)
 {
+    if (event->kind == SNAG_VM_RAW) return 0;
     struct capture *capture = opaque;
     struct captured *item = capture->count ? &capture->items[capture->count - 1u] : NULL;
     if (!item || (event->kind != SNAG_VM_TEXT && event->kind != SNAG_VM_PASTE_TEXT) ||
@@ -100,10 +101,48 @@ clipboard_replies(void)
     clear(&captured);
 }
 
+static int
+collect_wire(void *opaque, const struct snag_vm_input_event *event)
+{
+    return snag_buf_append(opaque, event->wire, event->wire_length);
+}
+
+static void
+wire_bytes(void)
+{
+    static const unsigned char script[] = "\033[9002~\033[999;8~\b\177\n\003"
+        "\033[I\033[O\033é\xf0\x80\x80\x80" "x\xc3\r\xff"
+        "\033[200~literal \033[20x\003\033[201~\033]52;c;unknown\a\033";
+    unsigned char long_sequence[1024];
+    memset(long_sequence, '1', sizeof(long_sequence));
+    long_sequence[0] = '\033';
+    long_sequence[1] = '[';
+    long_sequence[sizeof(long_sequence) - 1u] = 'q';
+    for (size_t chunk = 1u; chunk <= sizeof(script); ++chunk) {
+        struct snag_vm_input input = {0};
+        struct snag_buf wire = {.max = SIZE_MAX};
+        for (size_t at = 0u; at < sizeof(script) - 1u;) {
+            size_t count = sizeof(script) - 1u - at;
+            if (count > chunk) count = chunk;
+            assert(!snag_vm_input_feed(&input, script + at, count, 100u, collect_wire, &wire));
+            at += count;
+        }
+        assert(!snag_vm_input_expire(&input, 1200u, collect_wire, &wire));
+        assert(wire.len == sizeof(script) - 1u && !memcmp(wire.data, script, wire.len));
+        snag_buf_reset(&wire);
+        for (size_t at = 0u; at < sizeof(long_sequence); ++at)
+            assert(!snag_vm_input_feed(&input, long_sequence + at, 1u, 1300u,
+                collect_wire, &wire));
+        assert(wire.len == sizeof(long_sequence) && !memcmp(wire.data, long_sequence, wire.len));
+        snag_buf_free(&wire);
+    }
+}
+
 int
 main(void)
 {
     clipboard_replies();
+    wire_bytes();
     struct snag_vm_input input = {0};
     struct capture full = {0}, fragmented = {0};
     static const char script[] = "é界👩‍💻\r\n\t\177\033[A\033[1;5D\033OF\033[Z"

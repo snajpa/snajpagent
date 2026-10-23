@@ -14,6 +14,21 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static bool prompt_buffer_probe;
+static size_t prompt_heap_buffers;
+
+static void
+config_buf_free(struct snag_buf *buf)
+{
+    if (prompt_buffer_probe && buf->data) ++prompt_heap_buffers;
+    snag_buf_free(buf);
+}
+
+/* Inspect the actual expansion's scratch lifetime without replacing its allocator. */
+#define snag_buf_free config_buf_free
+#include "../src/config.c"
+#undef snag_buf_free
+
 static void
 write_bytes(const char *path, const void *data, size_t len)
 {
@@ -730,6 +745,20 @@ test_prompt_numbers(const char *path)
     const char identities[] = "{operator}|{model_nick}|{session_name}|{model}"
                               "{chat:C}{rollout-idle:I}{rollout-active:A}";
     expect_ui(path, "prompt", identities, true);
+    prompt_heap_buffers = 0u;
+    prompt_buffer_probe = true;
+    assert(snag_config_prompt_expand(identities, 1u, values, 0xfdu, label, sizeof(label)) == 0);
+    prompt_buffer_probe = false;
+    assert(prompt_heap_buffers == 0u);
+    assert(!strcmp(label, "op|agent|session|mI "));
+    unsigned char bounded[5] = {0x55u, 0x55u, 0x55u, 0x55u, 0xa5u};
+    const char short_prompt[] = "{chat:x}{rollout-idle:xy}{rollout-active:xyz}";
+    assert(snag_config_prompt_expand(short_prompt, 1u, values, 0xfdu,
+               (char *)bounded, 4u) == 0);
+    assert(!strcmp((char *)bounded, "xy ") && bounded[4] == 0xa5u);
+    assert(snag_config_prompt_expand(short_prompt, 2u, values, 0xfdu,
+               (char *)bounded, 4u) < 0);
+    assert(errno == EOVERFLOW && bounded[4] == 0xa5u);
     values[SNAG_PROMPT_SESSION_NAME] = "build {literal} α";
     for (unsigned int mode = 0u; mode < 3u; ++mode) {
         assert(

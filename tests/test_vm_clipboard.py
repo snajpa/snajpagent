@@ -155,7 +155,11 @@ class ClipboardTests(unittest.TestCase):
     def test_outer_off_preserves_register_without_local_fallback(self):
         _, child = self.open_text(wrappers=1, outer='off')
         child.write(b'yy')
-        child.repaint_until(b'Workstation clipboard unavailable')
+        from test_vm_mouse import current_rows
+        deadline = time.monotonic() + 5
+        while 'Workstation clipboard unavailable' not in '\n'.join(current_rows(child).values()):
+            self.assertLess(time.monotonic(), deadline, bytes(child.output[-3000:]))
+            child.read(.05)
         self.assertNotIn(b'\x1b]52;', child.output)
         child.write(b'P')
         child.command('workspace name retained')
@@ -281,7 +285,11 @@ class ClipboardTests(unittest.TestCase):
                                  extra_env={'PATH': str(self.root) + os.pathsep + os.environ['PATH'],
                                             'WAYLAND_DISPLAY': 'fixture'})
         child.write(b'yy')
-        child.repaint_until(b'Workstation clipboard written', timeout=10)
+        from test_vm_mouse import current_rows
+        deadline = time.monotonic() + 10
+        while 'Workstation clipboard written' not in '\n'.join(current_rows(child).values()):
+            self.assertLess(time.monotonic(), deadline, bytes(child.output[-3000:]))
+            child.read(.05)
         self.assertEqual(target.read_bytes(), '• copy é界 literal\n'.encode())
         self.assertEqual(count.read_bytes(), b'1')
         self.assertNotIn(b'\x1b]52;', child.output)
