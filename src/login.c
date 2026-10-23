@@ -407,7 +407,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         config.provider_count = 0u;
     }
     if (cli->auth_command == SNAG_CLI_LOGIN_STATUS || cli->auth_command == SNAG_CLI_LOGOUT) {
-        root_fd = snag_open_read(dotdir, true);
+        root_fd = snag_open_read_security_at(-1, dotdir, true);
         if (root_fd < 0 && errno != ENOENT) goto out;
         if (cli->auth_command == SNAG_CLI_LOGIN_STATUS) {
             rc = login_status(&config, root_fd, cli->auth_provider, error, sizeof(error)) < 0 ? 2
@@ -441,7 +441,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         snag_errorf(error, sizeof(error), "first noninteractive login needs -m MODEL before login");
         goto out;
     }
-    root_fd = snag_open_read(dotdir, true);
+    root_fd = snag_open_read_security_at(-1, dotdir, true);
     if (root_fd < 0 && errno != ENOENT) goto out;
     if (existing && root_fd >= 0) {
         const struct snag_provider_config *old = snag_config_provider(&config, provider.name);

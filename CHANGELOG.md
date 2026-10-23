@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Fix Windows stored-login inspection, reuse and logout by opening the state
+  directory with permission to query its owner and ACL. Keep credential privacy
+  checks intact, including for Unicode profile paths.
+
 - Limit automatic model fallback to the failed API call. Return to the primary
   model and context window for the next call, including tool continuations in
   the same turn and resume. Separate primary calls can fall back independently.
