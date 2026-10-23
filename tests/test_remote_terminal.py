@@ -697,9 +697,9 @@ class RemoteStartupTests(unittest.TestCase):
             home = root / "client"
             home.mkdir()
             remote_file = root / "remote.bin"
-            remote_file.write_bytes(bytes(range(128)))
+            remote_file.write_bytes(os.urandom(4096))
             local_file = home / "local file.bin"
-            local_file.write_bytes(bytes(reversed(range(128))))
+            local_file.write_bytes(os.urandom(4096))
             dotdir = root / "agent"
 
             def native_owners():
