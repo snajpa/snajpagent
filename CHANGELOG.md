@@ -8,6 +8,11 @@
   120-byte checked title frames and 256-byte workstation input bursts. Add
   integrity and frame-count coverage for the long-latency path, and preserve
   protocol-looking bracketed paste as literal text after drop ownership release.
+  The delayed fixture measured roughly 11.04 s after the change versus 14.41–14.51 s
+  before it.
+
+- Keep workspace-disabled builds compiling by guarding frontend-only draft
+  snapshots. Cover the disabled-workspace UI in the existing lean compile check.
 
 - Fix Windows stored-login inspection, reuse and logout by opening the state
   directory with permission to query its owner and ACL. Keep credential privacy

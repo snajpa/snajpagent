@@ -7,11 +7,22 @@
 The permanent remote-terminal fixture transfers a 4 KiB incompressible file
 through retained title state and checks landed-byte integrity, protocol
 non-leakage, post-transfer input, clean exit and the bounded DATA-frame count.
+With a 100 ms terminal-input delay, the exchange uses 54 acknowledged title
+messages rather than the prior implementation's 70. The prior implementation
+fails the permanent frame-count regression. This measures title exchanges in a
+controlled relay, not throughput on an arbitrary lossy network.
+Four alternating timing runs measured 14.51 s and 14.41 s before the change,
+then 11.04 s and 11.04 s after it. The same run retained exact file bytes and
+the 70-to-54 title counts; this is controlled fixture evidence, not a WAN
+benchmark.
 The implementation keeps 120-byte checked title frames and 256-byte
 workstation input bursts while using 512-byte Mosh download source blocks.
 The same fixture covers a nested wrapper receiving bracketed paste that contains
 protocol-looking text after drop ownership release; the text must reach the
-child literally.
+child literally. All 49 Linux remote-terminal cases pass with the lean
+workspace-enabled fixture, including stock Mosh, retry, cancellation, timeout,
+resize and paste checks. Full-capability receiving results are recorded
+separately from this lean fixture run.
 
 ## Standalone terminal panes
 
