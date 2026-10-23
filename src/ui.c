@@ -3023,6 +3023,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         return 0;
 #endif
     }
+#if SNAJPAGENT_VM
     if (display->frontend && rc >= 0 &&
         (action == SNAG_TERM_UPLOAD || (action == SNAG_TERM_NONE && !text &&
             term->input_revision != display->editor_revision && !term->paste &&
@@ -3041,6 +3042,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         }
         display->editor_revision = term->input_revision;
     }
+#endif
     if (action == SNAG_TERM_NONE && !text && (rc >= 0 || saved_errno == EINTR) &&
         !term->history_reader.warning &&
         (!term->history_refresh_requested || term->input_backlog)) {
