@@ -29,6 +29,7 @@ class OutputFilter:
         self.replay_hello = bool(os.getenv("SCREEN_FIXTURE_REPLAY_HELLO"))
         self.hello = None
         self.hello_replayed = False
+        self.data_frames = 0
 
     def hello_replay(self, result, phase):
         result.extend(self.hello)
@@ -63,6 +64,12 @@ class OutputFilter:
                         title = b"[mosh] " + title[:245]
                         framed = b"\x1b]2;" + title + b"\x07"
                         data_frame = b":DATA:" in title
+                        if data_frame:
+                            self.data_frames += 1
+                            marker = os.getenv("SCREEN_FIXTURE_DATA_FRAMES")
+                            if marker:
+                                with open(marker, "w", encoding="ascii") as frames:
+                                    frames.write(str(self.data_frames))
                         if b":HELLO:" in title:
                             self.hello = framed
                         if (self.replay_hello and self.hello and data_frame

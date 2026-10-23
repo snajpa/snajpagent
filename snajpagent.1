@@ -1925,8 +1925,10 @@ the agent negotiates a short title-state frame and keyboard acknowledgement
 channel. File bytes, checksums and receipts use the existing terminal transfer
 protocol over that channel. The wrapper consumes the title frames before
 forwarding terminal output, so protocol data stays out of the conversation,
-draft and scrollback. Mosh transfers use smaller blocks and take longer than
-the SSH route; they use the current Mosh session, with no separate file
+draft and scrollback. Mosh downloads use acknowledged 512-byte source blocks
+while checked title frames remain bounded at 120 raw wire bytes. Workstation
+uploads keep 256-byte input bursts so protocol lines remain safe through
+screen-like relays. Mosh uses the current session, with no separate file
 connection. The executable name, path and TERM value do not select a mode.
 .PP
 Keep the outer workstation wrapper active across SSH hops and screen
@@ -2024,6 +2026,10 @@ through GNU screen, including screen boundaries hidden behind a relay. The
 Mosh title-state mode limits blocks to 256 bytes, then divides each wire line
 into short checked title updates. A stale or repeated update cannot append
 the same bytes twice.
+.PP
+Mosh downloads use 512-byte source blocks before the wire line is divided into
+the same short checked title updates. Workstation upload input remains capped
+at 256-byte bursts to preserve relay-safe paste handling.
 .SS Send to the workstation
 Type
 .B /send PATH
@@ -2096,9 +2102,10 @@ terminal commands and steering are unavailable while the transfer owns input;
 the agentic run and already-admitted controls continue independently. Per-frame
 I/O waits are bounded at 20 seconds; a missing wrapper returns a transfer error.
 Transfers through GNU screen use 1 KiB DATA blocks to keep input frames within
-its terminal input burst capacity; Mosh screen-state uses 256-byte blocks and
-checked, retransmitted short title frames. Native tmux byte streams use 8 KiB
-blocks with checked envelopes. Other connections use up to 64 KiB
+its terminal input burst capacity; Mosh screen-state uploads use 256-byte input
+bursts and downloads use 512-byte source blocks, with checked, retransmitted
+short title frames. Native tmux byte streams use 8 KiB blocks with checked
+envelopes. Other connections use up to 64 KiB
 blocks. An interrupted or lost screen frame fails without publishing an
 incomplete file.
 The native client removes unpublished temporary files on transfer failure;

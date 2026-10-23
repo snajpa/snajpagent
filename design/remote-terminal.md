@@ -76,8 +76,10 @@ An END title replaces the final retained data frame on completion or error.
 The wrapper ignores repeated HELLO titles during an exchange and retains the
 completed nonce so replay cannot start another exchange in the restored composer.
 The protocol-1 file codec, digest, receipts, collision-safe publication and
-terminal lease are shared with the fast SSH mode. The screen-state configuration
-advertises 256-byte DATA blocks and the frame wait is bounded at 20 seconds.
+terminal lease are shared with the fast SSH mode. The screen-state transfer
+advertises 512-byte DATA source blocks for Mosh downloads, while the native
+workstation upload client keeps 256-byte input bursts. The frame wait is bounded
+at 20 seconds.
 The final EXIT carries native receipt JSON with actual landed paths. The remote
 application restores its terminal lease before rendering that receipt through
 ordinary UI text, preserving the composer and cursor. Buffered post-transfer

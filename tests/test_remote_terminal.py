@@ -368,6 +368,35 @@ class RemoteStartupTests(unittest.TestCase):
             finally:
                 child.close()
 
+    def test_screen_state_download_batches_title_round_trips(self):
+        with tempfile.TemporaryDirectory(prefix="snag-screen-batch-") as tmp:
+            root = Path(tmp).resolve()
+            home = root / "client"
+            home.mkdir()
+            source = root / "incompressible.bin"
+            source.write_bytes(os.urandom(4096))
+            frames = root / "data-frames"
+            child = RemoteProcess(home, [sys.executable, "-u", str(SCREEN_FIXTURE),
+                                         str(PRODUCT), "--dotdir", str(root / "agent")],
+                                  extra_env={"SCREEN_FIXTURE_DATA_FRAMES": str(frames)})
+            try:
+                child.until("›".encode(), 10)
+                os.write(child.master, f"/send {source}\r".encode())
+                target = home / "Downloads" / source.name
+                output = child.until(str(target).encode(), 30)
+                self.assertEqual(target.read_bytes(), source.read_bytes())
+                wait_file(frames)
+                self.assertLessEqual(int(frames.read_text()), 48)
+                self.assertNotIn(b"SNAJPAGENT-SCREEN/1", output)
+                self.assertNotIn(b"#DATA:", output)
+                os.write(child.master, b"ping\r")
+                child.until(b"pong", 8)
+                os.write(child.master, b"/exit\r")
+                child.until(b"--resume", 8)
+                self.assertEqual(self.wait_exited(child), 0)
+            finally:
+                child.close()
+
     def test_screen_state_replayed_hello_does_not_restart_transfer(self):
         with tempfile.TemporaryDirectory(prefix="snag-screen-hello-replay-") as tmp:
             root = Path(tmp).resolve()
@@ -1062,7 +1091,7 @@ class RemoteStartupTests(unittest.TestCase):
                 child.close()
 
     def test_title_drop_ownership_release_leaves_paths_literal(self):
-        for form in ("released", "invalid", "nested"):
+        for form in ("released", "invalid", "nested", "text"):
             with self.subTest(form=form), tempfile.TemporaryDirectory(
                     prefix="snag-drop-release-") as tmp:
                 root = Path(tmp).resolve()
@@ -1081,12 +1110,14 @@ class RemoteStartupTests(unittest.TestCase):
                     print(data.hex(), flush=True)
                 ''').replace("MODES", repr(modes))
                 command = [sys.executable, "-u", "-c", code]
-                if form == "nested":
+                if form in ("nested", "text"):
                     command = [str(PRODUCT), "remote", *command]
                 child = RemoteProcess(root, command)
                 try:
                     child.until(b"READY", 8)
-                    data = b"\x1b[200~" + str(source).encode() + b"\x1b[201~"
+                    data = (b"\x1b[200~ordinary #DATA:1 SNAJPAGENT-SCREEN/1:DATA:"
+                            b"literal text\x1b[201~" if form == "text" else
+                            b"\x1b[200~" + str(source).encode() + b"\x1b[201~")
                     os.write(child.master, data)
                     output = child.until(data.hex().encode(), 8)
                     self.assertNotIn(b"SNAJPAGENT-SCREEN/1", output)

@@ -2,6 +2,17 @@
 
 # Qualification ledger
 
+## Mosh transfer batching and paste demultiplexing
+
+The permanent remote-terminal fixture transfers a 4 KiB incompressible file
+through retained title state and checks landed-byte integrity, protocol
+non-leakage, post-transfer input, clean exit and the bounded DATA-frame count.
+The implementation keeps 120-byte checked title frames and 256-byte
+workstation input bursts while using 512-byte Mosh download source blocks.
+The same fixture covers a nested wrapper receiving bracketed paste that contains
+protocol-looking text after drop ownership release; the text must reach the
+child literally.
+
 ## Standalone terminal panes
 
 Native Linux and macOS fixtures compare the actual standalone and workspace

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Batch Mosh title-state downloads in 512-byte source blocks while retaining
+  120-byte checked title frames and 256-byte workstation input bursts. Add
+  integrity and frame-count coverage for the long-latency path, and preserve
+  protocol-looking bracketed paste as literal text after drop ownership release.
+
 - Fix Windows stored-login inspection, reuse and logout by opening the state
   directory with permission to query its owner and ACL. Keep credential privacy
   checks intact, including for Unicode profile paths.
