@@ -69,6 +69,7 @@ snag_upload_cleanup(int stage_fd, struct snag_upload_result *result)
 #define SNAG_UPLOAD_FRAME_TIMEOUT_MS 20000u
 #define SNAG_UPLOAD_READ_CHUNK 4096u
 #define SNAG_UPLOAD_SCREEN_BLOCK 1024u
+#define SNAG_UPLOAD_MOSH_BLOCK 512u
 
 struct upload_io {
     int fd;
@@ -543,7 +544,8 @@ send_config(struct upload_io *io)
     /* screen's input queue can lose a large pasted protocol-1 DATA line.
      * Keep client DATA frames within a small raw-tty input burst there. */
     unsigned int block = io->title ?
-        (io->title_chunk == SNAG_SCREEN_STREAM_CHUNK ? SNAG_SCREEN_STREAM_CHUNK : 256u) :
+        (io->title_chunk == SNAG_SCREEN_STREAM_CHUNK ? SNAG_SCREEN_STREAM_CHUNK :
+         SNAG_UPLOAD_MOSH_BLOCK) :
         io->screen ? SNAG_UPLOAD_SCREEN_BLOCK : SNAG_UPLOAD_BLOCK_MAX;
     int n = snprintf(config, sizeof(config),
         "{\"lang\":\"c-snajpagent\",\"protocol\":1,\"binary\":false,"
@@ -855,7 +857,8 @@ snag_download_send(int tty, int file_fd, const char *name, const char *expected_
     uint64_t sent = 0;
     while (sent < (uint64_t)before.st_size) {
         size_t limit = io.title ?
-            (io.title_chunk == SNAG_SCREEN_STREAM_CHUNK ? SNAG_SCREEN_STREAM_CHUNK : 256u) :
+            (io.title_chunk == SNAG_SCREEN_STREAM_CHUNK ? SNAG_SCREEN_STREAM_CHUNK :
+             SNAG_UPLOAD_MOSH_BLOCK) :
             io.screen ? 1024u : sizeof(block);
         size_t want = (uint64_t)before.st_size - sent > limit ? limit :
                       (size_t)((uint64_t)before.st_size - sent);
