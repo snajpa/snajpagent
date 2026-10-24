@@ -19,6 +19,12 @@ Preserve the existing passing evidence and report its actual scope honestly.
 Fix known product failures and build failures; do not conceal them behind an
 earlier pass. Publication still requires the operator's shipment authority.
 
+Project shorthand: when the operator says **ship**, push the source to `origin`
+through `staging` and `master`, build the three macOS targets (Intel, Apple
+Silicon and universal), and build the native `snajpadev` executable. This is
+source and development-binary delivery, not a version bump, release tag,
+website deployment or full production-matrix release unless separately stated.
+
 ## One worktree per worker
 
 Every agent or concurrent worker uses its own `git worktree` for snajpagent.
