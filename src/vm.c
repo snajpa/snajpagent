@@ -6115,7 +6115,8 @@ draw(struct vm *vm)
         cursor = column - start_column + prefix_cells;
         if (cursor >= columns) cursor = columns - 1u;
     } else {
-        char line[sizeof(vm->message) + 32u];
+        static const char recover[] = "  Retained frontend input; :recover  ";
+        char line[sizeof(vm->message) + sizeof("COMMAND-LINE") + sizeof(recover) + 2u];
         const struct vm_window *window = &vm->windows[vm->focus];
         const char *mode = input_mode(vm, window);
         bool retained = false;
@@ -6124,7 +6125,7 @@ draw(struct vm *vm)
                 retained = true;
         bool labeled = !retained && !strncmp(vm->message, mode, strlen(mode));
         (void)snprintf(line, sizeof(line), "%s%s%s%s", labeled ? "" : mode,
-            retained ? "  Retained frontend input; :recover  " : "",
+            retained ? recover : "",
             labeled || !vm->message[0] || retained ? "" : "  ", vm->message);
         if (snag_vm_grid_text(&vm->grid, rows - 1u, 0u, columns,
             line, strlen(line), 0u) < 0) return -1;
