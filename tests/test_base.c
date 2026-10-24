@@ -2770,6 +2770,15 @@ test_platform(void)
     assert(next >= before);
     before = next;
     assert(snag_sleep_ms(20u) == 0 && snag_monotonic_ms() >= before + 1u);
+#ifdef __APPLE__
+    struct timespec uptime;
+    assert(clock_gettime(CLOCK_UPTIME_RAW, &uptime) == 0 && uptime.tv_sec >= 0);
+    uint64_t uptime_ms = (uint64_t)uptime.tv_sec * 1000u +
+                         (uint64_t)uptime.tv_nsec / 1000000u;
+    uint64_t session = snag_session_clock_ms();
+    uint64_t difference = session >= uptime_ms ? session - uptime_ms : uptime_ms - session;
+    assert(difference < 1000u);
+#endif
 #ifdef SNAJPAGENT_LEGACY_LINUX_CLOCK
     int __real_clock_gettime(clockid_t clock, struct timespec * out);
     struct timespec invalid_clock;
@@ -3495,11 +3504,11 @@ test_session_voice_client(void)
             SNAG_SESSION_VOICE_BYTES));
         relay_send_frame(target[1], SNAG_SESSION_READY, NULL, 0u);
         client_receive_frame(&client, target[1], SNAG_SESSION_COMMIT, &packet);
-        client.target_deadline = snag_monotonic_ms() + 1000u;
+        client.target_deadline = snag_session_clock_ms() + 1000u;
         relay_send_frame(target[1], SNAG_SESSION_PROGRESS, NULL, 0u);
         enum snag_session_message event;
         assert(snag_session_client_step(&client, 1, &event) == 0 && !event);
-        assert(client.target_deadline > snag_monotonic_ms() + 1000u);
+        assert(client.target_deadline > snag_session_clock_ms() + 1000u);
         assert(client.peer == source[0] && !client.peer_draining);
         if (trial == 6u) {
             relay_send_frame(target[1], SNAG_SESSION_ERROR, "unavailable", 11u);
@@ -3946,10 +3955,10 @@ relay_output_pressure(struct snag_session_relay *relay, int slave, int client)
             assert(length > 1u);
             assert(snag_session_relay_control(relay, SNAG_SESSION_DETACH, NULL, 0u) < 0 &&
                    errno == EAGAIN && !relay->closing);
-            relay->output_ack_deadline = snag_monotonic_ms() + 100u;
+            relay->output_ack_deadline = snag_session_clock_ms() + 100u;
             relay_ack_output(relay, client, length / 2u);
             assert(relay->output_length == length &&
-                   relay->output_ack_deadline > snag_monotonic_ms() + 1000u);
+                   relay->output_ack_deadline > snag_session_clock_ms() + 1000u);
             /* Control stays live while the next data frame waits for credit. */
             assert(snag_session_relay_control(relay, SNAG_SESSION_QUITTING, NULL, 0u) == 0);
             struct snag_session_packet control;
@@ -4057,7 +4066,7 @@ test_session_relay(void)
         enum snag_session_message event;
         assert(snag_session_relay_step(&relay, &listener, 1, &event) == 0 && !event);
     }
-    assert(relay.input_pending && relay.input_deadline > snag_monotonic_ms());
+    assert(relay.input_pending && relay.input_deadline > snag_session_clock_ms());
     assert(close(pair[1]) == 0);
     relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
     assert(relay.peer == -1 && relay.master == master);
@@ -4232,10 +4241,10 @@ test_session_relay(void)
             } else {
                 relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
                 relay_wait_event(&relay, &listener, SNAG_SESSION_COMMIT);
-                relay.handshake_deadline = snag_monotonic_ms() + 1000u;
+                relay.handshake_deadline = snag_session_clock_ms() + 1000u;
                 assert(snag_session_relay_control(&relay, SNAG_SESSION_PROGRESS, NULL, 0u) == 0);
                 relay_receive_frame(&relay, &listener, client, SNAG_SESSION_PROGRESS, &packet);
-                assert(relay.handshake_deadline > snag_monotonic_ms() + 1000u);
+                assert(relay.handshake_deadline > snag_session_clock_ms() + 1000u);
                 assert(snag_session_relay_activate(&relay, relay.generation, slave) == 0);
                 relay_receive_frame(&relay, &listener, client, SNAG_SESSION_READY, &packet);
                 unsigned char mode = (unsigned char)trial;

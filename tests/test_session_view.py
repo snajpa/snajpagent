@@ -161,6 +161,15 @@ class SessionViewTests(unittest.TestCase):
                 'os.execv(sys.argv[1], sys.argv[1:])\n')
             self.prefix = [sys.executable, str(launcher)] + self.prefix
         self.env = {'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'}
+        if self._testMethodName.startswith('test_sleep_'):
+            library = self.root / 'sleep-clock.dylib'
+            subprocess.run(['cc', '-dynamiclib', '-Wall', '-Wextra', '-Werror',
+                            str(Path(__file__).with_name('fixture_sleep_clock.c')),
+                            '-o', str(library)], check=True, capture_output=True)
+            self.sleep_clock = self.root / 'sleep-clock.bin'
+            self.sleep_clock.write_bytes(struct.pack('=q', 0))
+            self.env.update(DYLD_INSERT_LIBRARIES=str(library),
+                            SNAJPAGENT_TEST_SLEEP_CLOCK=str(self.sleep_clock))
         self.children = []
         self.views = []
         self.owner = None
@@ -385,6 +394,55 @@ class SessionViewTests(unittest.TestCase):
             self.assertTrue((self.directory / 'view.sock').exists())
         self.finish(self.initial, b'/exit')
         self.status('stored')
+
+    def test_terminal_close_releases_attachment_and_preserves_owner(self):
+        child = self.initial
+        child.remember_children()
+        os.close(child.slave)
+        child.slave = None
+        os.close(child.master)
+        child.master = None
+        child.process.wait(timeout=8)
+        self.status('detached')
+
+        resumed = self.start(['--resume', self.sid])
+        resumed.until(b'Attached session', 10)
+        self.status('attached')
+        self.assertEqual(self.identity(), self.owner_identity)
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Darwin sleep clock semantics')
+    def test_sleep_preserves_pending_output_and_owner(self):
+        requested = threading.Event()
+
+        def respond(handler, request, sequence):
+            requested.set()
+            self.release.wait(10)
+            body = self.provider.response_body(sequence, 'awake-ok')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        os.write(self.initial.master, b'keep running across sleep\r')
+        self.assertTrue(requested.wait(10), 'owner did not start the request')
+        os.kill(self.initial.process.pid, signal.SIGSTOP)
+        try:
+            self.release.set()
+            self.wait_event('turn_completed')
+            # Leave an output acknowledgement pending, then advance only the
+            # Darwin clock that includes sleep. No host or provider is suspended.
+            time.sleep(.1)
+            temporary = self.sleep_clock.with_suffix('.new')
+            temporary.write_bytes(struct.pack('=q', 60))
+            temporary.replace(self.sleep_clock)
+            time.sleep(.1)
+        finally:
+            os.kill(self.initial.process.pid, signal.SIGCONT)
+        self.initial.until(b'awake-ok', 10)
+        self.status('attached')
+        self.assertIsNone(self.initial.process.poll(), bytes(self.initial.output))
+        self.assertEqual(self.identity(), self.owner_identity)
+        os.write(self.initial.master, b'/fast off\r')
+        self.initial.until(b'Fast mode: OFF', 5)
+        self.assertEqual(len(self.provider.requests), 1)
 
     def test_observer_is_read_only_and_snapshot_is_a_committed_prefix(self):
         peer = self.view()
