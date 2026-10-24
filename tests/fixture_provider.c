@@ -262,6 +262,21 @@ add_timer_call(struct snag_response_graph *graph, unsigned int cycle, unsigned i
         json_pack("{s:I,s:s}", "delay_ms", (json_int_t)delay_ms, "text", text));
 }
 
+static bool
+timer_id_from_request(const json_t *request, char id[SNAG_ID_HEX_LEN + 1u])
+{
+    const json_t *input = json_object_get(request, "input");
+    for (size_t i = 0u; i < json_array_size(input); ++i) {
+        const char *text = snag_json_string(json_array_get(input, i), "content");
+        const char *marker = text ? strstr(text, "Armed model timer ") : NULL;
+        char separator;
+        if (marker && sscanf(marker, "Armed model timer %32[0123456789abcdef]%c",
+                          id, &separator) == 2 &&
+            strlen(id) == SNAG_ID_HEX_LEN && separator == ':') return true;
+    }
+    return false;
+}
+
 static int
 add_defer_steering_call(struct snag_response_graph *graph, unsigned int cycle, unsigned int index)
 {
@@ -269,24 +284,19 @@ add_defer_steering_call(struct snag_response_graph *graph, unsigned int cycle, u
 }
 
 static int
-add_timer_cancel_call(struct snag_response_graph *graph, unsigned int cycle, unsigned int index)
+add_timer_cancel_call(struct snag_response_graph *graph, unsigned int cycle, unsigned int index,
+    const char *id)
 {
-    return indexed_call(
-        graph, cycle, index, "timer", json_pack("{s:I,s:n}", "delay_ms", (json_int_t)0, "text"));
+    return indexed_call(graph, cycle, index, "timer",
+        json_pack("{s:s,s:s,s:n}", "action", "cancel", "id", id, "text"));
 }
 
 static int
-add_timer_replacement_calls(struct snag_response_graph *graph, unsigned int cycle)
+add_timer_replacement_call(struct snag_response_graph *graph, unsigned int cycle, const char *id)
 {
-    if (add_timer_call(graph, cycle, 0u, 1000u, "timer original") < 0) return -1;
-    return add_timer_call(graph, cycle, 1u, 25u, "timer replacement fired");
-}
-
-static int
-add_timer_cancellation_calls(struct snag_response_graph *graph, unsigned int cycle)
-{
-    if (add_timer_call(graph, cycle, 0u, 1000u, "timer cancellation fired") < 0) return -1;
-    return add_timer_cancel_call(graph, cycle, 1u);
+    return indexed_call(graph, cycle, 0u, "timer",
+        json_pack("{s:s,s:s,s:I,s:s}", "action", "schedule", "id", id,
+            "delay_ms", (json_int_t)25, "text", "timer replacement fired"));
 }
 
 static int
@@ -548,14 +558,27 @@ fixture_response(const char *prompt, const json_t *steering, const json_t *reque
         return final_answer(&out, "msg_fixture_timer_fired", "timer reminder handled");
     }
     if (strcmp(prompt, "timer_replace_test") == 0) {
-        if (cycle == 1u) return add_timer_replacement_calls(graph, cycle);
+        if (cycle == 1u) return add_timer_call(graph, cycle, 0u, 1000u, "timer original");
+        if (cycle == 2u) {
+            char id[SNAG_ID_HEX_LEN + 1u];
+            if (!timer_id_from_request(request, id))
+                return snag_errorf(error, error_size, "fixture did not receive timer ID");
+            return add_timer_replacement_call(graph, cycle, id);
+        }
         return final_answer(&out, "msg_fixture_timer_replaced", "timer replacement scheduled");
     }
     if (strcmp(prompt, "timer replacement fired") == 0)
         return final_answer(
             &out, "msg_fixture_timer_replacement_fired", "timer replacement handled");
     if (strcmp(prompt, "timer_cancel_test") == 0) {
-        if (cycle == 1u) return add_timer_cancellation_calls(graph, cycle);
+        if (cycle == 1u)
+            return add_timer_call(graph, cycle, 0u, 1000u, "timer cancellation fired");
+        if (cycle == 2u) {
+            char id[SNAG_ID_HEX_LEN + 1u];
+            if (!timer_id_from_request(request, id))
+                return snag_errorf(error, error_size, "fixture did not receive timer ID");
+            return add_timer_cancel_call(graph, cycle, 0u, id);
+        }
         return final_answer(&out, "msg_fixture_timer_cancelled", "timer cancelled");
     }
     if (strncmp(prompt, "irc_host_test ", sizeof("irc_host_test ") - 1u) == 0) {
@@ -596,14 +619,17 @@ fixture_response(const char *prompt, const json_t *steering, const json_t *reque
         if (cycle == 1u) return add_irc_send_call(graph, cycle, 0u, "no destination");
         return final_answer(&out, "msg_fixture_irc_refused", "IRC refusal handled");
     }
-    if (strcmp(prompt, SNAG_GOAL_CONTINUATION_TEXT) == 0) {
+    if (strcmp(prompt, SNAG_GOAL_CONTINUATION_TEXT) == 0 ||
+        !strncmp(prompt, "Resume work on the goals made active by this /goal resume command.",
+            sizeof("Resume work on the goals made active by this /goal resume command.") - 1u)) {
         if (!goal_prompt) goto allocation;
         if (strcmp(goal_prompt, "failing goal") == 0 && cycle <= 4u)
             return snag_errorf(error, error_size, "fixture goal provider failed");
         if (strcmp(goal_prompt, "refusing goal") == 0)
             return emit_public(&out, SNAG_ITEM_REFUSAL, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_goal_refusal", "I cannot continue this goal.", 0);
-        if (strcmp(goal_prompt, "slow goal") == 0 && goal_turn_count == 1u) {
+        if (strcmp(goal_prompt, "slow goal") == 0 && goal_turn_count == 1u &&
+            !strcmp(prompt, SNAG_GOAL_CONTINUATION_TEXT)) {
             if (cycle == 1u) {
                 if (emit_public(&out, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
                         "msg_fixture_goal_slow_commentary", "working on goal\n", 0) < 0)

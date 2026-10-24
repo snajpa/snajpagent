@@ -2815,7 +2815,7 @@ def test_resume_preserves_armed_fifo():
 
 def test_goal_quoted_reserved_wording():
     child = Child([], PROMPT.rstrip())
-    error_end = child.send_wait(b"/goal pause after release\r", b"reserved /goal command has extra text")
+    error_end = child.send_wait(b"/goal pause after release\r", b"specify an unfinished goal ID from /goal")
     child.wait(PROMPT.rstrip(), start=error_end)
     answer_end = child.send_wait(b'/goal "pause after release"\r', b"goal done")
     status_end = child.send_wait(b"/goal\r", b": completed", start=answer_end)
@@ -2844,7 +2844,9 @@ def test_timer_wakes_an_ordinary_model_turn():
     log = events(session_id)
     turns = [event for event in log if event["type"] == "turn_started"]
     scheduled = one(log, "timer_scheduled")
-    fired = one(log, "timer_fired")
+    fired = one([event for event in log
+                 if event["type"] == "input_received" and event["data"].get("origin") == "timer"],
+                "input_received")
     assert len(turns) == 2
     assert turns[0]["data"]["input_kind"] == "direct"
     assert turns[0]["data"]["text"] == "timer_test"
@@ -2863,7 +2865,9 @@ def test_timer_wakes_while_goal_stays_blocked():
     turns = [event for event in log if event["type"] == "turn_started"]
     blocked = one(log, "goal_blocked")
     scheduled = one(log, "timer_scheduled")
-    fired = one(log, "timer_fired")
+    fired = one([event for event in log
+                 if event["type"] == "input_received" and event["data"].get("origin") == "timer"],
+                "input_received")
     assert [turn["data"]["input_kind"] for turn in turns] == ["goal", "timer"]
     assert turns[1]["data"]["text"] == "timer fired"
     assert blocked["seq"] < scheduled["seq"] < fired["seq"] < turns[1]["seq"]
@@ -2880,11 +2884,13 @@ def test_timer_replacement_and_cancellation():
     replacement_turns = [event for event in replacement_log if event["type"] == "turn_started"]
     replacement_scheduled = [event for event in replacement_log if event["type"] == "timer_scheduled"]
     replacement_cancelled = [event for event in replacement_log if event["type"] == "timer_cancelled"]
-    replacement_fired = [event for event in replacement_log if event["type"] == "timer_fired"]
+    replacement_fired = [event for event in replacement_log
+                         if event["type"] == "input_received" and
+                         event["data"].get("origin") == "timer"]
     assert [event["data"]["text"] for event in replacement_scheduled] == [
         "timer original", "timer replacement fired"]
-    assert len(replacement_cancelled) == 1 and len(replacement_fired) == 1
-    assert replacement_cancelled[0]["data"]["timer_id"] == replacement_scheduled[0]["data"]["timer_id"]
+    assert not replacement_cancelled and len(replacement_fired) == 1
+    assert replacement_scheduled[0]["data"]["timer_id"] == replacement_scheduled[1]["data"]["timer_id"]
     assert replacement_fired[0]["data"]["timer_id"] == replacement_scheduled[1]["data"]["timer_id"]
     assert [turn["data"]["text"] for turn in replacement_turns] == [
         "timer_replace_test", "timer replacement fired"]
@@ -2903,7 +2909,8 @@ def test_timer_replacement_and_cancellation():
     assert [event["data"]["text"] for event in cancellation_scheduled] == ["timer cancellation fired"]
     assert len(cancellation_cancelled) == 1
     assert cancellation_cancelled[0]["data"]["timer_id"] == cancellation_scheduled[0]["data"]["timer_id"]
-    assert not [event for event in cancellation_log if event["type"] == "timer_fired"]
+    assert not [event for event in cancellation_log
+                if event["type"] == "input_received" and event["data"].get("origin") == "timer"]
     assert [turn["data"]["text"] for turn in cancellation_turns] == ["timer_cancel_test"]
 
 
@@ -3188,7 +3195,7 @@ def test_goal_pause_resume_and_queue_priority():
     assert one(log, "goal_paused")["data"]["reason"] == "user"
     one(log, "goal_resumed")
     turns = [item for item in log if item["type"] == "turn_started"]
-    assert [item["data"]["input_kind"] for item in turns] == ["goal", "goal"]
+    assert [item["data"]["input_kind"] for item in turns] == ["goal", "direct"]
 
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal slow goal\r", b"working on goal")
@@ -3226,7 +3233,7 @@ def test_goal_clear_controls_continuation():
             assert cancelled["data"]["goal_id"] == one(log, "goal_started")["data"]["goal_id"]
             assert not [e for e in log if e["type"] in ("goal_reworded", "goal_replaced")]
             assert len([e for e in log if e["type"] == "turn_started"]) == 1
-            end = child.send_wait_idle(b"/goal resume\r", b"only a paused or blocked goal", start=end)
+            end = child.send_wait_idle(b"/goal resume\r", b": cancelled", start=end)
             child.exit_now()
         before = len(events(session_id))
         with Child(["--resume", session_id], ready=DEFAULT_ACCOUNTED_IDLE_PROMPT) as child:
@@ -3288,10 +3295,10 @@ def test_goal_control_whitespace():
         end = child.wait_idle_prompt(start=end)
         end = child.send_wait_idle(b"/goal   status   \r", b": paused", start=end)
         end = child.send_wait_idle(b"/goal    \r", b": paused", start=end)
-        end = child.send_wait_idle(b"/goal help   \r", b"clear=cancel", start=end)
-        end = child.send_wait_idle(b"/goal clear extra\r", b"reserved /goal command has extra text", start=end)
-        end = child.send_wait_idle(b"/goal pause extra\r", b"reserved /goal command has extra text", start=end)
-        end = child.send_wait_idle(b"/goal resume extra\r", b"reserved /goal command has extra text", start=end)
+        end = child.send_wait_idle(b"/goal help   \r", b"end one goal; ID required if ambiguous", start=end)
+        end = child.send_wait_idle(b"/goal clear extra\r", b"specify an unfinished goal ID from /goal", start=end)
+        end = child.send_wait_idle(b"/goal pause extra\r", b"specify an unfinished goal ID from /goal", start=end)
+        end = child.send_wait_idle(b"/goal resume extra\r", b"specify an unfinished goal ID from /goal", start=end)
         end = child.send_wait_idle(b"/goal lock   \r", b"Goal wording locked", start=end)
         end = child.send_wait_idle(b"/goal unlock   \r", b"Goal wording unlocked", start=end)
         end = child.send_wait_idle(b"\x1b[200~/goal\tresume\t \x1b[201~\r", b"goal done", start=end)
@@ -3299,7 +3306,7 @@ def test_goal_control_whitespace():
     log = events(child.session_id())
     one(log, "goal_paused")
     one(log, "goal_resumed")
-    assert [e["data"]["input_kind"] for e in log if e["type"] == "turn_started"] == ["goal", "goal"]
+    assert [e["data"]["input_kind"] for e in log if e["type"] == "turn_started"] == ["goal", "direct"]
     assert not [e for e in log if e["type"] in ("goal_reworded", "goal_replaced")]
 
 
@@ -3316,13 +3323,13 @@ def test_goal_control_whitespace():
 
 def test_goal_clear_without_goal_and_reserved_wording():
     with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
-        end = child.send_wait_idle(b"/goal clear\r", b"no unfinished goal can be cancelled")
+        end = child.send_wait_idle(b"/goal clear\r", b"specify an unfinished goal ID from /goal")
         child.assert_unsubmitted()
         end = child.send_wait_idle(b"/goal blocked goal\r", b"goal done", start=end)
-        end = child.send_wait_idle(b'/goal "clear the build directory"\r', GOAL_UPDATED, start=end)
+        end = child.send_wait_idle(b'/goal set "clear the build directory"\r', GOAL_UPDATED, start=end)
         end = child.send_wait_idle(b"/goal set clear the cache\r", GOAL_UPDATED, start=end)
         end = child.send_wait_idle(b"/goal clear   \r", GOAL_CLEARED, start=end)
-        end = child.send_wait_idle(b"/goal clear\r", b"no unfinished goal can be cancelled", start=end)
+        end = child.send_wait_idle(b"/goal clear\r", b"specify an unfinished goal ID from /goal", start=end)
         child.exit_now()
     log = events(child.session_id())
     started = one(log, "goal_started")
@@ -3663,10 +3670,10 @@ def test_help_plain_terminal():
         for command in (b"/help\r", b"/?\r", b"/goal help\r"):
             start = len(child.buf)
             child.send(command)
-            end = child.wait(b"clear=cancel", start=start)
+            end = child.wait(b"end one goal; ID required if ambiguous", start=start)
             child.wait_idle_prompt(start=end)
             text = bytes(child.buf[start:])
-            assert b"[optional]" in text and b"/state goal [set] TEXT" in text
+            assert b"[optional]" in text and b"/state goal [add] TEXT" in text
             assert b"\x1b" not in text
             if command != b"/goal help\r":
                 for heading in HELP_SECTIONS:
@@ -3700,14 +3707,14 @@ def test_help_pager():
             end = child.wait(b"help-pager-ready", start=start)
             text = capture.read_bytes()
             assert b"\x1b" not in text, text
-            assert b"/state goal [set] TEXT" in text, text
+            assert b"/state goal [add] TEXT" in text, text
             if command == b"/goal help\r":
                 assert b"/send PATH" not in text, text
             else:
                 for heading in HELP_SECTIONS:
                     assert heading in text, text
                 assert text.count(b"/send PATH") == 1, text
-            assert b"/state goal [set] TEXT" not in child.buf[start:], child.buf[start:]
+            assert b"/state goal [add] TEXT" not in child.buf[start:], child.buf[start:]
             child.send(b"\r")
             child.wait_idle_prompt(start=end)
         child.send_wait_idle(b"ping\r", b"pong")
