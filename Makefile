@@ -50,10 +50,10 @@ override CPPFLAGS += -DSNAJPAGENT_NAME='"$(NAME)"' -DSNAJPAGENT_VERSION='"$(BUIL
 override CFLAGS += -pthread
 override LDFLAGS += -pthread
 
-# Poppler 26 reshaped two C++ APIs src/pdf.cpp uses (BaseStream::copy now
-# returns unique_ptr, SplashOutputDev takes the paper color by pointer).
-# Detect through the selected pkg-config so cross builds inspect their target
-# Poppler, not the build host.  configure records a concrete 0 or 1.
+# Poppler 25.10 changed BaseStream::makeSubStream to return unique_ptr.
+# Poppler 26 also reshaped BaseStream::copy and SplashOutputDev. Detect each
+# through the selected pkg-config so cross builds inspect their target Poppler,
+# not the build host. configure records concrete 0 or 1 values.
 PKG_CONFIG ?= pkg-config
 ifeq ($(HAVE_POPPLER_NEW_API),auto)
 POPPLER_NEW_API := $(shell $(PKG_CONFIG) --atleast-version=26 poppler >/dev/null 2>&1 && printf 1 || printf 0)
@@ -65,6 +65,16 @@ else
 $(error HAVE_POPPLER_NEW_API must be auto, 0 (poppler to 25.x API) or 1 (poppler 26 API))
 endif
 override CPPFLAGS += -DHAVE_POPPLER_NEW_API=$(POPPLER_NEW_API)
+ifeq ($(HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR),auto)
+POPPLER_SUBSTREAM_UNIQUE_PTR := $(shell $(PKG_CONFIG) --atleast-version=25.10 poppler >/dev/null 2>&1 && printf 1 || printf 0)
+else ifeq ($(HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR),0)
+POPPLER_SUBSTREAM_UNIQUE_PTR := 0
+else ifeq ($(HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR),1)
+POPPLER_SUBSTREAM_UNIQUE_PTR := 1
+else
+$(error HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR must be auto, 0 (legacy return) or 1 (unique_ptr return))
+endif
+override CPPFLAGS += -DHAVE_POPPLER_SUBSTREAM_UNIQUE_PTR=$(POPPLER_SUBSTREAM_UNIQUE_PTR)
 
 BIN = $(NAME)
 TARGET_OS := $(shell uname -s)

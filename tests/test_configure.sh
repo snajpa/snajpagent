@@ -92,7 +92,7 @@ check 'all-off run' 0 changed \
 	--without-av --without-pdf --without-audio-device \
 	--without-office --without-office-commands
 keys=$(diff "$tmp/pristine.mk" "$tmp/config.mk" | grep -c '^[<>]')
-[ "$keys" = 8 ] || fail "all-off run changed $keys lines, expected 8 (four detected keys)"
+[ "$keys" = 10 ] || fail "all-off run changed $keys lines, expected 10 (five detected keys)"
 
 cp "$tmp/config.mk" "$tmp/once.mk"
 (cd "$tmp" && sh ./configure --without-av --without-pdf --without-audio-device \
@@ -135,11 +135,13 @@ fixture_zstd_libs=${ZSTD_LIBS:-$(pkg-config --libs libzstd 2>/dev/null)}
 	ZSTD_CFLAGS="$fixture_zstd_cflags" ZSTD_LIBS="$fixture_zstd_libs" \
 	PATH="$tmp/native-bin:$PATH" PKG_CONFIG="$tmp/target-pkg-config" \
 	sh ./configure --without-av --with-pdf --without-audio-device \
-	--without-office --without-office-commands >"$tmp/out3" 2>&1)
+	--without-vm --without-office --without-office-commands >"$tmp/out3" 2>&1)
 rc=$?
 [ "$rc" = 0 ] || fail "target pkg-config run exited $rc"
 grep -Fqx 'HAVE_POPPLER_NEW_API ?= 0' "$tmp/config.mk" ||
 	fail 'Poppler API detection did not use the selected target pkg-config'
+grep -Fqx 'HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR ?= 0' "$tmp/config.mk" ||
+	fail 'Poppler substream API detection did not use the selected target pkg-config'
 
 # Device audio requires the echo processor too, using the target's metadata.
 cat >"$tmp/audio-cc" <<'EOF'
@@ -186,7 +188,7 @@ done
 
 # The pinned macOS Poppler is newer than the legacy host default even though
 # its version is below the Poppler 26 threshold used by configure.
-grep -Fq "'HAVE_POPPLER_NEW_API=1'" ./nix/macos.nix ||
+grep -Fq "'HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR=1'" ./nix/macos.nix ||
 	fail 'macOS recipe does not select its pinned Poppler API generation'
 
 if [ "$fails" -ne 0 ]; then

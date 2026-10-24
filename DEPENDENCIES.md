@@ -189,10 +189,11 @@ cryptography. These libraries offer GPLv2-compatible license options for the
 application's GPL-2.0-only distribution terms.
 FFmpeg and Poppler are reached through narrow file-only adapters in `src/av.c`
 and `src/pdf.cpp`; PDF requires C++20. The host Poppler 24 build uses the
-legacy stream and null-object APIs, while the pinned macOS Poppler 25.10 build
-already uses the newer `unique_ptr` stream and null-object APIs. Host builds
-against the latter pass `HAVE_POPPLER_NEW_API=1` on the make line; the macOS
-recipe sets it explicitly. Miniaudio is compiled once in
+legacy stream API, while the pinned macOS Poppler 25.10 build uses the newer
+`unique_ptr` return type only for `makeSubStream`; its other affected APIs
+retain the legacy shape. `HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR=1` selects that
+stream signature, and `HAVE_POPPLER_NEW_API=1` remains the Poppler 26 switch
+for the other API changes. Miniaudio is compiled once in
 `src/miniaudio.c` from its dependency header. The low-level device callback
 moves native PCM and applies SpeexDSP 1.2.1 echo cancellation to duplex capture;
 engine, resource manager, node graph and file decoders are disabled. SpeexDSP

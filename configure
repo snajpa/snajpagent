@@ -268,8 +268,12 @@ if [ "$WITH_PDF" = 0 ] && [ "$want_pdf" = require ]; then
 	die 'linked PDF was required but the Poppler or libpng development files were not found'
 fi
 HAVE_POPPLER_NEW_API=0
+HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR=0
 if [ "$WITH_PDF" = 1 ] && "$PKG_CONFIG" --atleast-version=26 poppler >/dev/null 2>&1; then
 	HAVE_POPPLER_NEW_API=1
+	HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR=1
+elif [ "$WITH_PDF" = 1 ] && "$PKG_CONFIG" --atleast-version=25.10 poppler >/dev/null 2>&1; then
+	HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR=1
 fi
 
 # --- audio device backend (miniaudio) -----------------------------------
@@ -382,6 +386,7 @@ set_key WITH_VM "$WITH_VM"
 set_key WITH_AV "$WITH_AV"
 set_key WITH_PDF "$WITH_PDF"
 set_key HAVE_POPPLER_NEW_API "$HAVE_POPPLER_NEW_API"
+set_key HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR "$HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR"
 set_key WITH_AUDIO_DEVICE "$WITH_AUDIO_DEVICE"
 set_key WITH_OFFICE "$WITH_OFFICE"
 set_key WITH_OFFICE_COMMANDS "$WITH_OFFICE_COMMANDS"
@@ -391,7 +396,7 @@ set_key WITH_OFFICE_COMMANDS "$WITH_OFFICE_COMMANDS"
 printf 'configure: C compiler %s; pkg-config %s\n' "$CC" "$have_pc"
 printf 'configure: vm=%s\n' "$WITH_VM"
 printf 'configure: av=%s (%s)\n' "$WITH_AV" "$av_note"
-printf 'configure: pdf=%s (%s; API generation %s)\n' "$WITH_PDF" "$pdf_note" "$HAVE_POPPLER_NEW_API"
+printf 'configure: pdf=%s (%s; API generation %s; substream API %s)\n' "$WITH_PDF" "$pdf_note" "$HAVE_POPPLER_NEW_API" "$HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR"
 printf 'configure: audio-device=%s (%s)\n' "$WITH_AUDIO_DEVICE" "$audio_note"
 printf 'configure: office=%s (%s)\n' "$(if [ "$WITH_OFFICE" = 1 ]; then printf kit; elif [ "$WITH_OFFICE_COMMANDS" = 1 ]; then printf commands; else printf off; fi)" "$office_note"
 [ "$cross_cxx_missing" = yes ] &&

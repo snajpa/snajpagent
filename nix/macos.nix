@@ -349,9 +349,10 @@ in {
           'TARGET_OS=Darwin'
           'WITH_AUDIO_DEVICE=1'
           'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
-          # The pinned macOS Poppler is 25.10 and already uses the unique_ptr
-          # stream and null-object APIs selected by this compatibility flag.
-          'HAVE_POPPLER_NEW_API=1'
+          # The pinned macOS Poppler is 25.10: only makeSubStream has the
+          # unique_ptr return type; its other APIs retain the legacy shape.
+          'HAVE_POPPLER_NEW_API=0'
+          'HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR=1'
           'CC=${compiler} --target=${target} -isysroot ${sdk}'
           'CXX=${llvm.clang-unwrapped}/bin/clang++ --target=${target} -isysroot ${sdk}'
           'STRIP=${if legacyLoader then builtins.dirOf linker + "/x86_64-apple-darwin-strip" else tools + "/llvm-strip"}'

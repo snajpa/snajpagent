@@ -62,7 +62,7 @@ public:
 #else
     BaseStream *copy() override { return new Snapshot(input, start, limited, length, dict.copy()); }
 #endif
-#if HAVE_POPPLER_NEW_API
+#if HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR
     std::unique_ptr<Stream> makeSubStream(Goffset at, bool bounded, Goffset size, Object &&dict) override {
 #else
     Stream *makeSubStream(Goffset at, bool bounded, Goffset size, Object &&dict) override {
@@ -70,7 +70,7 @@ public:
         if (at < 0 || size < 0 || at > input->size || (bounded && size > input->size - at)) {
             input->stopped = -1; at = 0; bounded = true; size = 0;
         }
-#if HAVE_POPPLER_NEW_API
+#if HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR
         return std::make_unique<Snapshot>(input, at, bounded, size, std::move(dict));
 #else
         return new Snapshot(input, at, bounded, size, std::move(dict));

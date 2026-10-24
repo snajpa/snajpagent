@@ -53,6 +53,7 @@ override CPPFLAGS += -DSNAJPAGENT_AV=$(WITH_AV) $(AV_CFLAGS)
 override LDLIBS += $(AV_LIBS)
 WITH_PDF ?= 1
 HAVE_POPPLER_NEW_API ?= auto
+HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR ?= auto
 ifeq ($(WITH_PDF),1)
 CXX ?= c++
 CXXFLAGS ?= $(filter-out -std=c11,$(CFLAGS)) -std=c++20
