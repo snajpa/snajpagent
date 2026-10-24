@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Restore linked PDF builds against Poppler 24's legacy stream and null-object
+  APIs while retaining the Poppler 26 compatibility path.
+
 - Batch Mosh title-state downloads in 512-byte source blocks while retaining
   120-byte checked title frames and 256-byte workstation input bursts. Add
   integrity and frame-count coverage for the long-latency path, and preserve

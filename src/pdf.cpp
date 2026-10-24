@@ -62,11 +62,19 @@ public:
 #else
     BaseStream *copy() override { return new Snapshot(input, start, limited, length, dict.copy()); }
 #endif
+#if HAVE_POPPLER_NEW_API
     std::unique_ptr<Stream> makeSubStream(Goffset at, bool bounded, Goffset size, Object &&dict) override {
+#else
+    Stream *makeSubStream(Goffset at, bool bounded, Goffset size, Object &&dict) override {
+#endif
         if (at < 0 || size < 0 || at > input->size || (bounded && size > input->size - at)) {
             input->stopped = -1; at = 0; bounded = true; size = 0;
         }
+#if HAVE_POPPLER_NEW_API
         return std::make_unique<Snapshot>(input, at, bounded, size, std::move(dict));
+#else
+        return new Snapshot(input, at, bounded, size, std::move(dict));
+#endif
     }
 };
 static std::once_flag initialized;
@@ -139,7 +147,7 @@ snag_pdf_open(const char *path, int (*pump)(void *, unsigned int), void *opaque,
 #if HAVE_POPPLER_NEW_API
         pdf->doc = std::make_unique<PDFDoc>(std::make_unique<Snapshot>(pdf->input, 0, false, in.size, Object::null()));
 #else
-        pdf->doc = std::make_unique<PDFDoc>(new Snapshot(pdf->input, 0, false, in.size, Object::null()));
+        pdf->doc = std::make_unique<PDFDoc>(new Snapshot(pdf->input, 0, false, in.size, Object(objNull)));
 #endif
         if (in.stop()) { snag_errorf(error, size, "PDF loading interrupted or bounded input exhausted"); return in.stopped == 2 ? 2 : -1; }
         if (!pdf->doc->isOk() || pdf->doc->isEncrypted() || pdf->doc->getNumPages() < 1 || pdf->doc->getNumPages() > 100000) throw 0;
