@@ -184,6 +184,11 @@ for available in yes no; do
     fi
 done
 
+# The pinned macOS Poppler is newer than the legacy host default even though
+# its version is below the Poppler 26 threshold used by configure.
+grep -Fq "'HAVE_POPPLER_NEW_API=1'" ./nix/macos.nix ||
+	fail 'macOS recipe does not select its pinned Poppler API generation'
+
 if [ "$fails" -ne 0 ]; then
 	printf 'test_configure: %s check(s) failed\n' "$fails"
 	exit 1
