@@ -11,18 +11,34 @@ With a 100 ms terminal-input delay, the exchange uses 54 acknowledged title
 messages rather than the prior implementation's 70. The prior implementation
 fails the permanent frame-count regression. This measures title exchanges in a
 controlled relay, not throughput on an arbitrary lossy network.
-Four alternating timing runs measured 14.51 s and 14.41 s before the change,
-then 11.04 s and 11.04 s after it. The same run retained exact file bytes and
-the 70-to-54 title counts; this is controlled fixture evidence, not a WAN
-benchmark.
+Four timing runs in before/after/after/before order measured 14.51 s and
+14.41 s before the change and 11.04 s and 11.04 s after it. The same runs
+retained exact file bytes and the 70-to-54 title counts; this is controlled
+fixture evidence, not a WAN benchmark.
 The implementation keeps 120-byte checked title frames and 256-byte
 workstation input bursts while using 512-byte Mosh download source blocks.
 The same fixture covers a nested wrapper receiving bracketed paste that contains
 protocol-looking text after drop ownership release; the text must reach the
 child literally. All 49 Linux remote-terminal cases pass with the lean
 workspace-enabled fixture, including stock Mosh, retry, cancellation, timeout,
-resize and paste checks. Full-capability receiving results are recorded
-separately from this lean fixture run.
+resize and paste checks.
+
+Full-capability receiving builds pass the affected native suites. Counts below
+include the reported capability skips; a skip is outside the passing scope.
+Stock Mosh is available on the Mac and lean Linux receivers. Three supplementary
+cases on each transfer 4 KiB incompressible files in both directions, including
+editable-draft preservation during file drop and initial file drop.
+
+| Full-capability target | Remote terminal | Upload client | Download client | Paste display | Login storage |
+| --- | --- | --- | --- | --- | --- |
+| Linux x86_64 | 49 tests, 5 skipped | 14 tests, 4 skipped | 22 tests, 5 skipped | 1 passed | 4 passed |
+| macOS ARM64 | 49 tests, 2 skipped | 14 tests, 6 skipped | 22 tests, 6 skipped | 1 passed | 4 passed |
+
+Two matched delayed transfers per implementation also reduce observed application
+family allocation calls, requested bytes and out-of-line copy calls and bytes.
+The tracing includes the transfer's libc allocation/copy entrypoints and child
+process lifetimes. Compiler-inlined copies, other entrypoints and kernel copies
+remain outside that measurement.
 
 ## Standalone terminal panes
 
