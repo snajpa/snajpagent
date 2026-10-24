@@ -5,7 +5,7 @@
 ## Unreleased
 
 - Restore linked PDF builds against Poppler 24's legacy stream and null-object
-  APIs, and select Poppler 25.10's newer `makeSubStream` signature for macOS.
+  APIs, and select Poppler 25.10's newer stream and null-object APIs for macOS.
 
 - Batch Mosh title-state downloads in 512-byte source blocks while retaining
   120-byte checked title frames and 256-byte workstation input bursts. Add

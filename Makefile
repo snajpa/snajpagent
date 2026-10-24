@@ -50,7 +50,8 @@ override CPPFLAGS += -DSNAJPAGENT_NAME='"$(NAME)"' -DSNAJPAGENT_VERSION='"$(BUIL
 override CFLAGS += -pthread
 override LDFLAGS += -pthread
 
-# Poppler 25.10 changed BaseStream::makeSubStream to return unique_ptr.
+# Poppler 25.10 changed BaseStream::makeSubStream to return unique_ptr and
+# made the Object null constructor private.
 # Poppler 26 also reshaped BaseStream::copy and SplashOutputDev. Detect each
 # through the selected pkg-config so cross builds inspect their target Poppler,
 # not the build host. configure records concrete 0 or 1 values.

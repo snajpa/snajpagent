@@ -147,7 +147,11 @@ snag_pdf_open(const char *path, int (*pump)(void *, unsigned int), void *opaque,
 #if HAVE_POPPLER_NEW_API
         pdf->doc = std::make_unique<PDFDoc>(std::make_unique<Snapshot>(pdf->input, 0, false, in.size, Object::null()));
 #else
+#if HAVE_POPPLER_SUBSTREAM_UNIQUE_PTR
+        pdf->doc = std::make_unique<PDFDoc>(new Snapshot(pdf->input, 0, false, in.size, Object::null()));
+#else
         pdf->doc = std::make_unique<PDFDoc>(new Snapshot(pdf->input, 0, false, in.size, Object(objNull)));
+#endif
 #endif
         if (in.stop()) { snag_errorf(error, size, "PDF loading interrupted or bounded input exhausted"); return in.stopped == 2 ? 2 : -1; }
         if (!pdf->doc->isOk() || pdf->doc->isEncrypted() || pdf->doc->getNumPages() < 1 || pdf->doc->getNumPages() > 100000) throw 0;
