@@ -1122,7 +1122,7 @@ main(void)
     assert(strcmp(config.model, "default") == 0);
     assert(config.provider[0] == '\0');
     assert(strcmp(config.reasoning_effort, "default") == 0);
-    assert(config.max_goal_prompt_bytes == 256u * 1024u);
+    assert(config.max_goal_prompt_bytes == 4096u);
     assert(config.max_turn_retries == 5u);
     assert(config.retry_auto);
     assert(config.read_agents_md);

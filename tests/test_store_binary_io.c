@@ -840,6 +840,82 @@ producer_resume_owner(struct snag_session *session, struct probe *probe)
 }
 
 static void
+test_native_multiple_controllers(void)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    native_fixture(&session, &probe);
+    const char *first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const char *second = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const char *replacement = "cccccccccccccccccccccccccccccccc";
+    const char *one = "dddddddddddddddddddddddddddddddd";
+    const char *repeat = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    native_checkpoint_commit(&session, "goal_started",
+        json_pack("{s:s,s:s}", "goal_id", first, "prompt", "first independent goal"));
+    native_checkpoint_commit(&session, "goal_started",
+        json_pack("{s:s,s:s}", "goal_id", second, "prompt", "second independent goal"));
+    native_checkpoint_commit(&session, "goal_blocked",
+        json_pack("{s:s,s:s,s:s,s:s}", "goal_id", first, "actor", "model",
+            "reason", "missing reply",
+            "wait_for", "external: fixture reply"));
+    assert(snag_goals_status(&session) == SNAG_GOAL_ACTIVE);
+    native_checkpoint_commit(&session, "goal_replaced",
+        json_pack("{s:s,s:s,s:s,s:s}", "goal_id", first, "new_goal_id", replacement,
+            "actor", "user", "prompt", "replacement retains the dependency"));
+    native_checkpoint_commit(&session, "timer_scheduled",
+        json_pack("{s:s,s:I,s:s}", "timer_id", one, "due_ms", (json_int_t)1000,
+            "text", "one shot"));
+    native_checkpoint_commit(&session, "timer_scheduled",
+        json_pack("{s:s,s:I,s:I,s:s}", "timer_id", repeat, "due_ms", (json_int_t)2000,
+            "interval_ms", (json_int_t)100, "text", "recurring reminder"));
+    producer_resume_owner(&session, &probe);
+    assert(json_object_size(session.goals) == 3u && json_object_size(session.timers) == 2u);
+    assert(!strcmp(snag_json_string(snag_goal_find(&session, replacement), "blocker"),
+        "missing reply"));
+    native_checkpoint_commit(&session, "timer_cancelled", json_pack("{s:s}", "timer_id", one));
+    json_t *receipt = json_pack("{s:s,s:s,s:s,s:[],s:b,s:I,s:s,s:s,s:s,s:I}",
+        "effort", session.default_effort, "provider", session.default_provider,
+        "model", session.default_model, "instructions", "read_only", false,
+        "received_at_ms", (json_int_t)2345, "text", "recurring reminder", "origin", "timer",
+        "timer_id", repeat, "next_due_ms", (json_int_t)2400);
+    assert(receipt);
+    json_t *invalid = json_deep_copy(receipt);
+    assert(invalid && !json_object_set_new(invalid, "next_due_ms", json_integer(2300)));
+    char error[256];
+    int64_t end = session.log_end;
+    assert(snag_session_commit(&session, "input_received", invalid, NULL,
+        error, sizeof(error)) < 0);
+    assert(session.log_end == end && !session.pending_input && session.timer_due_ms == 2000u);
+    native_checkpoint_commit(&session, "input_received", receipt);
+    assert(session.pending_input && session.timer_due_ms == 2400u);
+    producer_resume_owner(&session, &probe);
+    assert(session.pending_input && session.timer_due_ms == 2400u &&
+        json_object_size(session.timers) == 1u && json_object_size(session.goals) == 3u);
+    assert(!strcmp(snag_json_string(session.pending_input, "timer_id"), repeat));
+    native_checkpoint_matches(&session);
+    json_t *snapshot = snag_checkpoint_state_encode(&session);
+    assert(snapshot);
+    struct snag_session decoded;
+    assert(!snag_checkpoint_state_decode(snapshot, &decoded));
+    assert(json_equal(decoded.goals, session.goals) && json_equal(decoded.timers, session.timers));
+    snag_session_close(&decoded);
+    const char *directories[] = {"goals", "timers"};
+    for (size_t i = 0u; i < sizeof(directories) / sizeof(*directories); ++i) {
+        json_t *invalid_state = json_deep_copy(snapshot);
+        assert(invalid_state && !json_object_set_new(invalid_state, directories[i], json_array()));
+        assert(snag_checkpoint_state_decode(invalid_state, &decoded) < 0);
+        snag_session_close(&decoded);
+        json_decref(invalid_state);
+    }
+    json_t *invalid_goal = json_object_get(json_object_get(snapshot, "goals"), replacement);
+    assert(!json_object_set_new(invalid_goal, "wait_for", json_string("not a dependency")));
+    assert(snag_checkpoint_state_decode(snapshot, &decoded) < 0);
+    snag_session_close(&decoded);
+    json_decref(snapshot);
+    snag_session_close(&session);
+}
+
+static void
 producer_last_event(struct snag_session *session, struct snag_binary_event *event,
     struct snag_buf *scratch)
 {
@@ -2631,6 +2707,7 @@ test_store_binary_io(void)
         test_native_index_attachment(variant);
     for (unsigned int variant = 0u; variant < 7u; ++variant) test_index_cache(variant);
     test_native_checkpoint_origins();
+    test_native_multiple_controllers();
     test_native_producer_resume(false);
     test_native_producer_resume(true);
     test_native_semantic_history();

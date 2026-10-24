@@ -1794,7 +1794,8 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle, uint32_t m
     tool = item_by_field(tools, "name", "update_goal");
     if (tool)
         assert_properties(
-            tool, json_pack("{s:{s:s,s:[s,s,s,s]},s:{s:[s,s]},s:{s:[s,s]}}", "action", "type",
+            tool, json_pack("{s:{s:[s,s]},s:{s:s,s:[s,s,s,s]},s:{s:[s,s]},s:{s:[s,s]}}",
+                      "id", "type", "string", "null", "action", "type",
                       "string", "enum", "rewrite", "complete", "block", "resume", "text", "type",
                       "string", "null", "wait_for", "type", "string", "null"));
 }
@@ -1927,7 +1928,9 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
         struct snag_buf serialized = {.max = SNAG_CONTEXT_MAX_REQUEST};
         assert(snag_json_canonical(projection.create_request.value, &serialized) == 0);
         assert(snag_buf_terminate(&serialized) == 0);
-        assert((strstr((char *)serialized.data, "distinct goal wording") != NULL) == (pass >= 3u));
+        assert(strstr((char *)serialized.data, "distinct goal wording") != NULL);
+        assert((strstr((char *)serialized.data, "Persistent goal controller suspended") != NULL) ==
+            (pass < 3u));
         assert((strstr((char *)serialized.data, "This turn is a read-only query") != NULL) ==
                (pass == 0u));
         if (pass == 0u) {

@@ -107,6 +107,10 @@ same_controls(const struct snag_session *a, const struct snag_session *b)
     json_object_del(right, "irc_conversations");
     json_object_del(left, "irc_activity");
     json_object_del(right, "irc_activity");
+    json_object_del(left, "goals");
+    json_object_del(right, "goals");
+    json_object_del(left, "timers");
+    json_object_del(right, "timers");
     assert(json_object_size(left) == 97u && json_equal(left, right));
     json_decref(left);
     json_decref(right);

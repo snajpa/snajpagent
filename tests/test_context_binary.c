@@ -875,8 +875,8 @@ irc_checkpoint_checks(struct snag_session *source, const struct snag_session *ex
     if (checked || !expected->irc_conversations) return;
     checked = true;
     const unsigned char *bytes = frame->core.data;
-    assert(frame->core.version == 5u && bytes[0] == 5u && bytes[2] == 10u);
-    size_t offset = 108u;
+    assert(frame->core.version == 6u && bytes[0] == 6u && bytes[2] == 12u);
+    size_t offset = 124u;
     for (size_t i = 0u; i < 7u; ++i) {
         uint64_t size = 0u;
         for (size_t j = 0u; j < 8u; ++j)

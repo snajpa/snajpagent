@@ -14,7 +14,7 @@
 #include <unistd.h>
 
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
-#define CORE_HEADER 108u
+#define CORE_HEADER 124u
 
 static const struct slot { const char *key; size_t offset; } slots[] = {
 #define SLOT(f) {#f, offsetof(struct snag_session, f)}
@@ -187,7 +187,7 @@ golden_header(const struct snag_binary_checkpoint_sources *original,
     const struct snag_session *snapshot)
 {
     /* Structural prefix only: these epochs do not claim a valid journal state. */
-    const unsigned char golden[] = {5u, 0u, 10u, 0u, 8u, 7u, 6u, 5u, 4u, 3u, 2u, 1u,
+    const unsigned char golden[] = {6u, 0u, 12u, 0u, 8u, 7u, 6u, 5u, 4u, 3u, 2u, 1u,
         0x18u, 0x17u, 0x16u, 0x15u, 0x14u, 0x13u, 0x12u, 0x11u};
     struct snag_binary_checkpoint_sources sources = *original;
     sources.active_compact = 0x0102030405060708ULL;
@@ -231,7 +231,7 @@ bad_wire(int fd, struct snag_binary_checkpoint_frame frame)
     }
     put_number(copy + 20u, voice);
     size_t offset = CORE_HEADER;
-    for (size_t i = 0u; i < 10u; ++i) {
+    for (size_t i = 0u; i < 12u; ++i) {
         unsigned char saved[8];
         memcpy(saved, copy + 28u + i * 8u, sizeof(saved));
         memset(copy + 28u + i * 8u, 0xff, sizeof(saved));
@@ -451,9 +451,10 @@ static void
 old_core_compatibility(int fd, struct snag_binary_checkpoint_frame frame,
     const struct snag_session *expected)
 {
-    if (json_object_get(expected->strings, "goal_wait_for")) return;
+    if (json_object_get(expected->strings, "goal_wait_for") ||
+        json_object_size(expected->goals) > 1u || json_object_size(expected->timers) > 1u) return;
     const unsigned char *bytes = frame.core.data;
-    for (uint16_t version = 2u; version <= 4u; ++version) {
+    for (uint16_t version = 2u; version <= 5u; ++version) {
         if (version == 2u && (expected->irc_conversations || expected->irc_activity)) continue;
         size_t count = (size_t)version + 5u;
         size_t end = CORE_HEADER;
@@ -471,9 +472,9 @@ old_core_compatibility(int fd, struct snag_binary_checkpoint_frame frame,
         int64_t position = snag_seek(fd, 0, SEEK_CUR);
         assert(!snag_binary_checkpoint_core_read(fd, &frame, NULL, &restored, &sources));
         assert(position == snag_seek(fd, 0, SEEK_CUR) &&
-            (version == 4u || !restored.irc_activity));
+            (version >= 4u || !restored.irc_activity));
         struct snag_session unknown = *expected;
-        if (version != 4u) unknown.irc_activity = NULL;
+        if (version < 4u) unknown.irc_activity = NULL;
         same(&unknown, &restored);
         struct snag_buf again = {.max = SIZE_MAX};
         assert(!snag_binary_checkpoint_core_encode_version(&again, &sources, expected, version));
@@ -497,7 +498,7 @@ activity_core_checks(int fd, struct snag_binary_checkpoint_frame frame,
     for (size_t i = 0u; i < 8u; ++i) offset += (size_t)number(bytes + 28u + i * 8u);
     assert(offset < frame.core.size && bytes[offset] == 1u);
     size_t count = (size_t)number(bytes + offset + 9u);
-    assert(count && frame.core.size - offset == 17u + count * 48u + 8u);
+    assert(count && number(bytes + 92u) == 17u + count * 48u);
     struct snag_buf copy = {.max = SIZE_MAX};
     for (unsigned int failure = 0u; failure < 12u; ++failure) {
         snag_buf_reset(&copy);
@@ -519,11 +520,12 @@ activity_core_checks(int fd, struct snag_binary_checkpoint_frame frame,
             memcpy(duplicate, activity + 17u, sizeof(duplicate));
             put_number(activity + 9u, count + 1u);
             put_number((unsigned char *)copy.data + 92u, 17u + (count + 1u) * 48u);
-            unsigned char goal[8];
-            memcpy(goal, copy.data + copy.len - sizeof(goal), sizeof(goal));
-            copy.len -= sizeof(goal);
-            assert(!snag_buf_append(&copy, duplicate, sizeof(duplicate)));
-            assert(!snag_buf_append(&copy, goal, sizeof(goal)));
+            size_t end = offset + 17u + count * 48u;
+            size_t suffix = copy.len - end;
+            assert(!snag_buf_reserve(&copy, sizeof(duplicate)));
+            memmove(copy.data + end + sizeof(duplicate), copy.data + end, suffix);
+            memcpy(copy.data + end, duplicate, sizeof(duplicate));
+            copy.len += sizeof(duplicate);
             break;
         }
         case 11u:
@@ -560,14 +562,17 @@ goal_wait_core_checks(int fd, struct snag_binary_checkpoint_frame frame,
 {
     if (!json_object_get(state->strings, "goal_wait_for")) return;
     uint64_t reference = sources->texts.slots[SNAG_BINARY_TEXT_GOAL_BLOCKER].declaration;
-    assert(reference && number(frame.core.data + frame.core.size - 8u) == reference);
+    size_t offset = CORE_HEADER;
+    for (size_t i = 0u; i < 9u; ++i)
+        offset += (size_t)number(frame.core.data + 28u + i * 8u);
+    assert(reference && number(frame.core.data + offset) == reference);
     struct snag_buf copy = {.max = SIZE_MAX};
     assert(!snag_buf_append(&copy, frame.core.data, frame.core.size));
     const uint64_t bad[] = {0u, 1u, reference - 1u, frame.boundary.next_seq, UINT64_MAX};
     struct snag_binary_checkpoint_frame wrong = frame;
     wrong.core.data = (const unsigned char *)copy.data;
     for (size_t i = 0u; i < COUNT(bad); ++i) {
-        put_number((unsigned char *)copy.data + copy.len - 8u, bad[i]);
+        put_number((unsigned char *)copy.data + offset, bad[i]);
         reject(fd, &wrong);
     }
     snag_buf_reset(&copy);
@@ -575,7 +580,7 @@ goal_wait_core_checks(int fd, struct snag_binary_checkpoint_frame frame,
     copy.data[0] = 4u;
     copy.data[2] = 9u;
     assert(!snag_buf_append(&copy, frame.core.data + CORE_HEADER,
-        frame.core.size - CORE_HEADER - 8u));
+        offset - CORE_HEADER));
     wrong.core = (struct snag_binary_checkpoint_section){.version = 4u,
         .data = (const unsigned char *)copy.data, .size = copy.len};
     reject(fd, &wrong);

@@ -566,6 +566,7 @@ endif
 	python3 tests/test_config_reload.py ./tests/snajpagent-transport
 	python3 tests/test_model_auth_recovery.py ./tests/snajpagent-transport
 	python3 tests/test_goal_wait_channel.py ./$(BIN)
+	python3 tests/test_multiple_goals_timers.py ./$(BIN)
 	python3 tests/test_provider_https.py ./$(BIN)
 	python3 tests/test_provider_upload.py ./$(BIN)
 	python3 tests/test_provider_irc_retry.py ./$(BIN)

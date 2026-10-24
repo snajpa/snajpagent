@@ -85,6 +85,34 @@ test_legacy_bindings(void)
             assert(!json_array_size(app.session.active_skills));
         }
     }
+    const char *goal_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const char *goal_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    assert(!snag_session_commit(&app.session, "goal_started",
+        json_pack("{s:s,s:s}", "goal_id", goal_a, "prompt", "first goal"), NULL,
+        error, sizeof(error)));
+    assert(!snag_session_commit(&app.session, "goal_started",
+        json_pack("{s:s,s:s}", "goal_id", goal_b, "prompt", "second goal"), NULL,
+        error, sizeof(error)));
+    json_t *scoped = activate(&app, "sample", "multiple", true, error, sizeof(error));
+    assert(scoped && json_array_size(json_object_get(scoped, "goal_ids")) == 2u);
+    assert(snag_skill_binding_active(&app.session, scoped));
+    char original_id[sizeof(app.session.id)];
+    memcpy(original_id, app.session.id, sizeof(original_id));
+    /* A new session owner identity must not change a goal-ID scope. */
+    memset(app.session.id, 'c', SNAG_ID_HEX_LEN);
+    assert(snag_skill_binding_active(&app.session, scoped));
+    memcpy(app.session.id, original_id, sizeof(original_id));
+    assert(!snag_session_commit(&app.session, "goal_completed",
+        json_pack("{s:s,s:s}", "goal_id", goal_b, "actor", "user"), NULL, error, sizeof(error)));
+    assert(snag_skill_binding_active(&app.session, scoped));
+    assert(!snag_session_commit(&app.session, "goal_completed",
+        json_pack("{s:s,s:s}", "goal_id", goal_a, "actor", "user"), NULL, error, sizeof(error)));
+    assert(!snag_skill_binding_active(&app.session, scoped));
+    assert(!snag_session_commit(&app.session, "goal_started",
+        json_pack("{s:s,s:s}", "goal_id", "dddddddddddddddddddddddddddddddd",
+            "prompt", "unrelated goal"), NULL, error, sizeof(error)));
+    assert(!snag_skill_binding_active(&app.session, scoped));
+    json_decref(scoped);
     json_decref(old);
     json_decref(other);
     json_decref(current);
