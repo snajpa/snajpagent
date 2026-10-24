@@ -213,7 +213,8 @@ frontend_frame_omits_unconsumed_owner_state(void)
         counts[pass] = frame_allocations;
         bytes[pass] = frame_bytes;
         lengths[pass] = native.channel.output_len;
-        json_t *frame = json_loads(native.channel.output, JSON_REJECT_DUPLICATES, NULL);
+        json_t *frame = json_loadb(native.channel.output, native.channel.output_len,
+            JSON_REJECT_DUPLICATES, NULL);
         assert(frame);
         const json_t *state = json_object_get(frame, "state");
         assert(json_is_object(state) && json_object_size(state) == 13u);
@@ -242,7 +243,8 @@ frontend_frame_omits_unconsumed_owner_state(void)
         assert(rc == 0 && native.channel.output);
         assert(frame_allocations < counts[pass] && frame_bytes < bytes[pass]);
         assert(native.channel.output_len < lengths[pass]);
-        frame = json_loads(native.channel.output, JSON_REJECT_DUPLICATES, NULL);
+        frame = json_loadb(native.channel.output, native.channel.output_len,
+            JSON_REJECT_DUPLICATES, NULL);
         assert(frame && !strcmp(snag_json_string(frame, "type"), "ready"));
         assert(json_object_size(frame) == 1u);
         assert(!json_object_get(json_object_get(connection.state, "prompt"), "type"));
