@@ -175,8 +175,9 @@ class NativePaneTests(unittest.TestCase):
         # A visible editor taller than the terminal gives both paths the same
         # complete grid without introducing a second transcript decoder here.
         for columns in (42, 78):
+            standalone = self.start(False, columns=columns)
+            initial = self.screen(standalone, False)
             with self.subTest(columns=columns):
-                standalone = self.start(False, columns=columns)
                 observer = owners.View(self.owner.directory)
                 try:
                     state = observer.until('state')['state']
@@ -194,7 +195,6 @@ class NativePaneTests(unittest.TestCase):
                                record.get('text', '').startswith('Attached session '))
                 records = records[boundary:]
                 self.assertTrue(any(record['op'] == 'history' for record in records))
-                initial = self.screen(standalone, False)
                 # A fresh local clock must differ; the frontend restores the
                 # captured owner clock instead of observing the current time.
                 time.sleep(1.1)

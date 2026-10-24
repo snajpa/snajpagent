@@ -95,6 +95,58 @@ class MultipleControllersTests(unittest.TestCase):
         self.assertIn(b'completed', output)
         self.stop(resumed)
 
+    def test_continuation_can_start_after_existing_goal_blocks(self):
+        self.steps = [
+            ('create_goal', {'objective': 'blocked_outcome'}),
+            ('update_goal', {'action': 'block', 'text': 'awaiting a fixture dependency',
+                             'wait_for': 'operator'}),
+            (None, 'OUTCOME_BLOCKED'),
+            ('create_goal', {'objective': 'accepted_continuation'}),
+            ('list_goals', {}),
+            (None, 'CONTINUATION_CHECKPOINT'),
+            self.update('accepted_continuation', 'complete'),
+            (None, 'CONTINUATION_FINISHED'),
+        ]
+        child = self.start()
+        self.send(child, 'Start the requested outcome and block on its dependency.',
+                  'OUTCOME_BLOCKED')
+        child.until(b'READY>', 10)
+        journal, events = self.events()
+        blocked, = [event for event in events if event['type'] == 'goal_blocked']
+        self.stop(child)
+
+        resumed = self.start('--resume', journal.parent.name)
+        self.send(resumed, 'Create the separate, explicitly requested continuation goal.',
+                  'CONTINUATION_CHECKPOINT')
+        _, events = self.events()
+        starts = [event for event in events if event['type'] == 'goal_started']
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(blocked['data']['goal_id'], starts[0]['data']['goal_id'])
+        self.assertLess(blocked['seq'], starts[1]['seq'])
+        self.assertNotEqual(starts[0]['data']['goal_id'], starts[1]['data']['goal_id'])
+        text = request_text(self.requests[5])
+        self.assertIn(starts[0]['data']['goal_id'] + ' is blocked', text)
+        self.assertIn(starts[1]['data']['goal_id'] + ' is active', text)
+        self.assertIn('id=' + starts[0]['data']['goal_id'] + ' status=blocked', text)
+        self.assertIn('id=' + starts[1]['data']['goal_id'] + ' status=active', text)
+        resumed.until(b'CONTINUATION_FINISHED', 10)
+        resumed.until(b'READY>', 10)
+        _, events = self.events()
+        completed, = [event for event in events if event['type'] == 'goal_completed']
+        self.assertEqual(completed['data']['goal_id'], starts[1]['data']['goal_id'])
+        turns = [event for event in events if event['type'] == 'turn_started']
+        self.assertEqual(turns[-1]['data']['input_kind'], 'goal')
+        self.stop(resumed)
+
+        replayed = self.start('--resume', journal.parent.name)
+        output = self.send(replayed, '/goal', 'accepted_continuation')
+        self.assertIn(starts[0]['data']['goal_id'].encode(), output)
+        self.assertIn(starts[1]['data']['goal_id'].encode(), output)
+        self.assertIn(b'blocked', output)
+        self.assertIn(b'completed', output)
+        self.assertIn(b'wait channel: operator', output)
+        self.stop(replayed)
+
     def test_pause_and_operator_resume_apply_to_the_whole_goal_set(self):
         self.steps = [
             ('create_goal', {'objective': 'first_multi'}),

@@ -129,6 +129,17 @@ def check_ppc32_ssp() -> None:
     print("nixcheck: ok (optional linux-ppc32 ssp alias; absent from release matrix)")
 
 
+def check_terminal_install_dirs() -> None:
+    """The terminal pkg-config template prefixes relative installation paths."""
+    linux = (ROOT / "nix" / "linux.nix").read_text(encoding="utf-8")
+    flags = re.search(r"terminalLibrary = source:.*?cmakeFlags = \[(.*?)\];", linux, re.S)
+    require(flags is not None, "linux terminal library lacks CMake flags")
+    for name, directory in (("LIBDIR", "lib"), ("INCLUDEDIR", "include")):
+        require(f'"-DCMAKE_INSTALL_{name}={directory}"' in flags.group(1),
+                f"linux terminal library needs relative {name}")
+    print("nixcheck: ok (terminal pkg-config installation paths stay relative)")
+
+
 def main() -> int:
     check_derivations()
     check_device_audio()
@@ -136,6 +147,7 @@ def main() -> int:
     check_riscv64_matrix()
 
     check_ppc32_ssp()
+    check_terminal_install_dirs()
     return 0
 
 
