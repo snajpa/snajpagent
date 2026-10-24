@@ -177,6 +177,8 @@ int snag_random_id(char out[SNAG_ID_HEX_LEN + 1u]);
 int snag_random_bytes(unsigned char *out, size_t len);
 uint64_t snag_time_ms(void);
 uint64_t snag_monotonic_ms(void);
+/* Elapsed time that excludes system sleep for local session deadlines. */
+uint64_t snag_session_clock_ms(void);
 /* Throughput in milli-tokens per second; 0 when nothing is measurable. */
 uint64_t snag_rate_microtokens_per_second(uint64_t tokens, uint64_t elapsed_ms);
 /* Compact human form of a counter: 0, 999, 1.0k, 807.4M. */

@@ -84,7 +84,7 @@ snag_session_client_attach(struct snag_session_client *client, int target)
     client->target = target;
     client->target_verified = false;
     client->phase = SNAG_CLIENT_RESERVING;
-    client->target_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
+    client->target_deadline = snag_session_clock_ms() + HANDSHAKE_MS;
     return 0;
 }
 
@@ -103,7 +103,7 @@ snag_session_client_continue(struct snag_session_client *client)
     client->peer = -1;
     packet_clear(&client->target_input);
     client->phase = SNAG_CLIENT_COMMITTING;
-    client->target_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
+    client->target_deadline = snag_session_clock_ms() + HANDSHAKE_MS;
     return 0;
 }
 
@@ -159,7 +159,7 @@ target_read(struct snag_session_client *client, enum snag_session_message *event
     size_t length = snag_session_packet_length(packet);
     if (type == SNAG_SESSION_PROGRESS && !length &&
         client->phase == SNAG_CLIENT_COMMITTING && !client->target_output.used) {
-        client->target_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
+        client->target_deadline = snag_session_clock_ms() + HANDSHAKE_MS;
         packet_clear(packet);
         return 0;
     }
@@ -186,7 +186,7 @@ target_read(struct snag_session_client *client, enum snag_session_message *event
         if (rc < 0) return -1;
         client->phase = SNAG_CLIENT_COMMITTING;
     } else client->phase = SNAG_CLIENT_READY;
-    client->target_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
+    client->target_deadline = snag_session_clock_ms() + HANDSHAKE_MS;
     packet_clear(packet);
     return 0;
 }
@@ -235,7 +235,7 @@ terminal_write(struct snag_session_client *client)
                        length - client->terminal_offset);
     if (n < 0) return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR ? 0 : -1;
     if (!n) return snag_errno(EIO);
-    client->terminal_deadline = snag_monotonic_ms() + STALL_MS;
+    client->terminal_deadline = snag_session_clock_ms() + STALL_MS;
     if (memchr(p + client->terminal_offset, '\033', (size_t)n)) client->ansi_output = true;
     client->terminal_offset += (size_t)n;
     client->ack_pending = true;
@@ -294,7 +294,7 @@ peer_read(struct snag_session_client *client, enum snag_session_message *event)
         packet_clear(&client->incoming);
         client->output_pending = true;
         client->terminal_offset = 0u;
-        client->terminal_deadline = snag_monotonic_ms() + STALL_MS;
+        client->terminal_deadline = snag_session_clock_ms() + STALL_MS;
         return 0;
     }
     bool valid = (type == SNAG_SESSION_DETACH && !length) ||
@@ -344,7 +344,7 @@ snag_session_client_step(struct snag_session_client *client, int timeout_ms,
     *event = 0;
     client->event_length = 0u;
     if (timeout_ms < -1 || client->terminal < 0) return snag_errno(EINVAL);
-    uint64_t now = snag_monotonic_ms();
+    uint64_t now = snag_session_clock_ms();
     if (client->terminal_deadline && now >= client->terminal_deadline) return snag_errno(ETIMEDOUT);
     if (client->peer >= 0 && client->ack_pending && !client->input.used) {
         unsigned char offset[2] = {(unsigned char)client->terminal_offset,
@@ -544,9 +544,9 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
             if (snag_session_packet_set(&client.input, SNAG_SESSION_COMMAND,
                 typeahead->command, SNAG_SESSION_COMMAND_BYTES) < 0) goto out;
             command_sent = true;
-            command_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
+            command_deadline = snag_session_clock_ms() + HANDSHAKE_MS;
         }
-        if (command_deadline && snag_monotonic_ms() >= command_deadline) {
+        if (command_deadline && snag_session_clock_ms() >= command_deadline) {
             (void)snag_fail(error, error_size, ETIMEDOUT,
                 "terminal command acknowledgement timed out; inspect its receipt");
             goto out;

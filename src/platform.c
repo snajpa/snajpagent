@@ -11,9 +11,31 @@
 #include <stdlib.h>
 #include <string.h>
 #include <locale.h>
+#if defined(__APPLE__)
+#include <mach/mach_time.h>
+#endif
 #if defined(SNAJPAGENT_STATIC_UTF8) || defined(__ANDROID__)
 #include <uniwidth.h>
 #endif
+
+uint64_t
+snag_session_clock_ms(void)
+{
+#if defined(__APPLE__)
+    /* Darwin CLOCK_MONOTONIC includes sleep. A local peer cannot make progress
+     * while asleep, so session transport deadlines use Mach uptime. */
+    mach_timebase_info_data_t scale;
+    if (mach_timebase_info(&scale) != 0 || !scale.denom) return 0;
+    uint64_t ticks = mach_absolute_time(), quotient = ticks / scale.denom;
+    uint64_t fraction = (ticks % scale.denom) * scale.numer / scale.denom;
+    fraction = ((quotient % 1000000u) * scale.numer + fraction) / 1000000u;
+    uint64_t whole = quotient / 1000000u;
+    if (scale.numer && whole > (UINT64_MAX - fraction) / scale.numer) return UINT64_MAX;
+    return whole * scale.numer + fraction;
+#else
+    return snag_monotonic_ms();
+#endif
+}
 
 bool
 snag_file_unchanged(const snag_file_info *before, const snag_file_info *after)
@@ -2195,7 +2217,6 @@ snag_fsync(int fd)
 #include <pthread.h>
 #if defined(__APPLE__)
 #include <sys/time.h>
-#include <mach/mach_time.h>
 #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101000
 #define SNAG_LEGACY_MAC_AT 1
 /* Optional imports retain the SDK's ABI symbol suffixes, without the
@@ -3663,14 +3684,7 @@ snag_monotonic_ms(void)
             return 0;
         return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
     }
-    mach_timebase_info_data_t scale;
-    if (mach_timebase_info(&scale) != 0 || !scale.denom) return 0;
-    uint64_t ticks = mach_absolute_time(), quotient = ticks / scale.denom;
-    uint64_t fraction = (ticks % scale.denom) * scale.numer / scale.denom;
-    fraction = ((quotient % 1000000u) * scale.numer + fraction) / 1000000u;
-    uint64_t whole = quotient / 1000000u;
-    if (scale.numer && whole > (UINT64_MAX - fraction) / scale.numer) return UINT64_MAX;
-    return whole * scale.numer + fraction;
+    return snag_session_clock_ms();
 #else
     struct timespec now;
 

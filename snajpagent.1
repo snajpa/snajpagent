@@ -577,9 +577,11 @@ Ordinary errors retain the goal and recover automatically.  Policy stops and
 provider refusals pause automatic goal continuation.
 Explicit turn interruption pauses automatic goal work.
 .SS Leave and resume a session
-On Linux, interactive ANSI terminal sessions keep running when their terminal disconnects,
-including when an SSH connection drops. Open a new SSH connection and attach to the same session.
-Use
+On Linux and macOS, interactive ANSI terminal sessions keep running when their terminal
+connection drops, including when an SSH connection drops. Open a new connection and attach to
+the same session. Closing a local terminal releases its attachment while the owner continues.
+Laptop sleep pauses local transport progress; attachment and pending session traffic resume after
+wake instead of expiring during sleep. Use
 .B /s d
 to return to the shell while requests, commands, IRC and goals continue.
 Graceful exit and detach deliver pending terminal output before returning to the shell.

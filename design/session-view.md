@@ -50,6 +50,12 @@ frame retains its offset and existing stall deadline on EAGAIN; acknowledgement
 covers only bytes actually written. Owner completion is distinct from physical
 frontend delivery, including during active streamed controller handoff.
 
+Classic terminal transport uses awake time for stalled writes, acknowledgements,
+handshakes and attachment reservations. On macOS, CLOCK_MONOTONIC includes system sleep, while
+mach_absolute_time excludes it. Session deadlines therefore use the existing Mach uptime
+source on Apple targets; provider request deadlines and durable reminders keep their own
+clock semantics.
+
 Each frame has the existing eight-byte header shape: `SV`, version byte `1`,
 frame type byte `1`, and a four-byte little-endian payload length. Payloads are
 at most 16 KiB. Their first two little-endian u64 fields are the byte offset

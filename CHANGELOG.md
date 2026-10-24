@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve native session attachments across macOS sleep by measuring session transport
+  deadlines with awake time. Closing a local terminal releases its attachment while the
+  session owner continues, so the session can be reattached without restarting it.
 - Restore linked PDF builds against Poppler 24's legacy stream and null-object
   APIs, and select Poppler 25.10's newer stream and null-object APIs for macOS.
 
