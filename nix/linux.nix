@@ -157,7 +157,11 @@ let
   voice = import ./voice-rtc.nix { inherit pkgs; target = staticFixed; };
   terminalLibrary = source: musl.stdenv.mkDerivation ((import ./libvterm-source.nix { inherit pkgs; }) // {
       nativeBuildInputs = [ musl.buildPackages.cmake musl.buildPackages.ninja ];
-      cmakeFlags = [ "-DSNAG_UNICODE_HEADER=${source}/src/unicode.h" "-DCMAKE_INSTALL_LIBDIR=lib" ];
+      cmakeFlags = [
+        "-DSNAG_UNICODE_HEADER=${source}/src/unicode.h"
+        "-DCMAKE_INSTALL_LIBDIR=lib"
+        "-DCMAKE_INSTALL_INCLUDEDIR=include"
+      ];
       dontStrip = true;
     });
 in {

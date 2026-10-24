@@ -70,6 +70,8 @@ current limit.
 `create_goal` accepts `objective` and creates an independent goal. Only an
 explicit user or system/developer request authorizes creation. Ordinary tasks,
 Markdown plans and recorded proposals do not activate continuation.
+An existing blocked goal does not prevent creation of an authorized continuation
+goal. Its blocked state and dependency remain unchanged, including across resume.
 
 `update_goal` accepts `id`, `action`, `text` and `wait_for`. Omit `id` only when
 exactly one goal is unfinished. Example calls, with `ID` replaced by a listed ID:

@@ -7,6 +7,10 @@
 - Preserve native session attachments across macOS sleep by measuring session transport
   deadlines with awake time. Closing a local terminal releases its attachment while the
   session owner continues, so the session can be reattached without restarting it.
+
+- Keep the Linux production terminal dependency's pkg-config include path relative
+  so Nix accepts the generated dependency metadata.
+
 - Restore linked PDF builds against Poppler 24's legacy stream and null-object
   APIs, and select Poppler 25.10's newer stream and null-object APIs for macOS.
 
@@ -23,6 +27,8 @@
 - Retain multiple independent persistent goals. List all with `/goal`, pause or
   resume all unfinished goals, and target individual lifecycle changes by ID.
   Continue while any goal is active; retain every state across recovery and fork.
+  Allow an explicitly requested continuation after an existing goal has blocked,
+  preserving that goal's dependency and state across resume.
   Default new goal wording to 4096 UTF-8 bytes without invalidating saved wording.
 - Add independent timer IDs, listing, replacement and cancellation, plus a
   recurring flag. Admit each wakeup atomically and coalesce missed intervals.

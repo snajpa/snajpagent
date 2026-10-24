@@ -4064,6 +4064,9 @@ or completing one goal leaves others unchanged. With no active goals, explicit
 pauses and recorded blockers remain in force. Terminal and replaced goals remain
 visible in the list and history.
 .PP
+An explicitly requested new goal can start while an existing goal is blocked.
+The blocked goal retains its state and dependency, including after session resume.
+.PP
 Queued operator turns run before automatic goal work. Read-only and queued turns
 receive the saved goal list with a suspended-controller notice; it authorizes no
 extra goal work in those requests. An unarmed queue requires /next or explicit
