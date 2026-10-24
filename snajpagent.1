@@ -561,14 +561,18 @@ snajpagent to keep taking turns toward an explicit result:
 /goal fix the parser, add tests, and validate the change
 .fi
 .PP
-It continues until complete, paused, cancelled or blocked.  Waiting operator
-prompts run before the next automatic goal turn.
-.B /state goal status
-shows its state and any blocker.
-.B /state goal pause
-pauses automatic continuation at a turn boundary;
-.B /state goal resume
-starts it again.  Pausing does not kill a command already running.
+Current source supports several independent goals. Repeat /goal TEXT to add one.
+The model receives every goal and state and chooses work among active goals.
+Waiting operator prompts run before the next automatic goal turn.
+.B /goal
+lists all goals and their IDs.
+.B /goal pause
+pauses all unfinished goals at a turn boundary;
+.B /goal resume
+resumes them with explicit operator direction. Add an ID to target one goal.
+.B /goal clear ID
+cancels that goal while retaining history.
+Pausing leaves commands already running intact.
 Ordinary errors retain the goal and recover automatically.  Policy stops and
 provider refusals pause automatic goal continuation.
 Explicit turn interruption pauses automatic goal work.
@@ -4051,67 +4055,66 @@ replay time.  A submitted editor line retains its original local prompt clock;
 queued dispatch renders a new normal prompt with the dispatch-time local clock.
 UTC provenance and the displayed clock describe different events.
 .SS Goals
-An active goal continues across ordinary turns until complete, paused,
-cancelled, or blocked; there is no default per-goal-turn working or step budget.
-Queued operator turns run before the next automatic
-goal turn.  Ordinary errors retain the active goal and schedule recovery with
-interruptible backoff, without an attempt limit. Terminal cyber-policy errors
-first use an eligible configured fallback. Remaining policy stops and provider
-refusals pause automatic continuation and require clarification.  Turn-only
-cancellation also pauses automatic continuation.  Quitting preserves unfinished
-work and its goal for resume.  Session resume preserves saved stops.
-Goal status changes update the prompt indicator before their notices are shown,
-including pauses, completion and blocking. Clearing a draft in the interactive
-composer leaves its active goal running; Ctrl-C on an empty composer interrupts
-the turn and pauses that goal.
-Goal controls accept whitespace around the command word.  Extra wording after a
-control is rejected; use quotes or
-.B /state goal set
-to start goal text with a command word.
+Current source retains several independent persistent goals. The model receives
+every goal and state and chooses useful work among active goals. Automatic turns
+continue while any goal is active, with no per-goal turn or step budget. Blocking
+or completing one goal leaves others unchanged. With no active goals, explicit
+pauses and recorded blockers remain in force. Terminal and replaced goals remain
+visible in the list and history.
+.PP
+Queued operator turns run before automatic goal work. Read-only and queued turns
+receive the saved goal list with a suspended-controller notice; it authorizes no
+extra goal work in those requests. An unarmed queue requires /next or explicit
+goal start/resume, and an open queue editor prevents draining.
+.PP
+Ordinary errors retain active goals and use interruptible recovery without an
+attempt limit. Terminal cyber-policy errors first use an eligible configured
+fallback. Remaining policy stops, provider refusals and explicit turn interruption
+pause active goals. Session resume preserves saved stops and wording, even if a
+later configured wording limit is lower. Clearing a draft leaves active goals
+running; Ctrl-C on an empty composer interrupts the turn and pauses them.
 .TP
 .BR /state " goal, " /state " goal status"
-Show the durable goal, blocker and recorded wait channel with its actions.
-Queued prompts run before automatic
-goal continuation,
-without fresh goal reminders throughout those turns.  A retained unarmed queue
-cannot be bypassed: use
-.B /next
-or explicit goal start/resume to arm it.  An open queue editor prevents draining.
+List every goal's full ID, state, wording lock, revision, turn count, wording,
+blocker, wait destination and parent/replacement links.
 .B /goal
-is an alias for
-.BR /state " goal" .
+is an alias for /state goal and accepts all arguments below.
 .TP
-.BI /state " goal text"
-Start a goal, or reword the unfinished goal.  Quote the text or use
-.B /state goal set
-when its first word is a goal command.
+.BI /goal " [add] TEXT"
+Create an additional active goal. Use add or quote the whole text when its first
+word is a control. One pair of outer double quotes is removed without interpreting
+backslash escapes. Wording must be nonblank valid UTF-8 within max_goal_prompt_bytes.
 .TP
-.BI /state " goal set text"
-Explicitly start or reword a goal.
+.BI /goal " set [ID] TEXT"
+Replace one unfinished goal with new wording, retaining its state, lock and
+blocker. The replacement gets a new ID and records its parent. Omit ID only with
+one unfinished goal; with none, set TEXT creates one. An unknown or terminal
+explicit ID fails.
 .TP
-.B /state goal pause
-Pause automatic continuation at the current turn boundary.
+.BI /goal " pause [ID]"
+Pause all unfinished goals, including blocked goals, or just the supplied ID.
+The current turn can finish. Use Ctrl-C on an empty composer for interruption.
 .TP
-.B /state goal resume
-Resume a paused or blocked goal.
+.BI /goal " resume [ID]"
+Activate all unfinished goals, or just the supplied ID, and submit explicit
+operator direction to resume work. The next request includes the full goal/state
+list. Other goals keep their saved stops when an ID is supplied.
 .TP
-.BR /state " goal lock|unlock"
-Freeze the goal's objective against model changes, or release it.  A locked
-goal refuses the model's rewording, blocking and cancelling, in the tool before
-dispatch and again in the store wherever the event names the model as actor,
-while finishing or resuming a locked goal stays allowed, so it can still reach
-a successful end; the operator's own commands remain available.
+.BI /goal " lock|unlock [ID]"
+Prevent or allow model rewording and blocking of one goal. Completion and resume
+remain available. The operator can replace locked wording. ID is required when
+several goals are unfinished.
 .TP
-.B /state goal complete
-Mark the current goal successfully completed.
+.BI /goal " complete [ID]"
+Mark one unfinished goal successfully completed. ID is required if ambiguous.
 .TP
-.BR /state " goal clear|cancel"
-Cancel the current goal and stop automatic continuation.  An in-progress turn
-finishes normally; use Ctrl-C to interrupt it.  The cancelled goal remains
-visible in status and history.  A new goal can be started afterwards.
+.BI /goal " clear|cancel [ID]"
+Cancel one unfinished goal without a success claim. ID is required if ambiguous.
+The current turn and other active goals continue. History is retained.
 .TP
-.B /state goal help
-Show the complete goal grammar.
+.B /goal help
+Show the goal grammar. Controls accept surrounding whitespace and a full ID;
+extra text fails. Use add or quoted wording to start text with a control word.
 .SS Queue
 .TP
 .BR /queue , " /q"
@@ -4945,7 +4948,8 @@ and
 .BR high .
 .TP
 .B max_goal_prompt_bytes
-Goal wording limit, 1 through 1048576.  Default: 262144.
+Per-goal wording limit in UTF-8 bytes, 1 through 1048576. Default: 4096.
+Applies to newly supplied wording; saved wording remains readable after lowering it.
 .TP
 .B retry_auto
 Enable automatic transport and failed-turn retries. Default: true.
@@ -6051,11 +6055,12 @@ for explicit broadcast, or
 only for a sole destination.  Model routing is independent of the operator's
 selection.  Results distinguish queue acceptance from failures, not remote receipt.
 .PP
-Explicit goal requests expose
+Explicit goal requests can use
 .B create_goal
-when no unfinished goal exists. An unfinished goal exposes
+to add an independent goal. Use
 .B update_goal
-for rewriting, completion, blocking or resuming under the current state's rules.
+with a listed id for rewriting, completion, blocking or resuming one goal.
+The id may be omitted only with exactly one unfinished goal.
 Rewriting unlocked wording preserves a paused or blocked goal's state, including
 its blocker and wait destination. Resume is a separate action.
 Blocking requires both a nonblank reason in
@@ -6709,15 +6714,16 @@ Secret filtering applies to structured records before creating those excerpts.
 lists bounded durable goal identities, current/final statuses and parent/replacement
 lineage. Optional before_seq selects an exclusive goal-creation event sequence;
 limit defaults to 20 (1..50). Use next_before_seq to continue. Neither inspection
-tool changes the current goal.
+tool changes goal state.
 .SS Model goal controls
 .B create_goal
 accepts objective text and is declared in every request. It succeeds only when
-goal creation is explicitly requested and no unfinished goal already exists.
+goal creation is explicitly requested by the user or system/developer instructions.
 Goal creation takes effect when the tool succeeds.
 .PP
 .B update_goal
-requires action; text depends on the action. Rewrite requires new wording; complete
+requires action and accepts id; omit id only with exactly one unfinished goal.
+Text depends on the action. Rewrite requires new wording; complete
 accepts omitted or null text; block requires a specific reason and wait_for.
 Rewrite accepts an active, paused or blocked goal and preserves its current state.
 Complete and block require an active goal; resume accepts a paused or blocked goal.
@@ -6726,14 +6732,24 @@ cancelling while completion and resume stay available; the operator retains
 explicit control through slash commands.
 .SS Timer
 .B timer
-accepts delay_ms and text. A positive delay_ms and nonblank text replace any
-current one-shot timer. delay_ms 0 cancels the current timer and requires text
-null. The schedule is durable across resume. When due, the foreground process
-records the firing and admits one fresh ordinary turn containing the stored text.
-The transcript and history label this as a timer turn, not an operator
-submission, and the model receives it as host continuation. That turn does
-not resume a paused or blocked goal. Timer calls remain subject
-to the current turn's policy and cannot authorize a refused side effect.
+manages independent durable schedules. Omit id to create a timer; supply an armed
+id to replace it. Scheduling requires positive delay_ms through 4294967295 and
+nonblank text. The result includes the timer ID and deadline. recurring=true
+repeats at delay_ms intervals; false, null or omission selects a one-shot timer.
+.PP
+action=list returns armed IDs, deadlines and recurring intervals. action=cancel
+or delay_ms=0 cancels one timer and requires omitted or null text. Omit id only
+when one timer is armed; with none, cancellation is a successful no-op. An unknown
+ID fails and leaves other timers unchanged.
+.PP
+Schedules survive restart and fork. When due, one durable input receipt consumes
+the one-shot or rearms the recurring timer and retains its stored text for an
+ordinary model turn. The transcript identifies timer input as host continuation.
+Recovery retains the accepted pending input instead of firing it again.
+Recurring deadlines advance to the first future interval, coalescing missed
+periods into one wakeup after delay or restart. A timer turn leaves paused or
+blocked goals unchanged unless a valid lifecycle action resumes one. Tool policy
+still applies; timers authorize no otherwise refused side effects.
 .SS Steering
 .B defer_steering
 takes no arguments. The model calls it to switch steering off for the

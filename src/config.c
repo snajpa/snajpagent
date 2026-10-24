@@ -122,7 +122,7 @@ snag_config_init(struct snag_config *config)
             &config->providers[0].api_key, "${OPENAI_API_KEY}", NULL, NULL, 0u) < 0)
         return;
     config->provider_count = 1u;
-    config->max_goal_prompt_bytes = 256u * 1024u;
+    config->max_goal_prompt_bytes = 4096u;
     config->max_turn_retries = 5u;
     config->retry_auto = true;
     config->read_agents_md = true;

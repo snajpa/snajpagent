@@ -390,7 +390,7 @@ int snag_binary_checkpoint_voice_read(int fd, const struct snag_binary_anchor *,
  * joint adoption remain with the enclosing consumer. Voice history names its
  * native adoption record; its cursor is reconstructed from the journal. Resources,
  * callbacks, derived caches and unreachable private string owners are omitted. */
-#define SNAG_BINARY_CORE_VERSION 5u
+#define SNAG_BINARY_CORE_VERSION 6u
 int snag_binary_checkpoint_core_encode(struct snag_buf *,
     const struct snag_binary_checkpoint_sources *, const struct snag_session *);
 /* Reproduce an older core layout for independent prefix comparison. Version3

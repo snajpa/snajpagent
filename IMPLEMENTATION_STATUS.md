@@ -2,6 +2,14 @@
 
 # Implementation status
 
+Current source retains multiple independent persistent goals and model timers.
+`/goal` lists every state; pause/resume without an ID apply to all unfinished
+goals, and model lifecycle calls target individual IDs. Continuation runs while
+any goal is active. New wording defaults to 4096 UTF-8 bytes while saved wording
+remains readable. Native replay/checkpoints retain goal lineage, multi-goal skill
+scope, timer IDs and recurring intervals. Timer input admission consumes or rearms
+one schedule atomically, and recurring deadlines coalesce missed periods.
+
 Current source supports session-owned pinned PTY commands with model start,
 list, inspection, input and stop controls. `/r` gives a compact ordinary-call-first
 report; explicit stop disables saved resume hooks before signaling children.

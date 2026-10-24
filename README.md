@@ -88,18 +88,21 @@ A final answer ends the turn; a goal continues work:
 /goal fix the bug and validate the change
 ```
 
-Goals continue until complete or blocked; queued prompts come first. `/goal pause`
-pauses at a turn boundary, `/goal resume` continues paused or blocked work, and
-`/goal clear` cancels while retaining history.
-Blocked goals name their dependency. `operator` means operator input is required;
-`/goal` shows the destination and blocker.
+Current source supports independent goals: repeat `/goal TEXT` to add one, and
+use `/goal` to list every goal and state. Work continues while any goal is active;
+queued prompts come first. `/goal pause` pauses all, and `/goal resume` directs the
+model to resume unfinished work. Add a listed ID to target one goal, including
+`/goal clear ID` to cancel it while retaining history. Blocked goals name their
+dependency; `operator` means operator input is required. New goal wording defaults
+to a 4096-byte UTF-8 limit. The model can also set independent one-shot or recurring
+reminders with the `timer` tool.
 
 Ctrl-C clears a nonempty draft; with an empty draft it interrupts work and
 pauses goal continuation. Empty Enter leaves the goal paused; use `/goal resume`.
 Ctrl-D on an empty draft exits, and no work continues after exit. Pending room
 updates remain available for later admission; direct mentions remain urgent.
 
-A **session** saves conversation, tools, queue and goal. Resume continues unfinished
+A **session** saves conversation, tools, queue, goals and timers. Resume continues unfinished
 work; inspect calls with uncertain outcomes.
 Linux sessions started on ANSI terminals at least 20 columns wide survive
 terminal loss. Use `/s d` to detach, then `snajpagent --attach SESSION_ID`

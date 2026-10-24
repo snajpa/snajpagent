@@ -108,7 +108,7 @@ metadata_kind(enum snag_binary_kind kind)
 static bool
 timer_kind(enum snag_binary_kind kind)
 {
-    return kind >= SNAG_BINARY_TIMER_SCHEDULED && kind <= SNAG_BINARY_TIMER_CANCELLED;
+    return kind >= SNAG_BINARY_TIMER_SCHEDULED && kind <= SNAG_BINARY_TIMER_RECURRING;
 }
 
 static bool
@@ -139,7 +139,8 @@ response_end_kind(enum snag_binary_kind kind)
 static bool
 input_receipt_kind(enum snag_binary_kind kind)
 {
-    return kind == SNAG_BINARY_INPUT_RECEIVED || kind == SNAG_BINARY_STEERING_ADDED ||
+    return kind == SNAG_BINARY_INPUT_TIMER_RECEIVED || kind == SNAG_BINARY_INPUT_RECEIVED ||
+        kind == SNAG_BINARY_STEERING_ADDED ||
         kind == SNAG_BINARY_IRC_REPLY_REMINDER;
 }
 
@@ -186,7 +187,7 @@ legacy_kind(enum snag_binary_kind kind)
         (kind >= SNAG_BINARY_VOICE_TRANSFER_RECORD && kind <= SNAG_BINARY_VOICE_TRANSFER_ADOPTED) ||
         (kind >= SNAG_BINARY_COMPACTION_STARTED && kind <= SNAG_BINARY_COMPACTION_COMPLETED) ||
         (kind >= SNAG_BINARY_TURN_STARTED && kind <= SNAG_BINARY_TURN_FAILED) ||
-        (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_FUTURE_TURN_EDITED);
+        (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_INPUT_TIMER_RECEIVED);
 }
 
 /* Check canonical types, UTF-8, depth and size at the legacy data nesting level.
@@ -447,8 +448,13 @@ read_metadata(const json_t *data, struct snag_binary_event *event, struct snag_b
 static int
 read_timer(const json_t *data, struct snag_binary_event *event)
 {
-    bool scheduled = event->kind == SNAG_BINARY_TIMER_SCHEDULED;
-    if (!snag_json_exact_keys(data, scheduled ? "due_ms text timer_id" : "timer_id")) {
+    bool recurring = json_object_get(data, "interval_ms") != NULL;
+    bool scheduled = event->kind == SNAG_BINARY_TIMER_SCHEDULED ||
+        event->kind == SNAG_BINARY_TIMER_RECURRING;
+    if (recurring && scheduled) event->kind = SNAG_BINARY_TIMER_RECURRING;
+    const char *keys = scheduled ? (recurring ? "due_ms interval_ms text timer_id" :
+        "due_ms text timer_id") : "timer_id";
+    if (!snag_json_exact_keys(data, keys)) {
         return invalid();
     }
     if (read_id(data, "timer_id", event->data.timer.id) < 0) return -1;
@@ -457,6 +463,10 @@ read_timer(const json_t *data, struct snag_binary_event *event)
         read_text(data, "text", &event->data.timer.text) < 0) {
         return -1;
     }
+    if (recurring &&
+        (snag_json_integer_u64(data, "interval_ms", &event->data.timer.interval_ms) < 0 ||
+                 !event->data.timer.interval_ms || event->data.timer.interval_ms > UINT32_MAX))
+        return invalid();
     return 0;
 }
 
@@ -867,15 +877,23 @@ read_input_receipt(const json_t *data, struct snag_binary_event *event, struct s
     size_t start = scratch->len;
     size_t instruction_size = 0u;
     struct snag_binary_content *content;
-    if (event->kind == SNAG_BINARY_INPUT_RECEIVED) {
+    if (event->kind == SNAG_BINARY_INPUT_RECEIVED ||
+        event->kind == SNAG_BINARY_INPUT_TIMER_RECEIVED) {
         if (!snag_json_arg_keys(data,
             "effort instructions model provider read_only received_at_ms text",
-            "content origin", NULL, 0u) ||
+            "content origin timer_id next_due_ms", NULL, 0u) ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
             (json_object_get(data, "origin") &&
              !snag_string_in(snag_json_string(data, "origin"), "timer"))) {
             return invalid();
         }
+        if (json_object_get(data, "timer_id")) {
+            event->kind = SNAG_BINARY_INPUT_TIMER_RECEIVED;
+            if (read_id(data, "timer_id", event->data.input.timer_id) < 0 ||
+                snag_json_integer_u64(data, "next_due_ms",
+                    &event->data.input.timer_next_due_ms) < 0)
+                return invalid();
+        } else if (json_object_get(data, "next_due_ms")) return invalid();
         struct snag_binary_selection *selection = &event->data.input.selection;
         if (read_text(data, "provider", &selection->provider) < 0 ||
             read_text(data, "model", &selection->model) < 0 ||
@@ -2213,7 +2231,7 @@ snag_binary_legacy_encode(struct snag_buf *out, const char *type, const json_t *
     } else if (queued_input_kind(event.kind)) {
         rc = read_queued_input(data, &event, &scratch);
     } else if (event.kind >= SNAG_BINARY_INPUT_RECEIVED &&
-             event.kind <= SNAG_BINARY_FUTURE_TURN_EDITED) {
+             event.kind <= SNAG_BINARY_INPUT_TIMER_RECEIVED) {
         rc = read_input_control(data, &event, &scratch);
     } else if (event.kind >= SNAG_BINARY_COMPACTION_STARTED &&
              event.kind <= SNAG_BINARY_COMPACTION_COMPLETED) {
@@ -2400,7 +2418,10 @@ static int
 put_timer(json_t *data, const struct snag_binary_event *event)
 {
     if (put_id(data, "timer_id", event->data.timer.id) < 0) return -1;
-    if (event->kind != SNAG_BINARY_TIMER_SCHEDULED) return 0;
+    if (event->kind != SNAG_BINARY_TIMER_SCHEDULED &&
+        event->kind != SNAG_BINARY_TIMER_RECURRING) return 0;
+    if (event->kind == SNAG_BINARY_TIMER_RECURRING && snag_json_set_new(data, "interval_ms",
+            json_integer((json_int_t)event->data.timer.interval_ms)) < 0) return -1;
     if (event->data.timer.due_ms > INT64_MAX) return invalid();
     if (snag_json_set_new(data, "due_ms", json_integer((json_int_t)event->data.timer.due_ms)) < 0 ||
         put_text(data, "text", event->data.timer.text) < 0) {
@@ -3440,7 +3461,8 @@ put_turn_start(json_t *data, const struct snag_binary_turn_start *turn)
 static int
 put_input_receipt(json_t *data, const struct snag_binary_event *event)
 {
-    if (event->kind == SNAG_BINARY_INPUT_RECEIVED) {
+    if (event->kind == SNAG_BINARY_INPUT_RECEIVED ||
+        event->kind == SNAG_BINARY_INPUT_TIMER_RECEIVED) {
         if (event->data.input.text_ref.field || event->data.input.content_ref.field ||
             event->data.input.instructions_ref.field) {
             return unsupported();
@@ -3458,6 +3480,11 @@ put_input_receipt(json_t *data, const struct snag_binary_event *event)
                 json_integer((json_int_t)event->data.input.received_ms)) < 0) {
             return -1;
         }
+        if (event->kind == SNAG_BINARY_INPUT_TIMER_RECEIVED &&
+            (put_id(data, "timer_id", event->data.input.timer_id) < 0 ||
+             event->data.input.timer_next_due_ms > INT64_MAX ||
+             snag_json_set_new(data, "next_due_ms",
+                json_integer((json_int_t)event->data.input.timer_next_due_ms)) < 0)) return -1;
         if (event->data.input.origin == SNAG_BINARY_INPUT_TIMER) {
             return snag_json_set_new(data, "origin", json_string("timer"));
         }
@@ -3752,7 +3779,7 @@ snag_binary_legacy_decode(const struct snag_binary_record *record, const char **
     } else if (queued_input_kind(event.kind)) {
         rc = put_queued_input(result, &event);
     } else if (event.kind >= SNAG_BINARY_INPUT_RECEIVED &&
-             event.kind <= SNAG_BINARY_FUTURE_TURN_EDITED) {
+             event.kind <= SNAG_BINARY_INPUT_TIMER_RECEIVED) {
         rc = put_input_control(result, &event);
     } else if (event.kind >= SNAG_BINARY_COMPACTION_STARTED &&
              event.kind <= SNAG_BINARY_COMPACTION_COMPLETED) {
@@ -3766,6 +3793,8 @@ snag_binary_legacy_decode(const struct snag_binary_record *record, const char **
         return -1;
     }
     *type = event.kind == SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR ? "goal_blocked" :
+        event.kind == SNAG_BINARY_TIMER_RECURRING ? "timer_scheduled" :
+        event.kind == SNAG_BINARY_INPUT_TIMER_RECEIVED ? "input_received" :
         snag_binary_event_name(event.kind);
     *data = result;
     return 0;

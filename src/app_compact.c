@@ -574,7 +574,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
      * forever without allowing a recovered provider to compact again. */
     if (app->history_orientation < SNAG_HISTORY_ORIENTATION_COMPACT)
         app->history_orientation = SNAG_HISTORY_ORIENTATION_COMPACT;
-    if (app->compaction_failures >= 8u && app->session.goal_status != SNAG_GOAL_ACTIVE) {
+    if (app->compaction_failures >= 8u && snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE) {
         app->compaction_bounded = true;
         return snag_fail(error, error_size, EPROTO,
             "compaction failed %u times in a row; previous context retained; "

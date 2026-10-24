@@ -1328,34 +1328,55 @@ static int
 append_goal_controller(struct context_builder *builder)
 {
     if (!builder->session) return 0;
-    if (builder->session->active_read_only || builder->session->active_queued ||
-        builder->session->pending_queue_count)
-        return append_host_input(builder->request_input,
-            "Persistent goal controller suspended for read-only or queued work.");
-    if (!snag_goal_unfinished(builder->session->goal_status)) {
-        return append_host_input(builder->request_input, "No persistent goal is active.");
-    }
-    bool active = builder->session->goal_status == SNAG_GOAL_ACTIVE;
-    int rc = append_messagef(builder, "user",
-        2u * SNAG_MAX_GOAL_BLOCKER + 512u,
-        "Persistent goal %s%s%s%s is %s (revision %llu, wording %s). %s\n\n"
-        "%s%s%s%s",
-        builder->session->goal_id, builder->session->goal_parent_id[0] ? " (parent " : "",
-        builder->session->goal_parent_id[0] ? builder->session->goal_parent_id : "",
-        builder->session->goal_parent_id[0] ? ")" : "",
-        snag_goal_status_name(builder->session->goal_status),
-        (unsigned long long)builder->session->goal_revision,
-        builder->session->goal_locked ? "locked" : "unlocked",
-        active ? "Automatic continuation is active."
-               : "Saved goal retained; automatic continuation is stopped.",
-        builder->session->goal_blocker ? "\n\nRecorded blocker:\n" : "",
-        builder->session->goal_blocker ? builder->session->goal_blocker : "",
-        builder->session->goal_status == SNAG_GOAL_BLOCKED ? "\n\nWait channel: " : "",
-        builder->session->goal_status == SNAG_GOAL_BLOCKED ? snag_goal_wait_for(builder->session)
-                                                           : "");
+    const struct snag_session *s = builder->session;
+    bool suspended = s->active_read_only || s->active_queued || s->pending_queue_count;
+    int rc = append_host_input(builder->request_input, suspended ?
+        "Persistent goal controller suspended for read-only or queued work. Saved goals follow; "
+        "their presence does not authorize goal work in this request." :
+        "Persistent goals follow. Choose useful work among active goals; automatic continuation "
+        "continues while any goal is active. Blocking or completing one goal leaves the others "
+        "unchanged. Pause and blocked states remain in force until explicitly resumed. "
+        "Target lifecycle tools by goal ID when more than one goal is unfinished.");
     if (rc < 0) return rc;
-    return append_messagef(builder, "user", SNAG_MAX_GOAL_PROMPT + 128u,
-        "Current goal wording:\n%s", builder->session->goal_prompt);
+    if (!json_object_size(s->goals))
+        return append_host_input(builder->request_input, "No persistent goal is active.");
+    const char *id;
+    const json_t *goal;
+    json_object_foreach(s->goals, id, goal) {
+        enum snag_goal_status status = (enum snag_goal_status)json_integer_value(
+            json_object_get(goal, "status"));
+        const char *replacement = snag_json_string(goal, "replaced_by");
+        rc = append_messagef(builder, "user", SNAG_MAX_GOAL_PROMPT +
+            2u * SNAG_MAX_GOAL_BLOCKER + 1024u,
+            "Persistent goal %s is %s (revision %llu, wording %s).\n"
+            "Parent: %s\nCurrent goal wording:\n%s\nRecorded blocker:\n%s\nWait channel: %s%s%s%s",
+            id, replacement ? "replaced" : snag_goal_status_name(status),
+            (unsigned long long)json_integer_value(json_object_get(goal, "revision")),
+            json_is_true(json_object_get(goal, "locked")) ? "locked" : "unlocked",
+            snag_json_string(goal, "parent"), snag_json_string(goal, "prompt"),
+            snag_json_string(goal, "blocker"), snag_json_string(goal, "wait_for"),
+            replacement ? "\nReplaced by: " : "", replacement ? replacement : "",
+            status == SNAG_GOAL_ACTIVE ? "" : "\nautomatic continuation is stopped for this goal");
+        if (rc < 0) return rc;
+    }
+    return 0;
+}
+
+static int
+append_timer_controller(struct context_builder *builder)
+{
+    if (!builder->session) return 0;
+    const char *id;
+    const json_t *timer;
+    json_object_foreach(builder->session->timers, id, timer) {
+        int rc = append_messagef(builder, "user", SNAG_MAX_TIMER_TEXT + 256u,
+            "Armed model timer %s: due_ms=%llu, interval_ms=%llu.\nReminder text:\n%s", id,
+            (unsigned long long)json_integer_value(json_object_get(timer, "due_ms")),
+            (unsigned long long)json_integer_value(json_object_get(timer, "interval_ms")),
+            snag_json_string(timer, "text"));
+        if (rc < 0) return rc;
+    }
+    return 0;
 }
 
 static int
@@ -2932,7 +2953,7 @@ image_tool_schema(void)
 }
 
 static json_t *
-tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
+tool_schemas(bool networked,
     const struct snag_config *config, const struct snag_session *session, const char *provider_name,
     bool read_only)
 {
@@ -2944,8 +2965,6 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
 
     /* Runtime state affects execution, not catalog visibility. Operator
      * configuration can disable a capability entirely. */
-    (void)goal_active;
-    (void)goal_create_allowed;
     (void)networked;
     (void)read_only;
 
@@ -3218,7 +3237,7 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
             tool_schema("list_goals", "",
                 "List bounded durable goal identities, final/current statuses and copy-on-write "
                 "parent/replacement lineage. "
-                "Use next_before_seq to walk older goals without changing the current goal.",
+                "Use next_before_seq to walk older goals without changing goal state.",
                 json_pack("{s:{s:[s,s],s:i,s:s},s:{s:[s,s],s:i,s:i,s:s}}", "before_seq", "type",
                     "integer", "null", "minimum", 1, "description",
                     "Exclusive goal-creation event sequence upper bound; omission/null selects "
@@ -3360,16 +3379,19 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
         goto fail;
     if (json_array_append_new(
             tools, tool_schema("update_goal", "action",
-                       "Update the unfinished persistent goal (active, paused or blocked): rewrite "
+                       "Update one persistent goal by ID (active, paused or blocked): rewrite "
                        "uses new wording in text unless the wording is locked, complete requires "
                        "null text, block requires a specific reason and wait_for destination, "
                        "and resume restarts a paused or blocked goal and requires null text. "
                        "Use operator only when operator input is actually required.",
-                       json_pack("{s:{s:s,s:[s,s,s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
+                       json_pack("{s:{s:[s,s],s:s},s:{s:s,s:[s,s,s,s],s:s},"
+                                 "s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
+                           "id", "type", "string", "null", "description",
+                           "Goal ID. Omit only when exactly one goal is unfinished.",
                            "action", "type", "string", "enum", "rewrite", "complete", "block",
                            "resume", "description",
                            "rewrite changes unlocked wording; complete ends a finished goal; block "
-                           "stops continuation with a genuine blocker; resume restarts a paused or "
+                           "stops that goal with a genuine blocker; resume restarts a paused or "
                            "blocked goal. Use action, not status.",
                            "text", "type", "string", "null", "description",
                            "Omit text or use JSON null for complete and resume; nonblank "
@@ -3382,17 +3404,26 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
                            "does not schedule a wakeup. Omit or use null for other actions."))) < 0)
         goto fail;
     if (json_array_append_new(tools,
-            tool_schema("timer", "delay_ms text",
-                "Schedule one durable one-shot reminder for the model. A positive delay_ms "
-                "schedules or replaces the current timer; delay_ms=0 cancels it and permits "
-                "text=null. When due, the runtime starts a fresh ordinary model turn with the "
-                "reminder text.",
-                json_pack("{s:{s:s,s:I,s:I,s:s},s:{s:[s,s],s:s}}", "delay_ms", "type", "integer",
-                    "minimum", 0, "maximum", (json_int_t)UINT32_MAX, "description",
-                    "Milliseconds before the reminder turn; 0 cancels the current timer.", "text",
-                    "type", "string", "null", "description",
-                    "Nonblank UTF-8 reminder text for a positive delay; null is valid only when "
-                    "delay_ms is 0."))) < 0)
+            tool_schema("timer", "",
+                "Manage independent durable model timers. Omit id to schedule an additional timer; "
+                "provide an armed id to replace that timer. recurring=true repeats at delay_ms "
+                "intervals. Missed intervals coalesce into one wakeup; the next deadline is in "
+                "the future. action=list lists IDs and deadlines. action=cancel or delay_ms=0 "
+                "cancels one timer; id is required when multiple timers are armed.",
+                json_pack("{s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:I,s:I,s:s},"
+                          "s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
+                    "action", "type", "string", "null", "description",
+                    "schedule (default), list or cancel.",
+                    "id", "type", "string", "null", "description",
+                    "Armed timer ID to replace or cancel; omit/null creates an independent timer.",
+                    "delay_ms", "type", "integer", "null", "minimum", (json_int_t)0,
+                    "maximum", (json_int_t)UINT32_MAX, "description",
+                    "Positive interval in milliseconds to schedule; 0 cancels. "
+                    "Omit for list/cancel.",
+                    "text", "type", "string", "null", "description",
+                    "Nonblank reminder for schedule; omit/null for list/cancel.",
+                    "recurring", "type", "boolean", "null", "description",
+                    "true repeats, false/null/omitted schedules a one-shot timer."))) < 0)
         goto fail;
     if (json_array_append_new(
             tools, tool_schema("defer_steering", "",
@@ -3438,8 +3469,7 @@ json_t *
 snag_context_tool_catalog(const struct snag_config *config, const struct snag_session *session,
     const char *provider, const json_t *mcp_tools)
 {
-    json_t *tools = tool_schemas(session->goal_status == SNAG_GOAL_ACTIVE,
-        !snag_goal_unfinished(session->goal_status), false, config, session,
+    json_t *tools = tool_schemas(false, config, session,
         provider, session->active_read_only);
     if (tools && mcp_tools && json_array_extend(tools, (json_t *)mcp_tools) < 0) {
         json_decref(tools);
@@ -3454,8 +3484,7 @@ snag_context_native_compact_parameters(json_t *request, const struct snag_config
     const char *effort, const json_t *mcp_tools)
 {
     if (!request || !config || !session || !provider || !effort) return snag_errno(EINVAL);
-    json_t *tools = tool_schemas(session->goal_status == SNAG_GOAL_ACTIVE,
-        !snag_goal_unfinished(session->goal_status), false, config, session,
+    json_t *tools = tool_schemas(false, config, session,
         provider->name, session->active_read_only);
     int rc = -1;
     if (!tools || (mcp_tools && json_array_extend(tools, (json_t *)mcp_tools) < 0) ||
@@ -4221,7 +4250,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         "active goals until complete or genuinely blocked, with "
         "no default per-goal-turn working or step budget; a final answer is a checkpoint. "
         "Complete only when finished; "
-        "block only when no dependency-ready work remains and name the actual "
+        "block only when that goal has no ready work; continue other active goals and name its "
         "wait_for destination; "
         "rewrite only unlocked wording. Saved paused/blocked goals retain their context without "
         "resuming automatically. "
@@ -4524,7 +4553,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         if (appended < 0) goto out;
     } else if (append_host_input(builder.request_input,
         "Host tool feedback for the latest batch: none.") < 0) goto out;
-    if (append_goal_controller(&builder) < 0 || append_history_orientation(&builder) < 0 ||
+    if (append_goal_controller(&builder) < 0 || append_timer_controller(&builder) < 0 ||
+        append_history_orientation(&builder) < 0 ||
         append_banner(&builder) < 0 || append_process_state(&builder) < 0) {
         snag_errorf(error, error_size, "cannot append active controller state");
         goto out;
@@ -4532,8 +4562,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     if (freeze_host_context(&builder, controller_start, projection) < 0) goto out;
     const char *provider_name =
         session->active_turn ? session->active_turn_provider : session->default_provider;
-    builder.tools = tool_schemas(session->goal_status == SNAG_GOAL_ACTIVE,
-        !snag_goal_unfinished(session->goal_status), builder.networked, config, session,
+    builder.tools = tool_schemas(builder.networked, config, session,
         provider_name, session->active_read_only);
     if (control && control->mcp_tools && builder.tools &&
         json_array_extend(builder.tools, (json_t *)control->mcp_tools) < 0) goto out;

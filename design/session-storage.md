@@ -879,16 +879,19 @@ conversion performs no search or other network operation.
 ### Typed control payloads
 
 Payload version1 assigns session/configuration IDs1..14, timer
-schedule/fire/cancel IDs32..34, goal
+schedule/fire/cancel IDs32..34, recurring schedule ID35, goal
 start/replace/reword/lock/pause/block/complete/resume/cancel IDs64..72 and initial
-input/steering IDs96..105. Session control request/start/finish use IDs16..18;
+input/steering IDs96..105 and timer receipt ID106. Session control request/start/finish use IDs16..18;
 ID15 and IDs19..31 remain reserved for session metadata. Required semantic kinds occupy the low
 half of the 16-bit namespace. The high half permits explicitly optional metadata;
 unknown required records, unsupported semantic payload versions and optional
 flags on semantic kinds are errors before state adoption.
 
 Each timer or goal payload starts with its 16-byte ID. Scheduling adds
-an 8-byte due time and text. Goal start adds its prompt; replacement adds the new
+an 8-byte due time and text; recurring scheduling inserts an 8-byte interval before
+text. Timer input kind106 extends the ordinary input receipt with timer ID16 and
+next-due time8. The reducer consumes or rearms that timer in the same transition
+that retains pending input. Goal start adds its prompt; replacement adds the new
 16-byte ID, actor and prompt; reword adds actor and prompt. Lock/pause add one
 byte for the boolean/reason enum. Block adds actor and blocker text; completion
 adds actor. Fire, cancel and resume need only the ID. Text uses a 4-byte length
@@ -2059,17 +2062,23 @@ the enclosing complete snapshot consumer owns membership, lifecycle, immutable
 journal identity and atomic core/provider adoption. Provider-view snapshots and
 native process collection cursors remain separate dependencies.
 
-The version5 core in `store_binary_checkpoint_core.c` joins ten components in
-fixed order: controls, accounting, fixed texts, pending calls, processes, pending
-inputs, dynamic payloads, the IRC directory, derived IRC activity and a blocked
-goal's wait-channel reference. Its108-byte
-header contains LEu16 version4, LEu16 component count9, LEu64 active-compaction accepting sequence,
-LEu64 retained-response accepting sequence, LEu64 voice-adoption sequence (zero
-when absent), then ten LEu64 component sizes. Version4's100-byte, nine-component
-layout omits the goal-wait reference. Version3's92-byte, eight-component
-header remains readable with an absent activity field; version2's84-byte,
-seven-component header additionally lacks the directory. Earlier draft versions
-fail explicitly; the application has not published native checkpoints.
+The version6 core in `store_binary_checkpoint_core.c` joins twelve components:
+controls, accounting, fixed texts, pending calls, processes, pending inputs,
+dynamic payloads, IRC directory, derived IRC activity, goal-wait reference,
+ID-keyed goals and ID-keyed armed timers. Its124-byte header contains LEu16
+version6, LEu16 component count12, three LEu64 accepting sequences for active
+compaction, retained response and voice adoption, then twelve LEu64 sizes.
+Version5's108-byte ten-component layout omits the two directories. Version4's
+100-byte nine-component layout also omits goal-wait; version3's92-byte layout
+lacks activity; version2's84-byte layout also lacks the IRC directory.
+
+The goals block has a count8 followed by104-byte rows: goal/parent/replacement
+IDs16 each, lock8, then status, revision, turns, prompt accepting sequence,
+prompt offset and blocker accepting sequence as six LEu64 values. Original
+records retain wording, blocker and wait literals. The timers block has count8
+and48-byte rows: ID16, due8, interval8, schedule accepting sequence8 and text
+offset8. Interval zero selects a one-shot. Closure roots every retained literal
+origin, including goals unrelated to the last-event scalar projection.
 
 The activity block stores presence1, an LEu64 observed-after watermark and an
 LEu64 item count. Each item has conversation UUID16 and four LEu64 values:
@@ -2082,7 +2091,7 @@ canonical routed records. Missing activity in older cores remains NULL rather
 than synthesizing lifetime counts. Subsequent live reduction uses its ordinary
 missing-activity watermark rule. The prefix oracle encodes the captured state
 in the frame's declared supported layout before comparing canonical bytes;
-normal publication always uses version5.
+normal publication uses version6.
 
 The goal-wait block is one LEu64 accepting sequence, zero when no explicit
 channel is retained. A nonzero reference must equal the existing goal-blocker

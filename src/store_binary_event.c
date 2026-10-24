@@ -784,6 +784,7 @@ encode_input(struct snag_buf *out, const struct snag_binary_event *event)
     case SNAG_BINARY_FUTURE_TURN_QUEUED:
     case SNAG_BINARY_FUTURE_TURN_EDITED:
         return encode_queued(out, event);
+    case SNAG_BINARY_INPUT_TIMER_RECEIVED:
     case SNAG_BINARY_INPUT_RECEIVED:
         if (event->data.input.origin != SNAG_BINARY_INPUT_DEFAULT &&
             event->data.input.origin != SNAG_BINARY_INPUT_TIMER) return invalid();
@@ -798,8 +799,13 @@ encode_input(struct snag_buf *out, const struct snag_binary_event *event)
                 &event->data.input.instructions_ref, false) < 0 ||
             write_input_text(out, event->data.input.text, &event->data.input.text_ref,
                 SNAG_BINARY_INPUT_TEXT, SNAG_MAX_DIRECT_PROMPT) < 0) return -1;
-        return content ? write_input_content(out, event->data.input.content,
-            &event->data.input.content_ref) : 0;
+        if (content && write_input_content(out, event->data.input.content,
+                &event->data.input.content_ref) < 0) return -1;
+        if (event->kind != SNAG_BINARY_INPUT_TIMER_RECEIVED) return 0;
+        if (event->data.input.origin != SNAG_BINARY_INPUT_TIMER || event->data.input.read_only)
+            return invalid();
+        if (snag_buf_append(out, event->data.input.timer_id, 16u) < 0) return -1;
+        return write_uint(out, event->data.input.timer_next_due_ms, 8u);
     case SNAG_BINARY_INPUT_CANCELLED:
         return 0;
     case SNAG_BINARY_STEERING_ADDED:
@@ -846,6 +852,7 @@ decode_input(struct fields *fields, struct snag_binary_event *event)
     case SNAG_BINARY_FUTURE_TURN_QUEUED:
     case SNAG_BINARY_FUTURE_TURN_EDITED:
         return decode_queued(fields, event);
+    case SNAG_BINARY_INPUT_TIMER_RECEIVED:
     case SNAG_BINARY_INPUT_RECEIVED:
         if (!read_uint(fields, 1u, &value) || value > SNAG_BINARY_INPUT_TIMER ||
             !read_uint(fields, 1u, &flags) || flags > 3u) return false;
@@ -858,7 +865,11 @@ decode_input(struct fields *fields, struct snag_binary_event *event)
             read_input_text(fields, &event->data.input.text, &event->data.input.text_ref,
                 SNAG_BINARY_INPUT_TEXT, SNAG_MAX_DIRECT_PROMPT) &&
             (!(flags & 2u) || read_input_content(fields, &event->data.input.content,
-                &event->data.input.content_ref));
+                &event->data.input.content_ref)) &&
+            (event->kind != SNAG_BINARY_INPUT_TIMER_RECEIVED ||
+             (event->data.input.origin == SNAG_BINARY_INPUT_TIMER && !event->data.input.read_only &&
+              read_id(fields, event->data.input.timer_id) &&
+              read_uint(fields, 8u, &event->data.input.timer_next_due_ms)));
     case SNAG_BINARY_INPUT_CANCELLED:
         return true;
     case SNAG_BINARY_STEERING_ADDED:
@@ -2071,7 +2082,7 @@ pause_valid(uint64_t pause)
 static bool
 timer_kind(enum snag_binary_kind kind)
 {
-    return kind >= SNAG_BINARY_TIMER_SCHEDULED && kind <= SNAG_BINARY_TIMER_CANCELLED;
+    return kind >= SNAG_BINARY_TIMER_SCHEDULED && kind <= SNAG_BINARY_TIMER_RECURRING;
 }
 
 static bool
@@ -3757,6 +3768,9 @@ static const struct archive_schema archive_schemas[] = {
     ARCHIVE_SCHEMA(SNAG_BINARY_GOAL_COMPLETED, "actor", "goal_id"),
     ARCHIVE_SCHEMA(SNAG_BINARY_GOAL_RESUMED, "goal_id"),
     ARCHIVE_SCHEMA(SNAG_BINARY_GOAL_CANCELLED, "goal_id"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_INPUT_TIMER_RECEIVED, "content", "effort", "instructions", "model",
+        "origin", "provider", "read_only", "received_at_ms", "text", "timer_id", "next_due_ms"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_TIMER_RECURRING, "due_ms", "text", "timer_id", "interval_ms"),
     ARCHIVE_SCHEMA(SNAG_BINARY_INPUT_RECEIVED, "content", "effort", "instructions", "model",
         "origin", "provider", "read_only", "received_at_ms", "text"),
     {SNAG_BINARY_INPUT_CANCELLED, NULL, 0u},
@@ -4612,7 +4626,7 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
     }
     if (turn_outcome_kind(event->kind)) return encode_turn_outcome(out, event);
     if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
-        event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return encode_input(out, event);
+        event->kind <= SNAG_BINARY_INPUT_TIMER_RECEIVED) return encode_input(out, event);
     if ((event->kind >= SNAG_BINARY_SESSION_CREATED &&
             event->kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
         event->kind == SNAG_BINARY_RETRY_AUTO_CHANGED ||
@@ -4622,9 +4636,13 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
     }
     if (timer_kind(event->kind)) {
         if (snag_buf_append(out, event->data.timer.id, 16u) < 0) return -1;
-        if (event->kind != SNAG_BINARY_TIMER_SCHEDULED) return 0;
+        if (event->kind != SNAG_BINARY_TIMER_SCHEDULED &&
+            event->kind != SNAG_BINARY_TIMER_RECURRING) return 0;
         if (!event->data.timer.due_ms) return invalid();
         if (write_uint(out, event->data.timer.due_ms, 8u) < 0) return -1;
+        if (event->kind == SNAG_BINARY_TIMER_RECURRING &&
+            (!event->data.timer.interval_ms || event->data.timer.interval_ms > UINT32_MAX ||
+             write_uint(out, event->data.timer.interval_ms, 8u) < 0)) return -1;
         return write_text(out, event->data.timer.text, 1u, SNAG_MAX_TIMER_TEXT);
     }
     if (!goal_kind(event->kind)) return invalid();
@@ -4692,6 +4710,7 @@ static const struct {
     {SNAG_BINARY_CONTROL_STARTED, "control_started"},
     {SNAG_BINARY_CONTROL_FINISHED, "control_finished"},
     {SNAG_BINARY_TIMER_SCHEDULED, "timer_scheduled"},
+    {SNAG_BINARY_TIMER_RECURRING, "timer_recurring_scheduled"},
     {SNAG_BINARY_TIMER_FIRED, "timer_fired"},
     {SNAG_BINARY_TIMER_CANCELLED, "timer_cancelled"},
     {SNAG_BINARY_GOAL_STARTED, "goal_started"},
@@ -4705,6 +4724,7 @@ static const struct {
     {SNAG_BINARY_GOAL_CANCELLED, "goal_cancelled"},
     {SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR, "goal_blocked_wait_for"},
     {SNAG_BINARY_INPUT_RECEIVED, "input_received"},
+    {SNAG_BINARY_INPUT_TIMER_RECEIVED, "timer_input_received"},
     {SNAG_BINARY_INPUT_CANCELLED, "input_cancelled"},
     {SNAG_BINARY_STEERING_ADDED, "steering_added"},
     {SNAG_BINARY_IRC_REPLY_REMINDER, "irc_reply_reminder"},
@@ -4799,7 +4819,7 @@ snag_binary_event_version(enum snag_binary_kind kind)
         return 1u;
     }
     if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED ||
-        (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_FUTURE_TURN_EDITED)) return 2u;
+        (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_INPUT_TIMER_RECEIVED)) return 2u;
     if ((kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
         kind == SNAG_BINARY_RETRY_AUTO_CHANGED ||
         kind == SNAG_BINARY_FALLBACK_CHANGED || kind == SNAG_BINARY_TURN_FALLBACK_STARTED ||
@@ -4953,7 +4973,7 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
     }
     if (turn_outcome_kind(event->kind)) return decode_turn_outcome(fields, event);
     if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
-        event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return decode_input(fields, event);
+        event->kind <= SNAG_BINARY_INPUT_TIMER_RECEIVED) return decode_input(fields, event);
     if ((event->kind >= SNAG_BINARY_SESSION_CREATED &&
             event->kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
         event->kind == SNAG_BINARY_RETRY_AUTO_CHANGED ||
@@ -4963,9 +4983,13 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
     }
     if (timer_kind(event->kind)) {
         if (!read_id(fields, event->data.timer.id)) return false;
-        if (event->kind != SNAG_BINARY_TIMER_SCHEDULED) return true;
+        if (event->kind != SNAG_BINARY_TIMER_SCHEDULED &&
+            event->kind != SNAG_BINARY_TIMER_RECURRING) return true;
         return read_uint(fields, 8u, &event->data.timer.due_ms) &&
             event->data.timer.due_ms &&
+            (event->kind != SNAG_BINARY_TIMER_RECURRING ||
+             (read_uint(fields, 8u, &event->data.timer.interval_ms) &&
+              event->data.timer.interval_ms && event->data.timer.interval_ms <= UINT32_MAX)) &&
             read_text(fields, &event->data.timer.text, 1u, SNAG_MAX_TIMER_TEXT);
     }
     if (!goal_kind(event->kind) || !read_id(fields, event->data.goal.id)) return false;
@@ -5043,6 +5067,7 @@ input_leaf(const struct snag_binary_record *record, enum snag_binary_input_leaf 
     switch (event.kind) {
     case SNAG_BINARY_IRC_ADMITTED:
         return input_leaf(&event.data.irc_admitted.input, field, out);
+    case SNAG_BINARY_INPUT_TIMER_RECEIVED:
     case SNAG_BINARY_INPUT_RECEIVED:
         text = event.data.input.text;
         content = event.data.input.content;
@@ -5219,6 +5244,7 @@ find_control_text(const struct snag_binary_batch *batch, uint64_t sequence,
     case SNAG_BINARY_IRC_COMPACT_CONFIGURED:
         source.text = source.event.data.irc_compact_configured.instruction;
         break;
+    case SNAG_BINARY_TIMER_RECURRING:
     case SNAG_BINARY_TIMER_SCHEDULED:
         source.text = source.event.data.timer.text;
         break;

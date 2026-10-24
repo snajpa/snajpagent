@@ -14,6 +14,13 @@
 - Keep workspace-disabled builds compiling by guarding frontend-only draft
   snapshots. Cover the disabled-workspace UI in the existing lean compile check.
 
+- Retain multiple independent persistent goals. List all with `/goal`, pause or
+  resume all unfinished goals, and target individual lifecycle changes by ID.
+  Continue while any goal is active; retain every state across recovery and fork.
+  Default new goal wording to 4096 UTF-8 bytes without invalidating saved wording.
+- Add independent timer IDs, listing, replacement and cancellation, plus a
+  recurring flag. Admit each wakeup atomically and coalesce missed intervals.
+
 - Fix Windows stored-login inspection, reuse and logout by opening the state
   directory with permission to query its owner and ACL. Keep credential privacy
   checks intact, including for Unicode profile paths.

@@ -383,6 +383,8 @@ encode_state(const struct snag_session *s)
     JSON_FIELD(active_instructions); JSON_FIELD(response_public); JSON_FIELD(download_queue);
     if (s->irc_conversations) JSON_FIELD(irc_conversations);
     if (s->irc_activity) JSON_FIELD(irc_activity);
+    if (json_object_size(s->goals)) JSON_FIELD(goals);
+    if (json_object_size(s->timers)) JSON_FIELD(timers);
     if (s->active_skills) JSON_FIELD(active_skills);
     if (s->pinned_commands) JSON_FIELD(pinned_commands);
     if (s->work_context) JSON_FIELD(work_context);
@@ -409,6 +411,57 @@ decode_pairs(const json_t *value, uint64_t result[2])
         result[i] = (uint64_t)json_integer_value(n);
     }
     return 0;
+}
+
+static bool
+controller_directories_valid(const struct snag_session *s)
+{
+    if ((s->goals && !json_is_object(s->goals)) ||
+        (s->timers && !json_is_object(s->timers))) return false;
+    const char *id;
+    const json_t *entry;
+    json_object_foreach(s->goals, id, entry) {
+        const char *own = snag_json_string(entry, "id");
+        const char *parent = snag_json_string(entry, "parent");
+        const char *replacement = snag_json_string(entry, "replaced_by");
+        const char *prompt = snag_json_string(entry, "prompt");
+        const char *blocker = snag_json_string(entry, "blocker");
+        const char *wait = snag_json_string(entry, "wait_for");
+        uint64_t status = 0u, revision = 0u, turns = 0u;
+        if (strlen(id) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
+            !own || strcmp(own, id) || !parent || (*parent &&
+                (strlen(parent) != SNAG_ID_HEX_LEN ||
+                 !snag_hex_is_lower(parent, SNAG_ID_HEX_LEN))) ||
+            (replacement && (strlen(replacement) != SNAG_ID_HEX_LEN ||
+                 !snag_hex_is_lower(replacement, SNAG_ID_HEX_LEN))) ||
+            !snag_text_valid(prompt, 1u, SNAG_MAX_GOAL_PROMPT) || snag_text_blank(prompt) ||
+            !snag_text_valid(blocker, 0u, SNAG_MAX_GOAL_BLOCKER) || !wait ||
+            !json_is_boolean(json_object_get(entry, "locked")) ||
+            snag_json_integer_u64(entry, "status", &status) < 0 ||
+            status < SNAG_GOAL_ACTIVE || status > SNAG_GOAL_CANCELLED ||
+            snag_json_integer_u64(entry, "revision", &revision) < 0 || !revision ||
+            snag_json_integer_u64(entry, "turns", &turns) < 0 ||
+            (status == SNAG_GOAL_BLOCKED ? (!*blocker || (!snag_goal_wait_valid(wait) &&
+                 strcmp(wait, "unspecified (older goal record)"))) : *wait)) return false;
+        const char *sources[] = {"prompt_seq", "prompt_offset", "blocker_seq"};
+        for (size_t i = 0u; i < sizeof(sources) / sizeof(*sources); ++i) {
+            uint64_t value = 0u;
+            if (snag_json_integer_u64(entry, sources[i], &value) < 0 ||
+                (i != 1u && value >= s->next_seq)) return false;
+        }
+    }
+    json_object_foreach(s->timers, id, entry) {
+        const char *own = snag_json_string(entry, "id");
+        const char *text = snag_json_string(entry, "text");
+        uint64_t due = 0u, interval = 0u, source = 0u, offset = 0u;
+        if (strlen(id) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
+            !own || strcmp(own, id) || !snag_text_valid(text, 1u, SNAG_MAX_TIMER_TEXT) ||
+            snag_text_blank(text) || snag_json_integer_u64(entry, "due_ms", &due) < 0 || !due ||
+            snag_json_integer_u64(entry, "interval_ms", &interval) < 0 || interval > UINT32_MAX ||
+            snag_json_integer_u64(entry, "source_seq", &source) < 0 || source >= s->next_seq ||
+            snag_json_integer_u64(entry, "text_offset", &offset) < 0) return false;
+    }
+    return true;
 }
 
 static int
@@ -487,6 +540,8 @@ decode_state(const json_t *data, struct snag_session *s)
         if (!snag_pinned_commands_valid(pins)) return -1;
         s->pinned_commands = json_incref(pins);
     }
+    s->goals = json_incref(json_object_get(data, "goals"));
+    s->timers = json_incref(json_object_get(data, "timers"));
     json_t *skills = json_object_get(data, "active_skills");
     if (skills) {
         if (!snag_skill_bindings_valid(skills)) return -1;
@@ -572,6 +627,10 @@ decode_state(const json_t *data, struct snag_session *s)
         !snag_hex_is_lower(s->prev_sha256, SNAG_SHA256_HEX_LEN) ||
         s->log_end < 0 || s->next_seq < 2u ||
         (s->format_version != 2u && s->format_version != 3u && s->format_version != 4u)) return -1;
+    if ((s->goal_prompt && snag_goals_restore(s, 0u, 0u, 0u) < 0) ||
+        (s->timer_text && snag_timers_restore(s, 0u, 0u) < 0) ||
+        !controller_directories_valid(s))
+        return -1;
     return 0;
 }
 

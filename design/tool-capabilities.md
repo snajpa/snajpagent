@@ -21,16 +21,19 @@ runtime, invalid process handles, and configured tool rules.
 
 ## Timer
 
-`timer` is an ordinary always-visible tool. It accepts a positive `delay_ms`
-and nonblank `text`; `delay_ms=0` cancels the current one-shot timer and permits
-`text=null`. Scheduling replaces an earlier one-shot timer. The schedule is
-durable in the session journal, so resume retains it. When due, the foreground
-runtime records the firing and admits one fresh ordinary model turn containing
-the reminder text. The turn is not a goal continuation and is not suppressed by
-a blocked or paused goal; the full catalog is available so the model can inspect,
-act, resume a goal, or report that a dependency remains. Explicit completion,
-cancellation, or process exit still follows its existing semantics; a timer is
-not an authorization to perform an otherwise refused side effect.
+`timer` is an ordinary always-visible tool. Positive `delay_ms` and nonblank
+`text` create an independent timer; `id` replaces one armed timer. `action=list`
+returns IDs and deadlines. `action=cancel` or `delay_ms=0` cancels a named timer,
+requiring omitted or null text. Without an ID, cancellation requires a sole armed
+timer; no timers is a successful no-op. `recurring=true` repeats at `delay_ms`
+intervals; false, null or omission selects a one-shot.
+
+Schedules survive restart. A due receipt atomically consumes the one-shot or
+rearms the recurring timer and admits its text as host-originated input. The next
+recurring deadline is in the future; missed intervals coalesce into one wakeup.
+Recovery retains an accepted pending input rather than firing the timer again.
+Timer turns follow ordinary policy fences and leave paused or blocked goals
+unchanged unless an explicit valid lifecycle action resumes one.
 
 ## IRC lifecycle
 

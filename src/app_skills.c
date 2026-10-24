@@ -155,8 +155,26 @@ activate(struct app_state *app, const char *id, const char *arguments, bool expl
     }
     json_t *active = active_bindings(&app->session, skill);
     const char *visit = snag_json_string(app->session.work_context, "id");
-    const char *goal = !visit && app->session.goal_status == SNAG_GOAL_ACTIVE &&
-        !app->session.active_read_only ? app->session.goal_id : "";
+    const json_t *single_goal = snag_goal_select(&app->session, NULL);
+    bool goal_scope = !visit && snag_goals_status(&app->session) == SNAG_GOAL_ACTIVE &&
+        !app->session.active_read_only;
+    const char *goal = goal_scope && single_goal ? snag_json_string(single_goal, "id") : "";
+    if (goal_scope && !single_goal) {
+        json_t *ids = json_array();
+        const char *key;
+        const json_t *entry;
+        if (!ids) { json_decref(skill); json_decref(active); return NULL; }
+        json_object_foreach(app->session.goals, key, entry) {
+            if (snag_goal_unfinished((enum snag_goal_status)json_integer_value(
+                    json_object_get(entry, "status"))) &&
+                json_array_append_new(ids, json_string(key)) < 0) {
+                json_decref(ids); json_decref(skill); json_decref(active); return NULL;
+            }
+        }
+        if (json_object_set_new(skill, "goal_ids", ids) < 0) {
+            json_decref(skill); json_decref(active); return NULL;
+        }
+    }
     json_t *dependencies = dependency_state(app, skill);
     json_t *allowed = allowed_tools(app, skill);
     json_t *resources = snag_skill_resources(snag_json_string(skill, "root"),

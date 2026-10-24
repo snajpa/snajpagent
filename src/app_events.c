@@ -465,9 +465,9 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
 
     /* Goal recovery retains its active turn. Background chat that still waits
      * for turn end cannot replace the failed request with fresher input. */
-    bool background_ready = app->session.goal_status != SNAG_GOAL_PAUSED &&
-        app->session.goal_status != SNAG_GOAL_BLOCKED &&
-        (app->session.goal_status != SNAG_GOAL_ACTIVE || !app->session.active_turn ||
+    bool background_ready = snag_goals_status(&app->session) != SNAG_GOAL_PAUSED &&
+        snag_goals_status(&app->session) != SNAG_GOAL_BLOCKED &&
+        (snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE || !app->session.active_turn ||
             (!app->session.steering_deferred && irc_background_steering(app)));
     if (chat && (!app->session.irc_sleep_until_ms || accepted.urgent) &&
         (accepted.urgent || background_ready)) {
@@ -655,8 +655,8 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
         /* A paused or blocked persistent goal is an explicit idle boundary. Keep
      * ordinary room traffic pending until the operator resumes or submits new
      * work; direct mentions remain urgent and may still start a turn. */
-    } else if (app->session.goal_status == SNAG_GOAL_PAUSED ||
-               app->session.goal_status == SNAG_GOAL_BLOCKED) {
+    } else if (snag_goals_status(&app->session) == SNAG_GOAL_PAUSED ||
+               snag_goals_status(&app->session) == SNAG_GOAL_BLOCKED) {
         return NULL;
         /* Startup/history alone must not turn an unused session into saved work. */
     } else if (app->session.log_fd >= 0 && app->irc_background.len &&
@@ -1721,10 +1721,11 @@ snag_app_goal_list(struct app_state *app, const struct snag_response_item *call,
     }
     uint64_t next_before = scan.total > returned ? oldest_returned : 0u;
     if (snag_buf_printf(&text,
-            "[goals session=%s current=%s status=%s matched=%zu returned=%zu order=newest-first "
+            "[goals session=%s last_changed=%s status=%s matched=%zu returned=%zu "
+            "order=newest-first "
             "next_before_seq=%llu]\n",
             app->session.id, app->session.goal_id[0] ? app->session.goal_id : "none",
-            snag_goal_status_name(app->session.goal_status), scan.total, returned,
+            snag_goal_status_name(snag_goals_status(&app->session)), scan.total, returned,
             (unsigned long long)next_before) < 0 ||
         snag_buf_append(&text, body.data, body.len) < 0)
         goto out;

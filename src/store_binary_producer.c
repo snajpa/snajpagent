@@ -210,7 +210,9 @@ static int
 remember_input(struct snag_binary_producer *writer, const struct snag_session *state,
     uint64_t sequence, const struct snag_binary_record *record)
 {
-    if (record->kind != SNAG_BINARY_INPUT_RECEIVED && record->kind != SNAG_BINARY_IRC_ADMITTED &&
+    if (record->kind != SNAG_BINARY_INPUT_RECEIVED &&
+        record->kind != SNAG_BINARY_INPUT_TIMER_RECEIVED &&
+        record->kind != SNAG_BINARY_IRC_ADMITTED &&
         record->kind != SNAG_BINARY_FUTURE_TURN_QUEUED &&
         record->kind != SNAG_BINARY_FUTURE_TURN_EDITED) return 0;
     struct snag_binary_event event;
@@ -220,7 +222,8 @@ remember_input(struct snag_binary_producer *writer, const struct snag_session *s
         struct snag_binary_record input = event.data.irc_admitted.input;
         if (snag_binary_event_decode(&input, &event) < 0) return -1;
     }
-    if (event.kind == SNAG_BINARY_INPUT_RECEIVED) {
+    if (event.kind == SNAG_BINARY_INPUT_RECEIVED ||
+        event.kind == SNAG_BINARY_INPUT_TIMER_RECEIVED) {
         if (!state->pending_input) return snag_errno(EINVAL);
         clear_input(&writer->input);
         writer->input.creation = sequence;
@@ -673,7 +676,9 @@ snag_binary_producer_restore(struct snag_binary_producer *out, int fd,
     if (sources->input) {
         if (restore_record(fd, through, access, sources->input, &scratch,
                 &record, cancelled, opaque) < 0) goto done;
-        if (record.kind != SNAG_BINARY_INPUT_RECEIVED && record.kind != SNAG_BINARY_IRC_ADMITTED) {
+        if (record.kind != SNAG_BINARY_INPUT_RECEIVED &&
+            record.kind != SNAG_BINARY_INPUT_TIMER_RECEIVED &&
+            record.kind != SNAG_BINARY_IRC_ADMITTED) {
             errno = EINVAL;
             goto done;
         }

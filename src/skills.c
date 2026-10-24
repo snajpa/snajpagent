@@ -45,6 +45,15 @@ snag_skill_bindings_valid(const json_t *active)
         const char *digest = snag_json_string(entry, "digest");
         const char *turn = snag_json_string(entry, "turn_id");
         const char *goal = snag_json_string(entry, "goal_id");
+        const json_t *ids = json_object_get(entry, "goal_ids");
+        if (ids) {
+            if (!json_is_array(ids) || !json_array_size(ids) || !goal || *goal) return false;
+            for (size_t j = 0u; j < json_array_size(ids); ++j) {
+                const char *id = json_string_value(json_array_get(ids, j));
+                if (!id || strlen(id) != SNAG_ID_HEX_LEN ||
+                    !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) return false;
+            }
+        }
         if (!*snag_json_string(entry, "id") || !*snag_json_string(entry, "name") ||
             !snag_path_root_len(snag_json_string(entry, "root")) ||
             strlen(digest) != SNAG_SHA256_HEX_LEN ||

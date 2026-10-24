@@ -98,6 +98,7 @@ record_source(const struct snag_binary_record *record, uint64_t sequence,
     case SNAG_BINARY_IRC_COMPACT_CONFIGURED:
         text = event->data.irc_compact_configured.instruction;
         break;
+    case SNAG_BINARY_TIMER_RECURRING:
     case SNAG_BINARY_TIMER_SCHEDULED: text = event->data.timer.text; break;
     case SNAG_BINARY_GOAL_STARTED:
     case SNAG_BINARY_GOAL_REPLACED:
@@ -144,7 +145,6 @@ changed_slot(enum snag_binary_kind kind)
     case SNAG_BINARY_IRC_SNAPSHOT: return SNAG_BINARY_TEXT_IRC_SNAPSHOT;
     case SNAG_BINARY_IRC_COMPACT_CONFIGURED: return SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION;
     case SNAG_BINARY_STEERING_UPDATED: return SNAG_BINARY_TEXT_STEERING;
-    case SNAG_BINARY_TIMER_SCHEDULED: return SNAG_BINARY_TEXT_TIMER;
     case SNAG_BINARY_GOAL_STARTED:
     case SNAG_BINARY_GOAL_REPLACED:
     case SNAG_BINARY_GOAL_REWORDED: return SNAG_BINARY_TEXT_GOAL_PROMPT;
@@ -208,6 +208,29 @@ snag_binary_checkpoint_texts_step(struct snag_binary_checkpoint_texts *texts,
         if (snapshot && *snapshot) return snag_errno(EINVAL);
         next.slots[SNAG_BINARY_TEXT_IRC_SNAPSHOT] =
             (struct snag_binary_checkpoint_text_source){.declaration = sequence};
+    }
+    const json_t *timer = json_object_get(state->timers, state->timer_id);
+    if (timer) {
+        uint64_t source = (uint64_t)json_integer_value(json_object_get(timer, "source_seq"));
+        size_t offset = (size_t)json_integer_value(json_object_get(timer, "text_offset"));
+        next.slots[SNAG_BINARY_TEXT_TIMER] =
+            (struct snag_binary_checkpoint_text_source){.declaration = source,
+                .original.target = {.sequence = source, .offset = offset,
+                    .size = strlen(state->timer_text)}};
+    }
+    const json_t *goal = snag_goal_find(state, state->goal_id);
+    if (goal) {
+        uint64_t prompt = (uint64_t)json_integer_value(json_object_get(goal, "prompt_seq"));
+        uint64_t blocker = (uint64_t)json_integer_value(json_object_get(goal, "blocker_seq"));
+        size_t offset = (size_t)json_integer_value(json_object_get(goal, "prompt_offset"));
+        if (prompt) next.slots[SNAG_BINARY_TEXT_GOAL_PROMPT] =
+            (struct snag_binary_checkpoint_text_source){.declaration = prompt,
+                .original.target = {.sequence = prompt, .offset = offset,
+                    .size = strlen(state->goal_prompt)}};
+        if (blocker && state->goal_blocker) next.slots[SNAG_BINARY_TEXT_GOAL_BLOCKER] =
+            (struct snag_binary_checkpoint_text_source){.declaration = blocker,
+                .original.target = {.sequence = blocker, .offset = 21u,
+                    .size = strlen(state->goal_blocker)}};
     }
     for (size_t i = 0u; i < COUNT(texts->slots); ++i) {
         const char *text = slot_text(state, i);
@@ -312,7 +335,8 @@ slot_accepts(size_t slot, const struct snag_binary_event *event)
         return (event->kind == SNAG_BINARY_GOAL_BLOCKED ||
             event->kind == SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR) &&
             event->data.goal.actor == SNAG_BINARY_MODEL;
-    case SNAG_BINARY_TEXT_TIMER: return event->kind == SNAG_BINARY_TIMER_SCHEDULED;
+    case SNAG_BINARY_TEXT_TIMER: return event->kind == SNAG_BINARY_TIMER_SCHEDULED ||
+        event->kind == SNAG_BINARY_TIMER_RECURRING;
     case SNAG_BINARY_TEXT_BANNER: return event->kind == SNAG_BINARY_BANNER_UPDATED;
     case SNAG_BINARY_TEXT_NAME: return event->kind == SNAG_BINARY_SESSION_NAMED;
     case SNAG_BINARY_TEXT_SERVICE_TIER: return event->kind == SNAG_BINARY_SERVICE_TIER_CHANGED;
@@ -364,10 +388,6 @@ snag_binary_checkpoint_texts_read(int fd, const struct snag_binary_anchor *throu
         if (snag_binary_checkpoint_batch_find(fd, through, access, source->declaration,
                 &scratch, &batch, &before) < 0 ||
             find_declaration(&batch, source->declaration, &record) < 0) goto done;
-        if (changed_slot((enum snag_binary_kind)record.kind) == COUNT(text_slots)) {
-            errno = EINVAL;
-            goto done;
-        }
         int decoded = snag_binary_event_decode(&record, &event);
         if (decoded != 0) {
             if (decoded > 0) errno = EINVAL;

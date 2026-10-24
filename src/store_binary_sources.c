@@ -176,7 +176,7 @@ update_sources(struct snag_binary_checkpoint_sources *sources, const struct snag
     }
     if (!state->active_compact_id[0]) sources->active_compact = 0u;
     if (update_download_sources(sources, state, sequence, kind) < 0) return -1;
-    if (kind == SNAG_BINARY_INPUT_RECEIVED ||
+    if (kind == SNAG_BINARY_INPUT_RECEIVED || kind == SNAG_BINARY_INPUT_TIMER_RECEIVED ||
         (kind == SNAG_BINARY_IRC_ADMITTED && json_object_get(data, "input"))) {
         sources->input = sequence;
     }

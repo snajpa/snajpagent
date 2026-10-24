@@ -188,15 +188,16 @@ turn_retry_available(const struct app_state *app, const struct turn_retry *retry
 {
     return snag_app_retry_allowed(app) && !retry->compaction_bounded && !app->turn_policy_stopped &&
            !app->interrupt_requested && !app->input_closed &&
-           (app->session.goal_status == SNAG_GOAL_ACTIVE ||
-               (app->session.goal_status == retry->goal_status && retry->attempts < retry->limit));
+           (snag_goals_status(&app->session) == SNAG_GOAL_ACTIVE ||
+               (snag_goals_status(&app->session) == retry->goal_status &&
+                   retry->attempts < retry->limit));
 }
 
 static int
 failure_notice(struct app_state *app, const char *message, bool recovering)
 {
     uint64_t now = snag_monotonic_ms();
-    if ((app->session.goal_status == SNAG_GOAL_ACTIVE || app->session.active_turn) &&
+    if ((snag_goals_status(&app->session) == SNAG_GOAL_ACTIVE || app->session.active_turn) &&
         app->recovery_delay_ms && !strcmp(app->recovery_error, message) &&
         now - app->recovery_notice_ms < 30000u)
         return 0;
@@ -534,7 +535,7 @@ commit_event_with_request(struct app_state *app, const char *type, json_t *data,
     const char *request, char *error, size_t error_size)
 {
     uint64_t seq;
-    enum snag_goal_status previous_goal_status = app->session.goal_status;
+    enum snag_goal_status previous_goal_status = snag_goals_status(&app->session);
     if (app->ui.input_received_ms &&
         snag_string_in(type, "steering_added future_turn_queued future_turn_edited") &&
         snag_json_set_new(
@@ -574,7 +575,7 @@ commit_event_with_request(struct app_state *app, const char *type, json_t *data,
         (void)snag_ui_view_result(&app->ui, view_request, "committed", seq, type);
     }
     /* Present committed goal state before any notice can redraw the composer. */
-    if (previous_goal_status != app->session.goal_status && app->ui.opened &&
+    if (previous_goal_status != snag_goals_status(&app->session) && app->ui.opened &&
         snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_SPINNERS,
                                    .data.value = prompt_spinner_states(app)}) < 0)
         return snag_errorf(error, error_size, "goal prompt state could not be displayed");
@@ -606,7 +607,7 @@ commit_event_with_request(struct app_state *app, const char *type, json_t *data,
             type, "response_started response_completed compaction_completed context_rebased") &&
         set_input_prompt(app, app->session.active_turn) < 0)
         return snag_errorf(error, error_size, "context prompt could not be updated");
-    if (strcmp(type, "turn_failed") == 0 && app->session.goal_status != SNAG_GOAL_ACTIVE)
+    if (strcmp(type, "turn_failed") == 0 && snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE)
         return app_warning(app, "turn failed; try /retry to continue");
     return 0;
 }
@@ -1176,7 +1177,8 @@ static unsigned int
 prompt_spinner_states(const struct app_state *app)
 {
     bool tool = app->tool_active || snag_tools_busy();
-    return (app->session.goal_status == SNAG_GOAL_ACTIVE ? 1u << SNAG_TERM_SPINNER_GOAL : 0u) |
+    return (snag_goals_status(&app->session) == SNAG_GOAL_ACTIVE ?
+               1u << SNAG_TERM_SPINNER_GOAL : 0u) |
            (app->provider_active && !tool ? 1u << SNAG_TERM_SPINNER_PROVIDER : 0u) |
            (tool ? 1u << SNAG_TERM_SPINNER_TOOL : 0u);
 }
@@ -1494,6 +1496,24 @@ queue_future_turn(struct app_state *app, const char *text, bool arm, char *error
         return snag_errorf(error, error_size, "queued turn acknowledgement could not be rendered");
     return 0;
 }
+int
+snag_app_goal_resume_input(struct app_state *app, bool active, char *error, size_t size)
+{
+    const char *text = "Resume work on the goals made active by this /goal resume command. "
+        "This is explicit operator direction; use the complete goal/state list in the host "
+        "snapshot and choose useful work. Other paused or blocked goals retain their stops.";
+    if (active && app->session.active_turn) {
+        char id[SNAG_ID_HEX_LEN + 1u];
+        if (snag_random_id(id) < 0) return -1;
+        return commit_input(app, "steering_added",
+            snag_app_steering_added_data(app->session.active_turn_id, id, text), NULL, error, size);
+    }
+    if (app->session.pending_input)
+        return queue_future_turn(app, text, true, error, size);
+    return commit_input(app, "input_received", snag_app_input_received_data(app, text, false,
+        false), NULL, error, size);
+}
+
 static int
 remove_queued_turns(struct app_state *app, size_t index, bool all, char *error, size_t error_size)
 {
@@ -1675,6 +1695,8 @@ render_status(struct app_state *app)
             "cwd: %s\n"
             "turns: %llu\n"
             "queue: %zu%s\n"
+            "goals: %zu (%s)\n"
+            "timers: %zu\n"
             "verbosity: %u\n"
             "context: source=%s",
             id, app->session.name ? app->session.name : "-",
@@ -1689,6 +1711,9 @@ render_status(struct app_state *app)
             app->session.turn_fallback_active ? " (serving this API call)" : "", app->session.cwd,
             (unsigned long long)app->session.turn_count, app->session.pending_queue_count,
             app->session.pending_queue_count && !app->session.queue_armed ? " paused" : "",
+            json_object_size(app->session.goals),
+            snag_goal_status_name(snag_goals_status(&app->session)),
+            json_object_size(app->session.timers),
             snag_ui_verbosity(&app->ui), snag_capacity_source_name(capacity.source)) < 0 ||
         append_capacity_value(
             &text, "hard-input", capacity.hard_input_known, capacity.hard_input_tokens) < 0 ||
@@ -3960,7 +3985,8 @@ apply_controls(struct app_state *app)
 }
 
 static const char goal_actions_text[] =
-    "goal actions: status, set TEXT, pause, resume, lock, unlock, complete, cancel, clear, help";
+    "goal actions: status, add TEXT, set [ID] TEXT, pause [ID], resume [ID], "
+    "lock [ID], unlock [ID], complete [ID], cancel [ID], clear [ID], help";
 
 static int
 state_command(struct app_state *app, const char *line, bool active)
@@ -5273,7 +5299,7 @@ recover_session(struct app_state *app, char *error, size_t error_size)
         return app_warning(app, "recovered deliberate turn cancellation");
     }
     if (session->response_handoff ||
-        (!session->policy_stopped && session->goal_status != SNAG_GOAL_ACTIVE &&
+        (!session->policy_stopped && snag_goals_status(session) != SNAG_GOAL_ACTIVE &&
             session->turn_retry_attempts > session->turn_retry_limit)) {
         if (terminalize_pending(app, turn_id, "recovery_unstarted", error, error_size) < 0 ||
             snag_app_close_active_processes(
@@ -5763,7 +5789,7 @@ finish_user_interrupt(struct app_state *app, const char *turn_id, char *error, s
 static int
 turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
 {
-    enum snag_goal_status initial_goal_status = app->session.goal_status;
+    enum snag_goal_status initial_goal_status = snag_goals_status(&app->session);
     bool goal = initial_goal_status == SNAG_GOAL_ACTIVE;
     bool policy = app->turn_policy_stopped;
     bool settings = retry->settings_invalid;
@@ -5789,11 +5815,12 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
             "Running commands retained.");
     }
     while (!app->input_closed && (policy || settings || snag_app_retry_allowed(app)) &&
-           (goal ? (app->session.goal_status == SNAG_GOAL_ACTIVE ||
-                       (app->session.goal_status == SNAG_GOAL_PAUSED && app->session.process_count))
-                 : app->session.goal_status == initial_goal_status) &&
+           (goal ? (snag_goals_status(&app->session) == SNAG_GOAL_ACTIVE ||
+                       (snag_goals_status(&app->session) == SNAG_GOAL_PAUSED &&
+                           app->session.process_count))
+                 : snag_goals_status(&app->session) == initial_goal_status) &&
            (policy || settings || snag_monotonic_ms() < deadline ||
-               (goal && app->session.goal_status == SNAG_GOAL_PAUSED))) {
+               (goal && snag_goals_status(&app->session) == SNAG_GOAL_PAUSED))) {
         int rc = snag_app_active_input_pump(app, 25u);
         if (rc == 2) break;
         if (app->control_requested && !app->session.response_open &&
@@ -5818,10 +5845,10 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
         /* A new selection can repair the failed request. No response is open
          * during backoff, so the provider input pump does not wake it for us. */
         if (!policy && app->model_switch_requested &&
-            (!goal || app->session.goal_status == SNAG_GOAL_ACTIVE))
+            (!goal || snag_goals_status(&app->session) == SNAG_GOAL_ACTIVE))
             break;
         if (rc == 1) {
-            if (policy || !goal || app->session.goal_status != SNAG_GOAL_PAUSED) break;
+            if (policy || !goal || snag_goals_status(&app->session) != SNAG_GOAL_PAUSED) break;
             app->steering_requested = false;
         }
         /* One-shot has no terminal poll; a failed input owner must not spin. */
@@ -5835,7 +5862,7 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
         app->steering_requested = false;
         return 0;
     }
-    if (app->session.goal_status != initial_goal_status) return 1;
+    if (snag_goals_status(&app->session) != initial_goal_status) return 1;
     app->steering_requested = false;
     return 0;
 }
@@ -6216,7 +6243,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                  * the identical local projection cannot make progress. */
                 retry->compaction_bounded = true;
             }
-            if (app->session.goal_status == SNAG_GOAL_ACTIVE)
+            if (snag_goals_status(&app->session) == SNAG_GOAL_ACTIVE)
                 app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
             result = finish_turn_failure(app, retry, turn_id, NULL, "context",
                 error[0] ? error : "response context projection failed", error, sizeof(error));
@@ -6543,13 +6570,13 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             if (!provider_failure.new_input && snag_provider_failure_is_policy(&provider_failure))
                 app->turn_policy_stopped = SNAG_POLICY_STOP_PROVIDER;
             if (!app->stream_failed && provider_failure.new_input &&
-                app->session.goal_status != SNAG_GOAL_ACTIVE)
+                snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE)
                 retry->limit = retry->attempts;
             /* A repeated identical provider rejection would replay byte-identically:
              * stop the turn instead of burning the whole budget on it. */
             if (!provider_failure.new_input &&
                 !snag_provider_failure_is_policy(&provider_failure) && !capacity_failure &&
-                !app->stream_failed && app->session.goal_status != SNAG_GOAL_ACTIVE &&
+                !app->stream_failed && snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE &&
                 provider_failure.output_correction == SNAG_OUTPUT_CORRECTION_NONE &&
                 (provider_failure.code[0] || provider_failure.type[0]) &&
                 !snag_provider_failure_retryable(0, provider_failure.code, provider_failure.type)) {
@@ -6804,18 +6831,22 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 goto output_fail;
             }
             if (app->ui.opened && !app->execute &&
-                (app->session.goal_status == SNAG_GOAL_PAUSED ||
-                    app->session.goal_status == SNAG_GOAL_BLOCKED) &&
-                app->session.pending_queue_count == 0u && !app->session.pending_steering_count &&
-                app_textf(app, SNAG_UI_WARNING, "idle: goal %s%s%s",
-                    app->session.goal_status == SNAG_GOAL_PAUSED ? "paused"
-                                                                 : "blocked, waiting for ",
-                    app->session.goal_status == SNAG_GOAL_BLOCKED
-                        ? snag_goal_wait_for(&app->session)
-                        : "",
-                    app->session.timer_id[0] ? "; timer scheduled" : "") < 0) {
-                report_message = "idle-state notice could not be rendered";
-                goto output_fail;
+                snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE &&
+                !app->session.pending_queue_count && !app->session.pending_steering_count) {
+                const char *id;
+                const json_t *goal;
+                json_object_foreach(app->session.goals, id, goal) {
+                    enum snag_goal_status status = (enum snag_goal_status)json_integer_value(
+                        json_object_get(goal, "status"));
+                    if (status != SNAG_GOAL_PAUSED && status != SNAG_GOAL_BLOCKED) continue;
+                    if (app_textf(app, SNAG_UI_WARNING, "idle: goal %s%s%s · %s",
+                            status == SNAG_GOAL_PAUSED ? "paused" : "blocked, waiting for ",
+                            status == SNAG_GOAL_BLOCKED ? snag_json_string(goal, "wait_for") : "",
+                            app->session.timer_id[0] ? "; timer scheduled" : "", id) < 0) {
+                        report_message = "idle-state notice could not be rendered";
+                        goto output_fail;
+                    }
+                }
             }
             if (app->execute &&
                 snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_RAW,
@@ -6838,7 +6869,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 (void)app_error(app, error);
                 /* An adapter/journal failure leaves effects uncertain. Stop
                  * admission and close every owned job before exiting. */
-                if (app->session.goal_status != SNAG_GOAL_ACTIVE) {
+                if (snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE) {
                     app->input_closed = true;
                     snag_tools_shutdown();
                 }
@@ -7002,7 +7033,7 @@ run_tracked_turn(struct app_state *app, const char *prompt, const struct snag_qu
         .attempts = app->session.active_turn ? app->session.turn_retry_attempts : 0u,
         .limit = app->session.active_turn ? app->session.turn_retry_limit
                                           : app->config->max_turn_retries,
-        .goal_status = app->session.goal_status};
+        .goal_status = snag_goals_status(&app->session)};
     app->recovery_error[0] = '\0';
     if (retry.goal_status != SNAG_GOAL_ACTIVE) app->recovery_delay_ms = 0u;
     if (queued) {
@@ -7069,7 +7100,8 @@ run_tracked_turn(struct app_state *app, const char *prompt, const struct snag_qu
             }
             if (wait_rc == 0 && !app->turn_policy_stopped) continue;
         }
-        bool goal = app->session.goal_status == SNAG_GOAL_ACTIVE && snag_app_retry_allowed(app);
+        bool goal = snag_goals_status(&app->session) == SNAG_GOAL_ACTIVE &&
+            snag_app_retry_allowed(app);
         if (app->turn_policy_stopped || (retry.settings_invalid && app->execute) ||
             (!retry.settings_invalid && !goal && !retry.pending) || app->input_closed ||
             app->interrupt_requested || rc == 0 ||
@@ -7147,14 +7179,14 @@ run_tracked_turn(struct app_state *app, const char *prompt, const struct snag_qu
                 break;
             }
             if (app->interrupt_requested || app->input_closed ||
-                (goal && app->session.goal_status != SNAG_GOAL_ACTIVE)) {
+                (goal && snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE)) {
                 rc = 1;
                 break;
             }
         }
     }
     if (app->interrupt_requested && !app->input_closed &&
-        app->session.goal_status == SNAG_GOAL_ACTIVE) {
+        snag_goals_status(&app->session) == SNAG_GOAL_ACTIVE) {
         char error[256] = {0};
         if (snag_app_goal_pause(app, "user", error, sizeof(error)) < 0) (void)app_error(app, error);
     }
@@ -7374,24 +7406,31 @@ timer_due(const struct app_state *app)
 static int
 run_due_timer(struct app_state *app)
 {
-    char timer_id[SNAG_ID_HEX_LEN + 1u];
-    char *text;
-    char error[256] = {0};
-    int rc;
-
     if (!timer_due(app)) return 0;
-    memcpy(timer_id, app->session.timer_id, sizeof(timer_id));
-    text = snag_strdup_checked(app->session.timer_text, SNAG_MAX_TIMER_TEXT);
-    if (!text) return 3;
-    if (commit_event(app, "timer_fired", json_pack("{s:s}", "timer_id", timer_id), error,
-            sizeof(error)) < 0) {
-        free(text);
+    char error[256] = {0};
+    json_t *input = snag_app_input_received_data(app, app->session.timer_text, false, true);
+    const json_t *timer = json_object_get(app->session.timers, app->session.timer_id);
+    if (!input || !timer) {
+        json_decref(input);
+        return 3;
+    }
+    uint64_t now = (uint64_t)json_integer_value(json_object_get(input, "received_at_ms"));
+    uint64_t interval = (uint64_t)json_integer_value(json_object_get(timer, "interval_ms"));
+    uint64_t next = interval ? now + interval - (now - app->session.timer_due_ms) % interval : 0u;
+    if (next > INT64_MAX ||
+        json_object_set_new(input, "timer_id", json_string(app->session.timer_id)) < 0 ||
+        json_object_set_new(input, "next_due_ms", json_integer((json_int_t)next)) < 0) {
+        json_decref(input);
+        return 3;
+    }
+    /* Admission and consume/rearm share one durable event. Recovery sees either
+     * the armed timer or its accepted input, never an unrecorded wakeup gap. */
+    if (commit_input(app, "input_received", input, NULL, error, sizeof(error)) < 0) {
         (void)app_error(app, error);
         return 3;
     }
-    rc = run_tracked_turn(app, text, NULL, false, false, NULL, true);
-    free(text);
-    return rc;
+    return run_tracked_turn(app, snag_json_string(app->session.pending_input, "text"),
+        NULL, false, false, NULL, true);
 }
 
 static int
@@ -7441,7 +7480,8 @@ run_ready_chains(struct app_state *app)
              * clears interrupt_requested on entry to run_tracked_turn. */
             if (app->interrupt_requested) return 0;
             if (app->session.policy_stopped) return 0;
-            if (app->session.active_goal && app->session.goal_status != SNAG_GOAL_ACTIVE) return 0;
+            if (app->session.active_goal &&
+                snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE) return 0;
             turn_rc = run_tracked_turn(app, app->session.active_prompt, NULL,
                 app->session.active_goal, app->session.active_read_only, NULL, false);
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) return turn_rc;
@@ -7475,7 +7515,7 @@ run_ready_chains(struct app_state *app)
         }
         if (app->goal_armed && !app->session.last_turn_failed &&
             app->session.pending_queue_count == 0u &&
-            app->session.goal_status == SNAG_GOAL_ACTIVE) {
+            snag_goals_status(&app->session) == SNAG_GOAL_ACTIVE) {
             turn_rc =
                 run_tracked_turn(app, SNAG_GOAL_CONTINUATION_TEXT, NULL, true, false, NULL, false);
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) return turn_rc;
@@ -8045,7 +8085,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         app.history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
         if (snag_app_running_resume(&app) < 0) goto fail;
         app.history_recovery_rebase = app.session.active_turn;
-        app.goal_armed = app.session.goal_status == SNAG_GOAL_ACTIVE;
+        app.goal_armed = snag_goals_status(&app.session) == SNAG_GOAL_ACTIVE;
         if ((cli->provider || cli->model || cli->effort) &&
             record_model_selection(&app, resume_provider ? resume_provider->name : "none",
                 resume_model,
@@ -8130,7 +8170,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     history_warning(&app);
     if (snag_ui_orientation(&app.ui, &app.session, cli->resume) < 0 ||
         (cli->resume && snag_ui_history(&app.ui, &app.session, config.resume_history_turns) < 0) ||
-        (cli->resume && app.session.goal_status != SNAG_GOAL_NONE &&
+        (cli->resume && snag_goals_status(&app.session) != SNAG_GOAL_NONE &&
             snag_app_goal_command(&app, "/goal", false) < 0) ||
         (cli->resume && app.session.pending_queue_count != 0u && !app.session.queue_armed &&
             app_warning(&app, "queued future turns are paused; use /next to continue FIFO") < 0)) {

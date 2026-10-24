@@ -80,6 +80,7 @@ static struct input_fields
 input_fields(struct snag_binary_event *event)
 {
     switch (event->kind) {
+    case SNAG_BINARY_INPUT_TIMER_RECEIVED:
     case SNAG_BINARY_INPUT_RECEIVED:
         return (struct input_fields){
             &event->data.input.text, &event->data.input.content, &event->data.input.instructions,
@@ -141,7 +142,8 @@ turn_field_matches(const struct replay_context *context,
             struct snag_binary_record input = source.data.irc_admitted.input;
             if (input.kind != SNAG_BINARY_INPUT_RECEIVED ||
                 snag_binary_event_decode(&input, &source) < 0) goto done;
-        } else if (record.kind != SNAG_BINARY_INPUT_RECEIVED) {
+        } else if (record.kind != SNAG_BINARY_INPUT_RECEIVED &&
+            record.kind != SNAG_BINARY_INPUT_TIMER_RECEIVED) {
             goto done;
         }
         struct input_fields fields = input_fields(&source);
@@ -594,6 +596,7 @@ project_record(struct replay_context *context, const struct snag_session *state,
     }
     bool embedded = record->kind == SNAG_BINARY_IRC_ADMITTED;
     if (!embedded && record->kind != SNAG_BINARY_INPUT_RECEIVED &&
+        record->kind != SNAG_BINARY_INPUT_TIMER_RECEIVED &&
         record->kind != SNAG_BINARY_FUTURE_TURN_QUEUED &&
         record->kind != SNAG_BINARY_STEERING_ADDED &&
         record->kind != SNAG_BINARY_IRC_REPLY_REMINDER &&
@@ -624,7 +627,7 @@ project_record(struct replay_context *context, const struct snag_session *state,
             /* Goal turns are host-generated, with no input receipt. Current
              * goal authority is independent of the canonical field source;
              * the strict reducer also checks the fixed prompt and no content. */
-            if (state->goal_status != SNAG_GOAL_ACTIVE || state->pending_input)
+            if (snag_goals_status(state) != SNAG_GOAL_ACTIVE || state->pending_input)
                 return snag_errno(EINVAL);
         } else if (queued) {
             char queue_id[SNAG_ID_HEX_LEN + 1u];
@@ -829,7 +832,8 @@ snag_binary_checkpoint_receipt_read(int fd, const struct snag_binary_anchor *anc
             rc = 0;
             goto done;
         }
-        if (found != kind && !(kind == SNAG_BINARY_STEERING_ADDED &&
+        if (found != kind && !(kind == SNAG_BINARY_INPUT_RECEIVED &&
+            found == SNAG_BINARY_INPUT_TIMER_RECEIVED) && !(kind == SNAG_BINARY_STEERING_ADDED &&
             found == SNAG_BINARY_IRC_REPLY_REMINDER)) goto done;
         struct replay_context context = {.fd = fd, .through = *anchor, .sequence = wanted,
             .access = access};

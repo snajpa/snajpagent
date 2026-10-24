@@ -13,7 +13,7 @@
  * copied payloads. */
 enum core_block {
     CONTROLS, ACCOUNTING, TEXTS, CALLS, PROCESSES, INPUTS, PAYLOADS, IRC,
-    ACTIVITY, GOAL_WAIT, BLOCKS
+    ACTIVITY, GOAL_WAIT, GOALS, TIMERS, BLOCKS
 };
 #define CORE_HEADER (28u + BLOCKS * 8u)
 
@@ -21,7 +21,8 @@ static size_t
 core_blocks(uint16_t version)
 {
     return version == 2u ? IRC : version == 3u ? ACTIVITY :
-        version == 4u ? GOAL_WAIT : version == SNAG_BINARY_CORE_VERSION ? BLOCKS : 0u;
+        version == 4u ? GOAL_WAIT : version == 5u ? GOALS :
+        version == SNAG_BINARY_CORE_VERSION ? BLOCKS : 0u;
 }
 
 static void
@@ -47,6 +48,18 @@ bytes_hex(char *out, const unsigned char *bytes, size_t size)
         out[i * 2u + 1u] = hex[bytes[i] & 15u];
     }
     out[size * 2u] = '\0';
+}
+
+static int
+read_hex_id(const char *text, unsigned char *bytes)
+{
+    if (!snag_hex_is_lower(text, 32u)) return snag_errno(EINVAL);
+    for (size_t i = 0u; i < 16u; ++i) {
+        unsigned char a = (unsigned char)text[i * 2u], b = (unsigned char)text[i * 2u + 1u];
+        bytes[i] = (unsigned char)(((a <= '9' ? a - '0' : a - 'a' + 10) << 4u) |
+            (b <= '9' ? b - '0' : b - 'a' + 10));
+    }
+    return 0;
 }
 
 static unsigned int
@@ -269,6 +282,189 @@ static const struct text_slot {
 #undef SLOT
 };
 
+/* Goal literals stay in their original journal records. This block contains
+ * identities, lifecycle state and literal origins, independent of the last-event view. */
+static const char *const goal_numbers[] = {
+    "status", "revision", "turns", "prompt_seq", "prompt_offset", "blocker_seq"
+};
+#define GOAL_RECORD_BYTES (48u + 8u * (1u + sizeof(goal_numbers) / sizeof(*goal_numbers)))
+
+static int
+goals_encode(struct snag_buf *out, const struct snag_session *s)
+{
+    unsigned char number[8];
+    put_number(number, json_object_size(s->goals));
+    if (snag_buf_append(out, number, sizeof(number)) < 0) return -1;
+    const char *id;
+    const json_t *goal;
+    json_object_foreach(s->goals, id, goal) {
+        unsigned char record[GOAL_RECORD_BYTES] = {0};
+        const char *parent = snag_json_string(goal, "parent");
+        const char *replacement = snag_json_string(goal, "replaced_by");
+        if (read_hex_id(id, record) < 0 ||
+            (parent && *parent && read_hex_id(parent, record + 16u) < 0) ||
+            (replacement && read_hex_id(replacement, record + 32u) < 0)) return -1;
+        put_number(record + 48u, json_is_true(json_object_get(goal, "locked")));
+        for (size_t i = 0u; i < sizeof(goal_numbers) / sizeof(*goal_numbers); ++i)
+            put_number(record + 56u + i * 8u,
+                (uint64_t)json_integer_value(json_object_get(goal, goal_numbers[i])));
+        if (snag_buf_append(out, record, sizeof(record)) < 0) return -1;
+    }
+    return 0;
+}
+
+static int
+goals_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access,
+    const struct snag_binary_checkpoint_section *block, struct snag_session *s)
+{
+    if (!block->size) return 0;
+    if (block->size < 8u) return snag_errno(EINVAL);
+    uint64_t count = get_number(block->data);
+    if (count != (block->size - 8u) / GOAL_RECORD_BYTES ||
+        (block->size - 8u) % GOAL_RECORD_BYTES) return snag_errno(EINVAL);
+    json_t *goals = json_object();
+    if (!goals) return -1;
+    for (size_t i = 0u; i < count; ++i) {
+        const unsigned char *record = block->data + 8u + i * GOAL_RECORD_BYTES;
+        char id[33], parent[33], replacement[33];
+        bytes_hex(id, record, 16u);
+        bytes_hex(parent, record + 16u, 16u);
+        bytes_hex(replacement, record + 32u, 16u);
+        const unsigned char zero[16] = {0};
+        if (!memcmp(record + 16u, zero, 16u)) parent[0] = '\0';
+        if (!memcmp(record + 32u, zero, 16u)) replacement[0] = '\0';
+        uint64_t status = get_number(record + 56u);
+        uint64_t prompt_seq = get_number(record + 80u);
+        uint64_t prompt_offset = get_number(record + 88u);
+        uint64_t blocker_seq = get_number(record + 96u);
+        if (json_object_get(goals, id) || get_number(record + 48u) > 1u ||
+            status < SNAG_GOAL_ACTIVE || status > SNAG_GOAL_CANCELLED ||
+            !get_number(record + 64u) || !prompt_seq || prompt_seq >= through->next_seq ||
+            blocker_seq >= through->next_seq) goto invalid;
+        const char *type;
+        json_t *data = NULL;
+        if (snag_binary_checkpoint_projection_read(fd, through, access, prompt_seq,
+                &type, &data) < 0) goto invalid;
+        const char *source_id = snag_json_string(data,
+            !strcmp(type, "goal_replaced") ? "new_goal_id" : "goal_id");
+        uint64_t expected_offset = !strcmp(type, "goal_started") ? 20u :
+            !strcmp(type, "goal_replaced") ? 37u : 21u;
+        const char *prompt = snag_json_string(data, "prompt");
+        if (!snag_string_in(type, "goal_started goal_replaced goal_reworded") ||
+            !source_id || strcmp(source_id, id) || !prompt || prompt_offset != expected_offset) {
+            json_decref(data);
+            goto invalid;
+        }
+        json_t *goal = json_pack("{s:s,s:s,s:s,s:b,s:s,s:s}", "id", id, "parent", parent,
+            "prompt", prompt, "locked", get_number(record + 48u) != 0u,
+            "blocker", "", "wait_for", "");
+        json_decref(data);
+        if (!goal) goto invalid;
+        for (size_t j = 0u; j < sizeof(goal_numbers) / sizeof(*goal_numbers); ++j) {
+            if (json_object_set_new(goal, goal_numbers[j],
+                    json_integer((json_int_t)get_number(record + 56u + j * 8u))) < 0) {
+                json_decref(goal);
+                goto invalid;
+            }
+        }
+        if (*replacement && json_object_set_new(goal, "replaced_by",
+                json_string(replacement)) < 0) { json_decref(goal); goto invalid; }
+        if (blocker_seq) {
+            data = NULL;
+            if (snag_binary_checkpoint_projection_read(fd, through, access, blocker_seq,
+                    &type, &data) < 0) { json_decref(goal); goto invalid; }
+            const char *reason = snag_json_string(data, "reason");
+            const char *wait = snag_json_string(data, "wait_for");
+            int rc = strcmp(type, "goal_blocked") || !reason ? -1 :
+                json_object_set_new(goal, "blocker", json_string(reason));
+            if (!rc && status == SNAG_GOAL_BLOCKED)
+                rc = json_object_set_new(goal, "wait_for", json_string(wait ? wait :
+                    "unspecified (older goal record)"));
+            json_decref(data);
+            if (rc < 0) { json_decref(goal); goto invalid; }
+        }
+        if (json_object_set_new(goals, id, goal) < 0) goto invalid;
+    }
+    json_decref(s->goals);
+    s->goals = goals;
+    return 0;
+invalid:
+    json_decref(goals);
+    return snag_errno(EINVAL);
+}
+
+static int
+timers_encode(struct snag_buf *out, const struct snag_session *s)
+{
+    unsigned char bytes[8];
+    put_number(bytes, json_object_size(s->timers));
+    if (snag_buf_append(out, bytes, sizeof(bytes)) < 0) return -1;
+    const char *id;
+    const json_t *timer;
+    json_object_foreach(s->timers, id, timer) {
+        unsigned char record[48] = {0};
+        if (read_hex_id(id, record) < 0) return -1;
+        put_number(record + 16u, (uint64_t)json_integer_value(json_object_get(timer, "due_ms")));
+        put_number(record + 24u,
+            (uint64_t)json_integer_value(json_object_get(timer, "interval_ms")));
+        put_number(record + 32u,
+            (uint64_t)json_integer_value(json_object_get(timer, "source_seq")));
+        put_number(record + 40u,
+            (uint64_t)json_integer_value(json_object_get(timer, "text_offset")));
+        if (snag_buf_append(out, record, sizeof(record)) < 0) return -1;
+    }
+    return 0;
+}
+
+static int
+timers_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access,
+    const struct snag_binary_checkpoint_section *block, struct snag_session *s)
+{
+    if (!block->size) return 0;
+    if (block->size < 8u || (block->size - 8u) % 48u ||
+        get_number(block->data) != (block->size - 8u) / 48u) return snag_errno(EINVAL);
+    json_t *timers = json_object();
+    if (!timers) return -1;
+    for (size_t i = 8u; i < block->size; i += 48u) {
+        const unsigned char *record = block->data + i;
+        char id[33];
+        bytes_hex(id, record, 16u);
+        uint64_t due = get_number(record + 16u), interval = get_number(record + 24u);
+        uint64_t source = get_number(record + 32u), offset = get_number(record + 40u);
+        if (!due || due > INT64_MAX || interval > UINT32_MAX || !source ||
+            source >= through->next_seq || json_object_get(timers, id)) goto invalid;
+        const char *type;
+        json_t *data = NULL;
+        if (snag_binary_checkpoint_projection_read(fd, through, access, source, &type, &data) < 0)
+            goto invalid;
+        const char *source_id = snag_json_string(data, "timer_id");
+        const char *text = snag_json_string(data, "text");
+        uint64_t source_due = 0u;
+        uint64_t source_interval = (uint64_t)json_integer_value(
+            json_object_get(data, "interval_ms"));
+        if (strcmp(type, "timer_scheduled") || !source_id || strcmp(source_id, id) || !text ||
+            snag_json_integer_u64(data, "due_ms", &source_due) < 0 || due < source_due ||
+            interval != source_interval || (interval ? (due - source_due) % interval :
+                due != source_due) || offset != (interval ? 36u : 28u)) {
+            json_decref(data);
+            goto invalid;
+        }
+        json_t *timer = json_pack("{s:s,s:s,s:I,s:I,s:I,s:I}", "id", id, "text", text,
+            "due_ms", (json_int_t)due, "interval_ms", (json_int_t)interval,
+            "source_seq", (json_int_t)source, "text_offset", (json_int_t)offset);
+        json_decref(data);
+        if (!timer || json_object_set_new(timers, id, timer) < 0) goto invalid;
+    }
+    json_decref(s->timers);
+    s->timers = timers;
+    return 0;
+invalid:
+    json_decref(timers);
+    return snag_errno(EINVAL);
+}
+
 static int
 goal_wait_encode(struct snag_buf *out, const struct snag_binary_checkpoint_sources *sources,
     const struct snag_session *state)
@@ -355,7 +551,9 @@ snag_binary_checkpoint_core_encode_version(struct snag_buf *out,
         snag_binary_checkpoint_payloads_encode(&blocks[PAYLOADS], sources, state) < 0 ||
         (count > IRC && irc_encode(&blocks[IRC], state) < 0) ||
         (count > ACTIVITY && activity_encode(&blocks[ACTIVITY], state) < 0) ||
-        (count > GOAL_WAIT && goal_wait_encode(&blocks[GOAL_WAIT], sources, state) < 0)) goto done;
+        (count > GOAL_WAIT && goal_wait_encode(&blocks[GOAL_WAIT], sources, state) < 0) ||
+        (count > GOALS && goals_encode(&blocks[GOALS], state) < 0) ||
+        (count > TIMERS && timers_encode(&blocks[TIMERS], state) < 0)) goto done;
     unsigned char header[CORE_HEADER] = {(unsigned char)version, 0u, (unsigned char)count, 0u};
     put_number(header + 4u, sources->active_compact);
     put_number(header + 12u, sources->response_start);
@@ -586,6 +784,13 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
         irc_read(fd, anchor, access, &blocks[IRC], &state->irc_conversations) < 0) ||
         (blocks[ACTIVITY].size && activity_read(&blocks[ACTIVITY], state) < 0) ||
         goal_wait_read(fd, anchor, access, &blocks[GOAL_WAIT], &sources, state) < 0 ||
+        goals_read(fd, anchor, access, &blocks[GOALS], state) < 0 ||
+        timers_read(fd, anchor, access, &blocks[TIMERS], state) < 0 ||
+        snag_timers_restore(state, sources.texts.slots[SNAG_BINARY_TEXT_TIMER].declaration,
+            sources.texts.slots[SNAG_BINARY_TEXT_TIMER].original.target.offset) < 0 ||
+        snag_goals_restore(state, sources.texts.slots[SNAG_BINARY_TEXT_GOAL_PROMPT].declaration,
+            sources.texts.slots[SNAG_BINARY_TEXT_GOAL_PROMPT].original.target.offset,
+            sources.texts.slots[SNAG_BINARY_TEXT_GOAL_BLOCKER].declaration) < 0 ||
         copy_sources(&sources, &processes, &inputs, &payloads, state) < 0 ||
         check_sources(&sources, &payloads, state) < 0 ||
         snag_binary_checkpoint_epochs_check(fd, anchor, access, &sources, state) < 0) goto done;

@@ -27,7 +27,10 @@ adopts immutable snapshots together. Running commands retain their own cwd.
 The native journal, checkpoint payload source and cwd text index retain the same
 state for tail replay and indexed resume; there is no second context registry.
 
-Task and goal skill bindings survive a visit. Skills activated within a visit
+Task and goal skill bindings survive a visit. With one unfinished goal, an
+activation binds to its ID. With several, it records their unfinished IDs in
+`goal_ids` and remains active while any of those IDs is unfinished. Restart and
+fork preserve this scope; later unrelated goals cannot revive it. Skills activated within a visit
 carry its ID and survive subsequent turns until leave or replacement. Leave
 retires those visit bindings, restores task guidance and the saved cwd, and can
 record a supplied summary without a separate model request. If the return directory

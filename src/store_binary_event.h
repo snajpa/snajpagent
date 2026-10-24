@@ -34,6 +34,7 @@ enum snag_binary_kind {
     SNAG_BINARY_TIMER_SCHEDULED = 32,
     SNAG_BINARY_TIMER_FIRED = 33,
     SNAG_BINARY_TIMER_CANCELLED = 34,
+    SNAG_BINARY_TIMER_RECURRING = 35,
     SNAG_BINARY_GOAL_STARTED = 64,
     SNAG_BINARY_GOAL_REPLACED = 65,
     SNAG_BINARY_GOAL_REWORDED = 66,
@@ -55,6 +56,7 @@ enum snag_binary_kind {
     SNAG_BINARY_FUTURE_TURN_CANCELLED = 103,
     SNAG_BINARY_FUTURE_TURN_QUEUED = 104,
     SNAG_BINARY_FUTURE_TURN_EDITED = 105,
+    SNAG_BINARY_INPUT_TIMER_RECEIVED = 106,
     SNAG_BINARY_TURN_STARTED = 128,
     SNAG_BINARY_TURN_YIELD_REQUESTED = 129,
     SNAG_BINARY_TURN_CANCEL_REQUESTED = 130,
@@ -997,6 +999,8 @@ struct snag_binary_event {
             uint64_t retry_attempts;
         } recovery;
         struct {
+            unsigned char timer_id[16];
+            uint64_t timer_next_due_ms;
             struct snag_binary_selection selection;
             struct snag_binary_text text;
             struct snag_binary_instructions instructions;
@@ -1034,7 +1038,7 @@ struct snag_binary_event {
         } queued;
         struct {
             unsigned char id[16];
-            uint64_t due_ms;
+            uint64_t due_ms, interval_ms;
             struct snag_binary_text text;
         } timer;
         struct {

@@ -362,6 +362,7 @@ void snag_app_record_model_accounting(
 int snag_app_help(struct app_state *app, const char *command);
 int snag_app_report(struct app_state *, enum snag_ui_operation, const char *);
 int snag_app_help_text(struct snag_buf *text, const char *command);
+int snag_app_goal_resume_input(struct app_state *, bool, char *, size_t);
 int snag_app_goal_command(struct app_state *app, const char *line, bool active);
 int snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
     json_t **result, char *error, size_t error_size);

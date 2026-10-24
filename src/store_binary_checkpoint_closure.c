@@ -262,6 +262,7 @@ collect_dependencies(struct closure_capture *capture,
     }
     const struct snag_binary_input_reference *fields[5] = {0};
     switch (event.kind) {
+    case SNAG_BINARY_INPUT_TIMER_RECEIVED:
     case SNAG_BINARY_INPUT_RECEIVED:
         fields[0] = &event.data.input.text_ref;
         fields[1] = &event.data.input.content_ref;
@@ -363,6 +364,22 @@ collect_roots(struct closure_capture *capture,
                 &capture->roots : &capture->needed, source->original.target.sequence) < 0) {
             return -1;
         }
+    }
+    const char *goal_id;
+    const json_t *goal;
+    json_object_foreach(state->goals, goal_id, goal) {
+        (void)goal_id;
+        uint64_t prompt = (uint64_t)json_integer_value(json_object_get(goal, "prompt_seq"));
+        uint64_t blocker = (uint64_t)json_integer_value(json_object_get(goal, "blocker_seq"));
+        if (need(capture, &capture->roots, prompt) < 0 ||
+            need(capture, &capture->roots, blocker) < 0) return -1;
+    }
+    const char *timer_id;
+    const json_t *timer;
+    json_object_foreach(state->timers, timer_id, timer) {
+        (void)timer_id;
+        uint64_t source = (uint64_t)json_integer_value(json_object_get(timer, "source_seq"));
+        if (need(capture, &capture->roots, source) < 0) return -1;
     }
     if (collect_call(capture, &sources->calls, capture->through->next_seq) < 0) return -1;
     for (size_t i = 0u; i < sources->process_count; ++i) {

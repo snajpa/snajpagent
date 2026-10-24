@@ -116,9 +116,10 @@ Nonexecution results explain slot limits, pending/closed input, stale/busy handl
 and control handoffs. Execution and lifecycle validation remain at their existing owners.
 Every projection contains the same native function-name set; provider-native web
 search retains its provider-specific type. Catalog visibility describes call
-shapes while runtime state determines the factual execution result. A one-shot
-timer replaces any prior timer in the durable session, and its due event admits a
-fresh ordinary turn without changing paused or blocked goal state. IRC lifecycle
+shapes while runtime state determines the factual execution result. Independent durable timers carry IDs and optional recurring intervals. Each due
+receipt admits a fresh ordinary turn and consumes or rearms that timer atomically,
+without changing paused or blocked goal state. Recurring deadlines coalesce missed
+intervals into one wakeup. IRC lifecycle
 calls add or remove endpoints through the engine; the normal IRC event loop then
 owns connection, joining, history and reconnect work. Ctrl-C interruption makes
 a paused goal an idle admission boundary: ordinary queued IRC input survives but
@@ -421,13 +422,14 @@ preparation, including when the provider supplies no visible summary deltas.
 
 An active persistent goal schedules another ordinary turn after a normal final
 answer. Durable queued user turns take precedence over that continuation.
-Fresh goal-controller reminders are omitted throughout a queued turn (even
-after the last item is dequeued) and whenever pending queue entries exist.
+All goal states remain projected during queued and read-only turns with an
+explicit suspended-controller notice, including after the last queue item is
+dequeued. This state snapshot authorizes no extra goal work in those turns.
 An unarmed queue blocks goal continuation until `/next`, explicit goal
 start/resume, or queue removal. An open queue editor always prevents draining.
-Goal turns carry a distinct `input_kind` and a system continuation marker,
-so they do not appear as new user messages. Refusal, failure and a turn-only
-interruption pause the goal. Foreground process exit preserves the goal state.
+Goal turns carry a distinct `input_kind` and labelled host continuation input.
+Refusal, policy stops and explicit turn interruption pause active goals.
+Ordinary errors retain them for retry. Foreground process exit preserves the goal state.
 Session reopening preserves the recorded state: active goals
 continue, and inactive goals remain inactive without extra goal transitions.
 

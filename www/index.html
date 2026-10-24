@@ -92,11 +92,13 @@
         chat/rollout view and verbosity when restarting a stored session. Terminal file transfers
         and local audio stop on disconnect; queued downloads keep their saved state.
         Restart microphone capture explicitly after reconnecting.</p>
-      <p>Set a goal to continue beyond the next reply. Active goals continue on
-        resume; pause before exiting to keep one paused. <code>/goal resume</code>
-        continues work; <code>/goal clear</code> ends continuation and retains
-        history. Resume preserves inputs and tool results; uncertain commands
-        require inspection.</p>
+      <p>Set a goal to continue beyond the next reply. Current source supports
+        several goals: repeat <code>/goal TEXT</code> to add one and use
+        <code>/goal</code> to list their states. Work continues while any goal is
+        active. <code>/goal pause</code> pauses all; <code>/goal resume</code>
+        directs the model to resume unfinished work. Use <code>/goal clear ID</code>
+        to cancel one listed goal. Resume preserves inputs and tool results;
+        uncertain commands require inspection.</p>
       <p>Stage images or files with <code>/attach PATH</code> and submit them with
         your prompt. Current source provides a workstation wrapper:
         <code>snajpagent remote ssh -t target snajpagent</code>.

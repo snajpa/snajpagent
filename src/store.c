@@ -268,6 +268,8 @@ free_session_state(struct snag_session *session)
     json_decref(session->pinned_commands);
     json_decref(session->pinned_status);
     json_decref(session->work_context);
+    json_decref(session->goals);
+    json_decref(session->timers);
     json_decref(session->active_skills);
     json_decref(session->download_queue);
     json_decref(session->irc_conversations);
@@ -785,15 +787,224 @@ snag_goal_unfinished(enum snag_goal_status status)
     return status == SNAG_GOAL_ACTIVE || status == SNAG_GOAL_PAUSED || status == SNAG_GOAL_BLOCKED;
 }
 
+const json_t *
+snag_goal_find(const struct snag_session *session, const char *id)
+{
+    return id ? json_object_get(session->goals, id) : NULL;
+}
+
+const json_t *
+snag_goal_select(const struct snag_session *session, const char *id)
+{
+    if (id && *id) return snag_goal_find(session, id);
+    const char *key;
+    const json_t *goal, *selected = NULL;
+    json_object_foreach(session->goals, key, goal) {
+        (void)key;
+        if (!snag_goal_unfinished((enum snag_goal_status)json_integer_value(
+                json_object_get(goal, "status")))) continue;
+        if (selected) return NULL;
+        selected = goal;
+    }
+    return selected;
+}
+
+enum snag_goal_status
+snag_goals_status(const struct snag_session *session)
+{
+    enum snag_goal_status status = session->goal_status;
+    const char *key;
+    const json_t *goal;
+    bool paused = false, blocked = false;
+    json_object_foreach(session->goals, key, goal) {
+        (void)key;
+        enum snag_goal_status value = (enum snag_goal_status)json_integer_value(
+            json_object_get(goal, "status"));
+        if (value == SNAG_GOAL_ACTIVE) return value;
+        paused |= value == SNAG_GOAL_PAUSED;
+        blocked |= value == SNAG_GOAL_BLOCKED;
+    }
+    return paused ? SNAG_GOAL_PAUSED : blocked ? SNAG_GOAL_BLOCKED : status;
+}
+
+/* The last-event scalar projection reads old journals/checkpoints unchanged.
+ * Live controllers and consumers use the ID-keyed states, never a selected cursor. */
+static json_t *
+goal_snapshot(const struct snag_session *s, uint64_t prompt_seq, uint64_t prompt_offset,
+    uint64_t blocker_seq)
+{
+    return json_pack("{s:s,s:s,s:s,s:i,s:b,s:I,s:I,s:s,s:s,s:I,s:I,s:I}",
+        "id", s->goal_id, "parent", s->goal_parent_id, "prompt", s->goal_prompt,
+        "status", (int)s->goal_status, "locked", s->goal_locked,
+        "revision", (json_int_t)s->goal_revision, "turns", (json_int_t)s->goal_turn_count,
+        "blocker", s->goal_blocker ? s->goal_blocker : "",
+        "wait_for", s->goal_status == SNAG_GOAL_BLOCKED ? snag_goal_wait_for(s) : "",
+        "prompt_seq", (json_int_t)prompt_seq, "prompt_offset", (json_int_t)prompt_offset,
+        "blocker_seq", (json_int_t)(s->goal_blocker ? blocker_seq : 0u));
+}
+
+int
+snag_goals_restore(struct snag_session *s, uint64_t prompt_seq, uint64_t prompt_offset,
+    uint64_t blocker_seq)
+{
+    if (s->goals || !s->goal_id[0]) return 0;
+    s->goals = json_object();
+    json_t *goal = goal_snapshot(s, prompt_seq, prompt_offset, blocker_seq);
+    if (!s->goals || !goal) { json_decref(goal); return -1; }
+    return json_object_set_new(s->goals, s->goal_id, goal);
+}
+
+int
+snag_timers_refresh(struct snag_session *s)
+{
+    const char *id, *earliest_id = NULL;
+    const json_t *timer, *earliest = NULL;
+    uint64_t due = 0u;
+    json_object_foreach(s->timers, id, timer) {
+        uint64_t when = (uint64_t)json_integer_value(json_object_get(timer, "due_ms"));
+        if (!earliest || when < due) { earliest = timer; earliest_id = id; due = when; }
+    }
+    if (!earliest) {
+        s->timer_id[0] = '\0';
+        s->timer_due_ms = 0u;
+        s->timer_text = NULL;
+        json_object_del(s->strings, "timer_text");
+        return 0;
+    }
+    if (!snag_strcpy(s->timer_id, sizeof(s->timer_id), earliest_id) ||
+        json_object_set(s->strings, "timer_text", json_object_get(earliest, "text")) < 0) return -1;
+    s->timer_due_ms = due;
+    s->timer_text = snag_json_string(s->strings, "timer_text");
+    return 0;
+}
+
+int
+snag_timers_restore(struct snag_session *s, uint64_t source, uint64_t offset)
+{
+    if (s->timers || !s->timer_id[0]) return 0;
+    s->timers = json_object();
+    json_t *timer = json_pack("{s:s,s:s,s:I,s:I,s:I,s:I}", "id", s->timer_id,
+        "text", s->timer_text, "due_ms", (json_int_t)s->timer_due_ms, "interval_ms", (json_int_t)0,
+        "source_seq", (json_int_t)source, "text_offset", (json_int_t)offset);
+    if (!s->timers || !timer) { json_decref(timer); return -1; }
+    return json_object_set_new(s->timers, s->timer_id, timer);
+}
+
+static int
+reduce_timer(struct snag_session *s, const char *type, const json_t *data, uint64_t seq)
+{
+    if (snag_timers_restore(s, 0u, 0u) < 0) return -1;
+    const char *id = snag_json_string(data, "timer_id");
+    if (!id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) return snag_errno(EINVAL);
+    json_t *timers = s->timers ? json_copy(s->timers) : json_object();
+    if (!timers) return -1;
+    const json_t *old = json_object_get(timers, id);
+    if (!strcmp(type, "timer_scheduled")) {
+        const char *text = snag_json_string(data, "text");
+        uint64_t due = 0u, interval = 0u;
+        bool recurring = json_object_get(data, "interval_ms") != NULL;
+        if (!snag_json_exact_keys(data, recurring ? "due_ms interval_ms text timer_id" :
+                "due_ms text timer_id") ||
+            snag_json_integer_u64(data, "due_ms", &due) < 0 || !due || due > INT64_MAX ||
+            (recurring && (snag_json_integer_u64(data, "interval_ms", &interval) < 0 ||
+                !interval || interval > UINT32_MAX)) ||
+            !snag_text_valid(text, 1u, SNAG_MAX_TIMER_TEXT) || snag_text_blank(text)) goto invalid;
+        json_t *timer = json_pack("{s:s,s:s,s:I,s:I,s:I,s:I}", "id", id, "text", text,
+            "due_ms", (json_int_t)due, "interval_ms", (json_int_t)interval,
+            "source_seq", (json_int_t)seq, "text_offset", (json_int_t)(recurring ? 36u : 28u));
+        if (!timer || json_object_set_new(timers, id, timer) < 0) goto invalid;
+    } else if (!strcmp(type, "input_received")) {
+        uint64_t now = 0u, next = 0u;
+        if (!old || snag_json_integer_u64(data, "received_at_ms", &now) < 0 ||
+            snag_json_integer_u64(data, "next_due_ms", &next) < 0 ||
+            strcmp(snag_json_string(data, "origin"), "timer") ||
+            json_is_true(json_object_get(data, "read_only")) ||
+            strcmp(snag_json_string(data, "text"), snag_json_string(old, "text"))) goto invalid;
+        uint64_t due = (uint64_t)json_integer_value(json_object_get(old, "due_ms"));
+        uint64_t interval = (uint64_t)json_integer_value(json_object_get(old, "interval_ms"));
+        if (now < due) goto invalid;
+        if (interval) {
+            uint64_t remaining = interval - (now - due) % interval;
+            if (now > INT64_MAX - remaining || next != now + remaining) goto invalid;
+            json_t *timer = json_copy((json_t *)old);
+            if (!timer) goto invalid;
+            if (json_object_set_new(timer, "due_ms", json_integer((json_int_t)next)) < 0) {
+                json_decref(timer);
+                goto invalid;
+            }
+            if (json_object_set_new(timers, id, timer) < 0) goto invalid;
+        } else {
+            if (next) goto invalid;
+            json_object_del(timers, id);
+        }
+    } else {
+        if (!old || !snag_json_exact_keys(data, "timer_id")) goto invalid;
+        json_object_del(timers, id);
+    }
+    json_decref(s->timers);
+    s->timers = timers;
+    return snag_timers_refresh(s);
+invalid:
+    json_decref(timers);
+    return snag_errno(EINVAL);
+}
+
+static int
+load_goal(struct snag_session *s, const json_t *goal)
+{
+    if (!goal) {
+        s->goal_id[0] = '\0';
+        s->goal_status = SNAG_GOAL_NONE;
+        return 0;
+    }
+    const char *id = snag_json_string(goal, "id");
+    const char *parent = snag_json_string(goal, "parent");
+    if (!snag_strcpy(s->goal_id, sizeof(s->goal_id), id) ||
+        !snag_strcpy(s->goal_parent_id, sizeof(s->goal_parent_id), parent)) return -1;
+    s->goal_status = (enum snag_goal_status)json_integer_value(json_object_get(goal, "status"));
+    s->goal_locked = json_is_true(json_object_get(goal, "locked"));
+    s->goal_revision = (uint64_t)json_integer_value(json_object_get(goal, "revision"));
+    s->goal_turn_count = (uint64_t)json_integer_value(json_object_get(goal, "turns"));
+    if (json_object_set(s->strings, "goal_prompt", json_object_get(goal, "prompt")) < 0)
+        return -1;
+    s->goal_prompt = snag_json_string(s->strings, "goal_prompt");
+    const char *blocker = snag_json_string(goal, "blocker");
+    if (blocker && *blocker) {
+        if (json_object_set(s->strings, "goal_blocker", json_object_get(goal, "blocker")) < 0)
+            return -1;
+    } else json_object_del(s->strings, "goal_blocker");
+    s->goal_blocker = snag_json_string(s->strings, "goal_blocker");
+    const char *wait = snag_json_string(goal, "wait_for");
+    if (snag_goal_wait_valid(wait) && s->goal_status == SNAG_GOAL_BLOCKED) {
+        if (json_object_set(s->strings, "goal_wait_for", json_object_get(goal, "wait_for")) < 0)
+            return -1;
+    } else json_object_del(s->strings, "goal_wait_for");
+    return 0;
+}
+
 bool
 snag_skill_binding_active(const struct snag_session *session, const json_t *entry)
 {
     const char *visit = snag_json_string(entry, "visit_id");
     const char *current = snag_json_string(session->work_context, "id");
     if (visit && *visit) return current && !strcmp(visit, current);
+    const json_t *ids = json_object_get(entry, "goal_ids");
+    if (ids) {
+        for (size_t i = 0u; i < json_array_size(ids); ++i) {
+            const json_t *saved = snag_goal_find(session,
+                json_string_value(json_array_get(ids, i)));
+            if (snag_goal_unfinished((enum snag_goal_status)json_integer_value(
+                    json_object_get(saved, "status")))) return true;
+        }
+        return false;
+    }
     const char *goal = snag_json_string(entry, "goal_id");
-    if (goal && *goal) return snag_goal_unfinished(session->goal_status) &&
-        !strcmp(goal, session->goal_id);
+    if (goal && *goal) {
+        const json_t *saved = snag_goal_find(session, goal);
+        return saved ? snag_goal_unfinished((enum snag_goal_status)json_integer_value(
+            json_object_get(saved, "status"))) : snag_goal_unfinished(session->goal_status) &&
+            !strcmp(goal, session->goal_id);
+    }
     const char *turn = snag_json_string(entry, "turn_id");
     const char *back = snag_json_string(session->work_context, "return_turn_id");
     return turn && (!strcmp(turn, session->active_turn_id) || session->active_read_only ||
@@ -1081,7 +1292,11 @@ download_queue_clear(struct snag_session *session, const json_t *data)
 }
 
 static int
-apply_event(struct snag_session *session, const char *type, const json_t *data, uint64_t seq,
+apply_event(struct snag_session *, const char *, const json_t *, uint64_t, bool, bool,
+    char *, size_t);
+
+static int
+apply_event_one(struct snag_session *session, const char *type, const json_t *data, uint64_t seq,
     bool live, bool importing, char *error, size_t error_size)
 {
     uint64_t n;
@@ -1393,29 +1608,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
             goto invalid;
         memcpy(session->trash_name, trash, SNAG_TRASH_NAME_LEN + 1u);
         session->delete_requested = true;
-    } else if (strcmp(type, "timer_scheduled") == 0) {
-        const char *timer_id = snag_json_string(data, "timer_id");
-        const char *text = snag_json_string(data, "text");
-        uint64_t due_ms;
-        if (!snag_json_exact_keys(data, "due_ms text timer_id") || !timer_id ||
-            !snag_hex_is_lower(timer_id, SNAG_ID_HEX_LEN) ||
-            snag_json_integer_u64(data, "due_ms", &due_ms) < 0 || !due_ms ||
-            !snag_text_valid(text, 1u, SNAG_MAX_TIMER_TEXT) || snag_text_blank(text) ||
-            replace_text(session, &session->timer_text, "timer_text", text, SNAG_MAX_TIMER_TEXT) <
-                0)
-            goto invalid;
-        memcpy(session->timer_id, timer_id, sizeof(session->timer_id));
-        session->timer_due_ms = due_ms;
-    } else if (snag_string_in(type, "timer_fired timer_cancelled")) {
-        const char *timer_id = snag_json_string(data, "timer_id");
-        if (!snag_json_exact_keys(data, "timer_id") || !timer_id ||
-            !snag_hex_is_lower(timer_id, SNAG_ID_HEX_LEN) || !session->timer_id[0] ||
-            strcmp(timer_id, session->timer_id) != 0)
-            goto invalid;
-        json_object_del(session->strings, "timer_text");
-        session->timer_text = NULL;
-        session->timer_id[0] = '\0';
-        session->timer_due_ms = 0u;
     } else if (strcmp(type, "goal_started") == 0) {
         const char *goal_id = snag_json_string(data, "goal_id");
         const char *prompt = snag_json_string(data, "prompt");
@@ -1503,7 +1695,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
         } else if (strcmp(action, "paused") == 0) {
             static const char reasons[] =
                 "input_closed provider_policy refusal session_resumed turn_stopped user";
-            if (!snag_json_exact_keys(data, "goal_id reason") || status != SNAG_GOAL_ACTIVE ||
+            if (!snag_json_exact_keys(data, "goal_id reason") ||
+                (status != SNAG_GOAL_ACTIVE && status != SNAG_GOAL_BLOCKED) ||
                 !snag_string_in(reason, reasons))
                 goto invalid;
             status = SNAG_GOAL_PAUSED;
@@ -2027,7 +2220,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
         if (session->active_turn || session->pending_input ||
             !input_fields_valid(data,
                 json_object_get(data, "origin")
-                    ? "effort instructions model origin provider read_only received_at_ms text"
+                    ? (json_object_get(data, "timer_id") ?
+                       "effort instructions model next_due_ms origin provider read_only "
+                       "received_at_ms text timer_id" :
+                       "effort instructions model origin provider read_only received_at_ms text")
                     : "effort instructions model provider read_only received_at_ms text") ||
             (json_object_get(data, "origin") &&
                 !snag_string_in(snag_json_string(data, "origin"), "timer")) ||
@@ -2165,7 +2361,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
         }
         if (goal) {
             if (json_object_get(data, "content")) goto invalid;
-            if (session->goal_status != SNAG_GOAL_ACTIVE ||
+            if (snag_goals_status(session) != SNAG_GOAL_ACTIVE ||
                 json_is_true(json_object_get(data, "read_only")) ||
                 !json_is_null(json_object_get(data, "queue_id")) ||
                 !json_is_null(json_object_get(data, "queue_seq")) ||
@@ -3224,6 +3420,97 @@ invalid: {
     }
     return snag_fail(error, error_size, EINVAL, "%s", detail);
 }
+}
+
+static int
+apply_event(struct snag_session *s, const char *type, const json_t *data, uint64_t seq,
+    bool live, bool importing, char *error, size_t error_size)
+{
+    if (!strncmp(type, "timer_", 6u)) {
+        if (!snag_string_in(type, "timer_scheduled timer_fired timer_cancelled") ||
+            reduce_timer(s, type, data, seq) < 0)
+            return snag_fail(error, error_size, EINVAL, "invalid timer transition");
+        return 0;
+    }
+    if (strncmp(type, "goal_", 5u)) {
+        int rc = apply_event_one(s, type, data, seq, live, importing, error, error_size);
+        if (!rc && !strcmp(type, "input_received") && json_object_get(data, "timer_id") &&
+            reduce_timer(s, type, data, seq) < 0)
+            return snag_fail(error, error_size, EINVAL, "invalid timer wakeup receipt");
+        if (!rc && !strcmp(type, "turn_started") && s->active_goal && s->goals) {
+            json_t *goals = json_copy(s->goals);
+            if (!goals) return -1;
+            const char *id;
+            const json_t *goal;
+            json_object_foreach(s->goals, id, goal) {
+                if (json_integer_value(json_object_get(goal, "status")) != SNAG_GOAL_ACTIVE)
+                    continue;
+                json_t *updated = json_copy((json_t *)goal);
+                json_int_t turns = json_integer_value(json_object_get(goal, "turns"));
+                if (!updated || turns == INT64_MAX ||
+                    json_object_set_new(updated, "turns", json_integer(turns + 1)) < 0 ||
+                    json_object_set(goals, id, updated) < 0) {
+                    json_decref(updated);
+                    json_decref(goals);
+                    return -1;
+                }
+                json_decref(updated);
+            }
+            json_decref(s->goals);
+            s->goals = goals;
+            s->goal_turn_count = (uint64_t)json_integer_value(
+                json_object_get(snag_goal_find(s, s->goal_id), "turns"));
+        }
+        return rc;
+    }
+    if (snag_goals_restore(s, 0u, 0u, 0u) < 0) return -1;
+    const char *id = snag_json_string(data, "goal_id");
+    const json_t *previous = snag_goal_find(s, id);
+    bool starting = !strcmp(type, "goal_started");
+    const char *replacement = snag_json_string(data, "new_goal_id");
+    if ((starting && previous) || (!starting && !previous) ||
+        (replacement && snag_goal_find(s, replacement)))
+        return snag_fail(error, error_size, EINVAL,
+            "%s: unknown or reused goal identity", type);
+    json_t *goals = s->goals ? json_copy(s->goals) : json_object();
+    if (!goals || load_goal(s, starting ? NULL : previous) < 0) {
+        json_decref(goals);
+        return -1;
+    }
+    uint64_t prompt_seq = (uint64_t)json_integer_value(json_object_get(previous, "prompt_seq"));
+    uint64_t prompt_offset = (uint64_t)json_integer_value(
+        json_object_get(previous, "prompt_offset"));
+    uint64_t blocker_seq = (uint64_t)json_integer_value(json_object_get(previous, "blocker_seq"));
+    if (apply_event_one(s, type, data, seq, live, importing, error, error_size) < 0) {
+        json_decref(goals);
+        return -1;
+    }
+    if (starting || replacement || !strcmp(type, "goal_reworded")) {
+        prompt_seq = seq;
+        prompt_offset = starting ? 20u : replacement ? 37u : 21u;
+    }
+    if (!strcmp(type, "goal_blocked")) blocker_seq = seq;
+    json_t *goal = goal_snapshot(s, prompt_seq, prompt_offset, blocker_seq);
+    if (replacement) {
+        json_t *old = json_copy((json_t *)previous);
+        if (!old || json_object_set_new(old, "replaced_by", json_string(replacement)) < 0 ||
+            json_object_set_new(old, "status", json_integer(SNAG_GOAL_CANCELLED)) < 0 ||
+            json_object_set_new(old, "wait_for", json_string("")) < 0 ||
+            json_object_set(goals, id, old) < 0) {
+            json_decref(old);
+            json_decref(goal);
+            json_decref(goals);
+            return -1;
+        }
+        json_decref(old);
+    }
+    if (!goal || json_object_set_new(goals, s->goal_id, goal) < 0) {
+        json_decref(goals);
+        return -1;
+    }
+    json_decref(s->goals);
+    s->goals = goals;
+    return 0;
 }
 
 int
@@ -4493,6 +4780,8 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->pinned_commands = json_incref(source->pinned_commands);
     staged->pinned_status = json_incref(source->pinned_status);
     staged->work_context = json_incref(source->work_context);
+    staged->goals = json_incref(source->goals);
+    staged->timers = json_incref(source->timers);
     staged->active_skills = json_deep_copy(source->active_skills);
     staged->download_queue = json_deep_copy(source->download_queue);
     staged->irc_conversations = json_incref(source->irc_conversations);

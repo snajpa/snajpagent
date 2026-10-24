@@ -226,6 +226,9 @@ struct snag_session {
     json_t *pinned_status; /* Derived request snapshot, never checkpointed. */
     json_t *skills_catalog; /* Derived owner catalog; not checkpointed. */
     json_t *work_context; /* Current temporary visit, or NULL; journal-owned and immutable. */
+    /* Scalar goal fields retain the legacy last-event view. */
+    json_t *goals; /* Immutable ID-keyed goal states. */
+    json_t *timers; /* Immutable ID-keyed armed timers. */
     json_t *active_skills; /* Exact journal-owned snapshots, including task/goal bindings. */
     json_t *download_queue;    /* Pending workstation downloads, durable in the journal. */
     json_t *irc_conversations; /* Immutable connection/conversation directory, snapshot v3. */
@@ -329,6 +332,12 @@ struct snag_session {
 
 const char *snag_goal_status_name(enum snag_goal_status status);
 bool snag_goal_unfinished(enum snag_goal_status status);
+enum snag_goal_status snag_goals_status(const struct snag_session *);
+const json_t *snag_goal_find(const struct snag_session *, const char *);
+const json_t *snag_goal_select(const struct snag_session *, const char *);
+int snag_goals_restore(struct snag_session *, uint64_t, uint64_t, uint64_t);
+int snag_timers_restore(struct snag_session *, uint64_t, uint64_t);
+int snag_timers_refresh(struct snag_session *);
 bool snag_goal_wait_valid(const char *wait_for);
 const char *snag_goal_wait_for(const struct snag_session *session);
 
