@@ -463,6 +463,43 @@ terminal_geometry(struct snag_session_client *client)
                                       size.ws_col ? size.ws_col : 80u);
 }
 
+static int
+confirm_terminal_move(int fd, const volatile sig_atomic_t *cancelled)
+{
+    static const char prompt[] =
+        "\r\nSession is attached elsewhere. Move it to this terminal? [y/N] ";
+    if (snag_write_full(fd, prompt, sizeof(prompt) - 1u) < 0) return -1;
+    char answer = 0;
+    bool invalid = false;
+    while (!terminal_signal && !(cancelled && *cancelled)) {
+        struct pollfd input = {fd, POLLIN, 0};
+        int rc = poll(&input, 1u, 50);
+        if (rc < 0 && errno == EINTR) continue;
+        if (rc < 0) return -1;
+        if (input.revents & (POLLHUP | POLLERR | POLLNVAL)) return 1;
+        if (!(input.revents & POLLIN)) continue;
+        unsigned char byte;
+        ssize_t n = read(fd, &byte, 1u);
+        if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
+        if (n <= 0) return n < 0 ? -1 : 1;
+        if (byte == '\r' || byte == '\n') {
+            if (snag_write_full(fd, "\r\n", 2u) < 0) return -1;
+            return !invalid && (answer == 'y' || answer == 'Y') ? 0 : 1;
+        }
+        if (byte == 3u || byte == 4u || byte == 27u) return 1;
+        if (byte == 127u || byte == 8u) {
+            answer = 0;
+            invalid = false;
+            if (snag_write_full(fd, "\b \b", 3u) < 0) return -1;
+        } else {
+            if (answer) invalid = true;
+            else answer = (char)byte;
+            if (byte >= 32u && byte < 127u && snag_write_full(fd, &byte, 1u) < 0) return -1;
+        }
+    }
+    return 1;
+}
+
 int
 snag_session_client_terminal(int peer, bool attached, uint64_t child,
                              snag_session_connect_fn connect, void *opaque,
@@ -481,6 +518,7 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
     size_t queued = 0u;
     bool command = typeahead && typeahead->command[0];
     bool command_sent = false;
+    bool move_attempted = false;
     uint64_t command_deadline = 0u;
     terminal_signal = terminal_resize = 0;
     if (typeahead) typeahead->signal = 0;
@@ -590,6 +628,28 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
             }
             client.input_blocked = false;
         } else if (event == SNAG_SESSION_ERROR) {
+            if (!move_attempted && typeahead && typeahead->resume && client.peer < 0 &&
+                !strcmp((const char *)client.event_data, SNAG_SESSION_BUSY)) {
+                move_attempted = true;
+                int confirmed = confirm_terminal_move(client.terminal, cancelled);
+                if (confirmed < 0) goto out;
+                if (confirmed) {
+                    result = terminal_signal ? 128 + terminal_signal :
+                        cancelled && *cancelled ? 128 + *cancelled : 0;
+                    goto out;
+                }
+                int target = connect ? connect(opaque, typeahead->session, NULL,
+                    error, error_size) : snag_errno(ENOTSUP);
+                if (target < 0) goto out;
+                if (snag_session_client_attach(&client, target) < 0) {
+                    (void)close(target);
+                    goto out;
+                }
+                const unsigned char replace = SNAG_SESSION_REPLACE;
+                if (snag_session_packet_set(&client.target_output, SNAG_SESSION_RESERVE,
+                        &replace, 1u) < 0) goto out;
+                continue;
+            }
             destination[0] = 0;
             notice_peer = client.peer;
             (void)snprintf(notice, sizeof(notice), "%s", client.event_data);

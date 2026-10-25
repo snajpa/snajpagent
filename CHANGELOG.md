@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Offer a local confirmation when interactive resume finds an occupied classic
+  terminal. Confirming moves control to the new terminal while the session owner,
+  work and draft continue; ordinary attachment still refuses an occupied session.
+
 - Restore native checkpoints written with core section version 5 instead of
   rejecting them as unavailable during session resume.
 

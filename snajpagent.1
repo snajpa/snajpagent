@@ -601,6 +601,15 @@ inside an existing session to give it a name.
 Only one terminal controls a session at a time. The session keeps its unsent
 draft, selected view and destination; attachment displays bounded recent
 history before restoring the composer.
+If an older classic terminal connection still holds the session, interactive
+.B --resume SESSION_ID
+asks whether to move it to this terminal. Type
+.B y
+and press Enter to disconnect the older frontend and attach here while the owner
+and its work continue. Enter alone, n, Escape or Ctrl-C leaves the older terminal
+in control. This requires an owner started with the updated code. Workspace
+controllers must detach their pane first; input already draining to the owner
+also prevents replacement until it finishes.
 Typing and terminal resizing preserve the draft and previously displayed conversation.
 Buffered typing is displayed as a completed edit while resize controls remain responsive.
 Resizing while terminal output is blocked retains all newly typed command bytes.
@@ -1314,7 +1323,8 @@ or
 select a running session. Accepts a unique 1..32-character ID prefix and
 .BR \-\-dotdir ;
 the owner retains its existing configuration and model selection. Ambiguous
-prefixes list full matching IDs. An occupied terminal is never taken over.
+prefixes list full matching IDs. An occupied terminal is never taken over by
+--attach; interactive --resume offers confirmation to move a classic terminal.
 Attachment skips provider setup, including when the owner started with an
 explicit configuration file outside its state directory.
 Requires terminal stdin, stdout and stderr, with a nonempty TERM other than

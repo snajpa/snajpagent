@@ -840,8 +840,7 @@ endpoint_status_version(int dir_fd, const char *dir_path, unsigned char version,
                     if (reply.bytes[3] == status_type &&
                         length == 1u && data[0] <= 1u) result = data[0];
                     /* Owners predating STATUS reject extra sockets while occupied. */
-                    static const char busy[] =
-                        "session already has a terminal or attachment reservation";
+                    static const char busy[] = SNAG_SESSION_BUSY;
                     if (snag_session_packet_type(&reply) == SNAG_SESSION_ERROR &&
                         length == sizeof(busy) - 1u && !memcmp(data, busy, length)) result = 1;
                     break;

@@ -75,6 +75,13 @@ Unfinished reads and stalled writes have independent five-second progress
 deadlines. Handshakes and uncommitted reservations expire after fifteen seconds.
 An idle, complete connection has no deadline. A malformed, stalled or lost
 connection is removed without failing the owner. Its controller lease is released.
+Interactive classic `--resume` offers a local confirmation after a busy response.
+Confirmation retries SA/5 RESERVE with the one-byte payload 1; an empty RESERVE
+still refuses occupied terminals. The relay retires the old classic peer and
+publishes DETACH before the new generation enters the existing repaint/bind
+barrier. It preserves the private PTY, owner and draft, and refuses replacement
+while admitted input is draining or a workspace holds the controller lease.
+Older owners reject the extended request without changing their attachment.
 The workspace waits up to five seconds for a draft acknowledgement after the
 request finishes sending, retaining its local copy on connection loss.
 

@@ -379,10 +379,13 @@ accept_peer(struct snag_session_relay *relay, const struct snag_session_listener
 }
 
 static int
-candidate_message(struct snag_session_relay *relay)
+candidate_message(struct snag_session_relay *relay, enum snag_session_message *event)
 {
     enum snag_session_message type = snag_session_packet_type(&relay->rejection);
-    if (snag_session_packet_length(&relay->rejection)) return snag_errno(EPROTO);
+    size_t length = snag_session_packet_length(&relay->rejection);
+    bool replace = type == SNAG_SESSION_RESERVE && length == 1u &&
+        relay->rejection.bytes[SNAG_SESSION_HEADER] == SNAG_SESSION_REPLACE;
+    if (length && !replace) return snag_errno(EPROTO);
     if (type == SNAG_SESSION_STATUS) {
         unsigned char attached = relay->view_attached || (relay->peer >= 0 &&
             (relay->phase == SNAG_SESSION_ATTACHED ||
@@ -391,8 +394,15 @@ candidate_message(struct snag_session_relay *relay)
         return snag_session_packet_set(&relay->rejection, SNAG_SESSION_STATUS, &attached, 1u);
     }
     if (type != SNAG_SESSION_RESERVE) return snag_errno(EPROTO);
+    /* Explicit replacement retires only a classic frontend. Keep an active
+     * workspace controller and input or commands still awaiting admission. */
+    if (replace && relay->peer >= 0 && !relay->view_reserved && !relay->input_pending &&
+        !relay->command_reply && !*event) {
+        peer_drop(relay);
+        *event = SNAG_SESSION_DETACH;
+    }
     if (relay->peer >= 0 || relay->view_reserved) {
-        static const char busy[] = "session already has a terminal or attachment reservation";
+        static const char busy[] = SNAG_SESSION_BUSY;
         relay->reject_reply = true;
         return snag_session_packet_set(&relay->rejection, SNAG_SESSION_ERROR,
                                         busy, sizeof(busy) - 1u);
@@ -492,7 +502,7 @@ snag_session_relay_step(struct snag_session_relay *relay,
                 rc = snag_session_packet_write(relay->reject, &relay->rejection);
             } else {
                 rc = snag_session_packet_read(relay->reject, &relay->rejection);
-                if (rc == 1) rc = candidate_message(relay);
+                if (rc == 1) rc = candidate_message(relay, event);
             }
         }
         if (rc != 0) reject_drop(relay);

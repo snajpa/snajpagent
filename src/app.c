@@ -8492,11 +8492,13 @@ attach_session(const struct snag_cli *cli, char *error, size_t error_size)
         return snag_errorf(
             error, error_size, "attachment requires terminal stdin, stdout and stderr");
     if (select_startup_session(cli, &selected, NULL, error, error_size) < 0) return -1;
+    struct snag_session_typeahead typeahead = {.resume = cli->resume};
+    memcpy(typeahead.session, selected, sizeof(typeahead.session));
     peer = connect_session((void *)cli, selected, NULL, error, error_size);
     free(selected);
     if (peer < 0) return -1;
     return snag_session_client_terminal(
-        peer, false, 0u, connect_session, (void *)cli, NULL, error, error_size);
+        peer, false, 0u, connect_session, (void *)cli, &typeahead, error, error_size);
 }
 
 static int
@@ -8583,7 +8585,6 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     selected.last = false;
     selected.resume_id = id;
     if (live) {
-        selected.resume = false;
         selected.attach = true;
         selected.attach_id = id;
         (void)fprintf(stderr, "%s: session is running; attaching with its existing settings%s\n",

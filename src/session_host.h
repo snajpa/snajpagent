@@ -13,6 +13,10 @@
 #define SNAG_SESSION_HEADER 8u
 #define SNAG_SESSION_ENDPOINT "terminal.sock"
 #define SNAG_SESSION_VIEW_ENDPOINT "view.sock"
+#define SNAG_SESSION_BUSY "session already has a terminal or attachment reservation"
+/* RESERVE is empty unless a local resume confirmation requests replacement.
+ * Older owners reject the one-byte request without releasing their terminal. */
+#define SNAG_SESSION_REPLACE 1u
 #define SNAG_SESSION_COMMIT_BYTES (4u + 4u * SNAG_TERMINAL_NAME_BYTES)
 /* Transfer/source UUIDs, two offset/sequence/SHA-256 cursors, source sequence,
  * record count, and requested mode. Integers use explicit little-endian bytes. */

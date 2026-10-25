@@ -43,11 +43,13 @@ struct snag_session_typeahead {
     unsigned char command[SNAG_SESSION_COMMAND_BYTES];
     char session[SNAG_ID_HEX_LEN + 1u];
     int signal;
+    bool resume;
     const volatile sig_atomic_t *cancelled;
     struct snag_term_host *suspend_terminal;
 };
 /* On supported hosts, own the real terminal and consume peer on every outcome. An initial owner
  * socket is already attached; other peers perform reserve/commit first.
+ * resume allows one local confirmation to replace an occupied classic terminal.
  * An optional command reference is sent once after BOUND, before keyboard input.
  * Its acknowledgement gates following input; this call never retries the reference.
  * child is the optional owner PID created by this frontend, never a signal
