@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Restore native checkpoints written with core section version 5 instead of
+  rejecting them as unavailable during session resume.
+
 - Preserve native session attachments across macOS sleep by measuring session transport
   deadlines with awake time. Closing a local terminal releases its attachment while the
   session owner continues, so the session can be reattached without restarting it.
