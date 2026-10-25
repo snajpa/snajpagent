@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -17,6 +18,7 @@ struct snag_presentation_writer {
     struct snag_binary_anchor tail;
     struct snag_buf batch, wire;
     json_t *response;
+    char recovery[sizeof(".view-presentation-recovery-") + SNAG_ID_HEX_LEN];
 };
 
 static unsigned char
@@ -58,6 +60,73 @@ restore_response(struct snag_presentation_writer *writer, const char *id)
     return 0;
 }
 
+/* A zero-filled suffix can follow an interrupted output write. Keep the entire
+ * original inode, and replace only this auxiliary stream with its verified cut.
+ * Closed nonzero corruption still fails; canonical history is never repaired here. */
+static int
+recover_zero_tail(struct snag_presentation_writer *writer, int directory, const char *id,
+    uint64_t size, struct snag_binary_identity *identity, uint64_t *incomplete)
+{
+    unsigned char bytes[65536];
+    uint64_t end = size;
+    while (end > SNAG_BINARY_HEADER_SIZE) {
+        size_t count = end - SNAG_BINARY_HEADER_SIZE < sizeof(bytes) ?
+            (size_t)(end - SNAG_BINARY_HEADER_SIZE) : sizeof(bytes);
+        if (snag_pread(writer->fd, bytes, count, (int64_t)(end - count)) != (ssize_t)count)
+            return -1;
+        size_t zeros = 0u;
+        while (zeros < count && !bytes[count - zeros - 1u]) ++zeros;
+        end -= zeros;
+        if (zeros < count) break;
+    }
+    if (size - end < 2u || end <= SNAG_BINARY_HEADER_SIZE) return snag_errno(EINVAL);
+    ++end; /* Keep the valid batch's closing delimiter. */
+    if (snag_binary_journal_tail(writer->fd, end, &writer->batch, identity,
+            &writer->tail, incomplete) < 0 || *incomplete) return snag_errno(EINVAL);
+    for (size_t i = 0u; i < sizeof(identity->id); ++i)
+        if (identity->id[i] != hex_byte(id + i * 2u)) return snag_errno(EINVAL);
+    char token[SNAG_ID_HEX_LEN + 1u];
+    char stage[sizeof(".view-presentation-stage-") + SNAG_ID_HEX_LEN];
+    if (snag_random_id(token) < 0) return -1;
+    (void)snprintf(stage, sizeof(stage), ".view-presentation-stage-%s", token);
+    (void)snprintf(writer->recovery, sizeof(writer->recovery),
+        ".view-presentation-recovery-%s", token);
+    int fd = snag_open_private_append_at(directory, stage, true);
+    if (fd < 0) return -1;
+    int rc = -1;
+    bool linked = false, installed = false;
+    for (uint64_t offset = 0u; offset < end;) {
+        size_t count = end - offset < sizeof(bytes) ? (size_t)(end - offset) : sizeof(bytes);
+        if (snag_pread(writer->fd, bytes, count, (int64_t)offset) != (ssize_t)count ||
+            snag_write_full(fd, bytes, count) < 0) goto done;
+        offset += count;
+    }
+    if (snag_sync_file(fd) < 0 ||
+        snag_link_at(directory, SNAG_PRESENTATION_FILE, directory, writer->recovery) < 0) goto done;
+    linked = true;
+    if (snag_sync_dir(directory) < 0 ||
+        snag_rename_at(directory, stage, directory, SNAG_PRESENTATION_FILE) < 0) goto done;
+    installed = true;
+    if (snag_sync_dir(directory) < 0) goto done;
+    (void)close(writer->fd);
+    writer->fd = fd;
+    fd = -1;
+    rc = 0;
+done:;
+    int saved = errno;
+    if (fd >= 0) (void)close(fd);
+    if (linked && !installed) (void)snag_unlink_at(directory, writer->recovery, false);
+    (void)snag_unlink_at(directory, stage, false);
+    errno = saved;
+    return rc;
+}
+
+const char *
+snag_presentation_recovery(const struct snag_presentation_writer *writer)
+{
+    return writer && writer->recovery[0] ? writer->recovery : NULL;
+}
+
 struct snag_presentation_writer *
 snag_presentation_writer_open(int directory, const char *id)
 {
@@ -88,7 +157,9 @@ snag_presentation_writer_open(int directory, const char *id)
         struct snag_binary_identity found;
         uint64_t incomplete;
         if (snag_binary_journal_tail(writer->fd, (uint64_t)info.st_size, &writer->batch,
-            &found, &writer->tail, &incomplete) < 0) goto fail;
+                &found, &writer->tail, &incomplete) < 0 &&
+            (errno != EINVAL || recover_zero_tail(writer, directory, id,
+                (uint64_t)info.st_size, &found, &incomplete) < 0)) goto fail;
         if (memcmp(found.id, identity.id, sizeof(identity.id))) { errno = EINVAL; goto fail; }
         if (incomplete && (snag_truncate(writer->fd, (int64_t)writer->tail.end) < 0 ||
             snag_sync_file(writer->fd) < 0)) goto fail;

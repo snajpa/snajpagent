@@ -52,7 +52,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         assert not self.headers.get("ChatGPT-Account-Id")
         if self.path == "/v1/responses/input_tokens":
             self.server.count_requests.append(body)
-            self.reply(200, json.dumps({"object": "response.input_tokens", "input_tokens": 1024}).encode())
+            tokens = 1024
+            if (getattr(self.server, "switch_count", False) and
+                    body["model"] == "other-model" and
+                    "history-before-switch" in raw.decode() and
+                    "switch-current-input" in raw.decode()):
+                tokens = 100000
+            self.reply(200, json.dumps({"object": "response.input_tokens", "input_tokens": tokens}).encode())
             return
         self.server.requests.append((self.path, body, dict(self.headers), raw))
         if self.path == "/v1/responses":
@@ -76,6 +82,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(200, body)
             return
         assert self.path == "/v1/responses/compact", self.path
+        if self.server.failure == 429:
+            code = getattr(self.server, "failure_code", "proxy_overloaded")
+            self.reply(429, json.dumps({"error": {"code": code,
+                "type": "rate_limit_error", "message": "fixture compact lane overloaded"}}).encode())
+            return
         if self.server.failure:
             error = {"error": {"code": "server_error" if self.server.failure == 500 else "not_found",
                                "type": "server_error", "message": "fixture-native-failure"}}
@@ -189,7 +200,7 @@ def check(binary):
                         server.catalog_delay = False
                     assert len([e for e in read_events(journal) if e["type"] == "compaction_completed"]) == 1
 
-                for status in (500, 404):
+                for status in (500, 404, 429):
                     config.write_text(text)
                     server.failure = 0
                     run("--resume", sid, "-e", prompt="Preserve this complete turn: " + "a" * 10000)
@@ -199,7 +210,8 @@ def check(binary):
                     server.requests.clear()
                     server.failure = status
                     result = run("--resume", sid, "-e", prompt="Continue with the same context.", ok=False)
-                    assert "fixture-native-failure" in result.stderr, result.stderr
+                    diagnostic = "compact lane overloaded" if status == 429 else "fixture-native-failure"
+                    assert diagnostic in result.stderr, result.stderr
                     assert server.requests and all(r[0] == "/v1/responses/compact" for r in server.requests)
                     assert len({r[3] for r in server.requests}) == 1, "failure changed the source before retry"
                     after = read_events(journal)
@@ -229,6 +241,92 @@ def check(binary):
                 server.server_close()
                 thread.join(timeout=5)
     print("Native compact API: capability-scoped parameters, standard API, native output and retained failures: ok")
+
+
+def check_smaller_model_rate_limit(binary, code="proxy_overloaded"):
+    """A busy compact lane must not strand an over-budget smaller-model turn."""
+    with tempfile.TemporaryDirectory(prefix="snag-switch-compact-429-") as directory:
+        root = Path(directory).resolve()
+        state, config = root / "state", root / "config.ini"
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.requests, server.count_requests = [], []
+        server.v2, server.failure, server.catalog_status = True, 0, 200
+        server.catalog_delay, server.invalid_output, server.switch_count = False, None, True
+        server.failure_code = code
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        config.write_text(
+            "[agent]\nmodel=gpt-fixture\nreasoning_effort=xhigh\n"
+            "read_agents_md=false\nmax_turn_retries=0\nretry_auto=false\n"
+            f"[provider fixture]\nbase_url=http://127.0.0.1:{server.server_port}/v1\n"
+            'api_key="fixture-secret"\nexact_token_count=true\nnative_compaction=true\n'
+            "[model-limit fixture/gpt-fixture]\nmax_input_tokens=1000000\n"
+            "[model-limit fixture/other-model]\nmax_input_tokens=50000\n"
+            "[ui]\ncolor=never\n")
+        config.chmod(0o600)
+        env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+               "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1", "OPENAI_API_KEY": None}
+        prefix = [str(binary), "--dotdir", str(state), "--config", str(config)]
+        child = RemoteProcess(root, prefix, wrapped=None, extra_env=env, winsize=(24, 180))
+        try:
+            child.until("›".encode(), timeout=10)
+            os.write(child.master, b"history-before-switch: retain the completed work\r")
+            child.until_after(b"once", "›".encode(), timeout=10)
+            journal, = journal_paths(state)
+            server.requests.clear()
+            server.failure = 429
+            child.output.clear()
+            os.write(child.master, b"/compact\r")
+            child.until_after(b"previous context retained", "›".encode(), timeout=10)
+            assert [r[0] for r in server.requests] == ["/v1/responses/compact"]
+            assert not any(e["type"] == "context_rebased" for e in read_events(journal))
+            before = read_events(journal)[-1]["seq"]
+            server.requests.clear()
+            child.output.clear()
+            os.write(child.master, b"/model fixture/other-model/xhigh:default\r")
+            child.until_after(b"model for next turn", "›".encode(), timeout=10)
+            child.output.clear()
+            os.write(child.master, b"switch-current-input: continue the accepted work\r")
+            if code != "proxy_overloaded":
+                child.until_after(b"turn failed", "›".encode(), timeout=10)
+                os.write(child.master, b"/exit\r")
+                child.wait(0)
+                after = [e for e in read_events(journal) if e["seq"] > before]
+                assert not any(e["type"] in ("context_rebased", "turn_completed") for e in after)
+                assert sum(e["type"] == "compaction_interrupted" for e in after) == 1
+                assert [r[0] for r in server.requests] == ["/v1/responses/compact"]
+                print(f"Smaller model {code}: no history fallback or normal request: ok")
+                return
+            child.until_after(b"once", "›".encode(), timeout=10)
+            os.write(child.master, b"/exit\r")
+            child.wait(0)
+            after = [e for e in read_events(journal) if e["seq"] > before]
+            turn, = [e for e in after if e["type"] == "turn_started"]
+            done, = [e for e in after if e["type"] == "turn_completed"]
+            rebase, = [e for e in after if e["type"] == "context_rebased"]
+            assert rebase["data"]["turn_id"] == turn["data"]["turn_id"] == done["data"]["turn_id"]
+            assert not any(e["type"] in ("turn_failed", "turn_recovery", "tool_started") for e in after)
+            compact = [r for r in server.requests if r[0].endswith("/compact")]
+            request, = [r for r in server.requests if r[0] == "/v1/responses"]
+            assert len(compact) == 1, len(compact)
+            assert request[1]["model"] == "other-model"
+            assert b"switch-current-input" in request[3]
+            assert b"history-before-switch" not in request[3]
+            assert len([e for e in after if e["type"] == "compaction_interrupted"]) == 1
+            server.requests.clear()
+            result = subprocess.run([*prefix, "--resume", journal.parent.name, "-e"],
+                input="Continue after recovered switch.", text=True, capture_output=True,
+                env={k: v for k, v in env.items() if v is not None}, cwd=root, timeout=20)
+            assert result.returncode == 0, result.stderr
+            request, = server.requests
+            assert request[1]["model"] == "other-model"
+            assert b"history-before-switch" not in request[3]
+        finally:
+            child.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+    print("Smaller model: native429, same-turn recovery, retained input and resume: ok")
 
 
 def check_context_limits(binary):
@@ -649,6 +747,9 @@ def check_post_turn_usage(binary):
 
 if __name__ == "__main__":
     binary = Path(sys.argv[1]).resolve()
+    check_smaller_model_rate_limit(binary)
+    check_smaller_model_rate_limit(binary, code="insufficient_quota")
+    check_smaller_model_rate_limit(binary, code="cyber_policy")
     check_local_compact_bounds(binary)
     check(binary)
     check_context_limits(binary)

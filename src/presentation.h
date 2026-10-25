@@ -23,6 +23,8 @@ bool snag_presentation_event_selected(const json_t *route, const char *type, con
  * This auxiliary stream contains presentation only, never model state. */
 struct snag_presentation_writer;
 struct snag_presentation_writer *snag_presentation_writer_open(int directory, const char *id);
+/* Basename of the preserved damaged stream after a zero-tail recovery, or NULL. */
+const char *snag_presentation_recovery(const struct snag_presentation_writer *);
 void snag_presentation_writer_close(struct snag_presentation_writer *);
 /* Bind a new presentation stream to the first canonical event after its
  * historical prefix. Existing streams retain their original boundary. */

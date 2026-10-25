@@ -428,6 +428,60 @@ test_retained_presentation(void)
 }
 
 static void
+test_zero_filled_presentation_tail(void)
+{
+    char path[] = "build/zero-tail-presentation-XXXXXX";
+    assert(mkdtemp(path));
+    int dir = snag_open_read(path, true);
+    const char *id = "0123456789abcdef0123456789abcdef";
+    struct snag_presentation_writer *writer = snag_presentation_writer_open(dir, id);
+    assert(writer && !snag_presentation_start(writer, 31u));
+    struct snag_ui_command command = {.kind = SNAG_UI_HOST, .text = "retained command output"};
+    assert(!snag_presentation_append(writer, &command));
+    snag_presentation_writer_close(writer);
+    int fd = snag_open_private_append_at(dir, SNAG_PRESENTATION_FILE, false);
+    snag_file_info original;
+    unsigned char zeros[919] = {0};
+    assert(fd >= 0 && !snag_fstat(fd, &original));
+    assert(!snag_write_full(fd, zeros, sizeof(zeros)) && !close(fd));
+    writer = snag_presentation_writer_open(dir, id);
+    assert(writer && !snag_presentation_start(writer, 32u));
+    snag_presentation_writer_close(writer);
+    fd = snag_open_read_at(dir, SNAG_PRESENTATION_FILE, false);
+    snag_file_info repaired;
+    assert(fd >= 0 && !snag_fstat(fd, &repaired) && repaired.st_size == original.st_size);
+    json_t *rows = NULL;
+    struct snag_binary_anchor begin, tail;
+    bool incomplete;
+    assert(!snag_presentation_read(fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin,
+        &tail, &incomplete, NULL, NULL) && !incomplete && json_array_size(rows) == 1u);
+    assert(!strcmp(snag_json_string(json_object_get(json_array_get(rows, 0u), "data"), "text"),
+        command.text));
+    json_decref(rows);
+    assert(!close(fd));
+    int scan = snag_open_read_at(dir, ".", true);
+    struct snag_directory *entries = snag_directory_open(scan);
+    assert(entries);
+    const char *name;
+    unsigned int backups = 0u;
+    while ((name = snag_directory_next(entries))) {
+        if (strncmp(name, ".view-presentation-recovery-", 28u)) continue;
+        fd = snag_open_read_at(dir, name, false);
+        snag_file_info backup;
+        assert(fd >= 0 && !snag_fstat(fd, &backup));
+        assert(backup.st_size == original.st_size + (int64_t)sizeof(zeros));
+        unsigned char suffix[sizeof(zeros)];
+        assert(snag_pread(fd, suffix, sizeof(suffix), original.st_size) == sizeof(suffix));
+        assert(!memcmp(suffix, zeros, sizeof(zeros)) && !close(fd));
+        assert(!snag_unlink_at(dir, name, false));
+        ++backups;
+    }
+    assert(backups == 1u && !snag_directory_close(entries));
+    assert(!snag_unlink_at(dir, SNAG_PRESENTATION_FILE, false));
+    assert(!close(dir) && !rmdir(path));
+}
+
+static void
 test_styled_sink_matches_terminal(void)
 {
     const unsigned int widths[] = {20u, 41u, 120u};
@@ -4511,6 +4565,7 @@ main(int argc, char **argv)
     if (argc == 4 && !strcmp(argv[1], "--read-presentation"))
         return read_presentation_file(argv[2], argv[3]);
     test_null_output();
+    test_zero_filled_presentation_tail();
     test_prompt_row_ascii_and_joined_cells();
     test_query_markdown_isolation();
     static const char markdown[] = "# **Live** _Markdown_\n"

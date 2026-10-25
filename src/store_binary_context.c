@@ -1260,10 +1260,23 @@ snag_store_load_binary_session(struct snag_session *session, enum snag_tail_poli
                     sizeof(index_error)) < 0 || snag_fstat(index, &info) < 0) {
                 (void)close(index);
                 index = -1;
-            } else if (info.st_size == 0) {
-                (void)close(index);
-                index = -1;
-                rebuild = true;
+            } else {
+                int64_t expected;
+                unsigned char root[32];
+                struct snag_binary_index_tree loaded;
+                if (snag_binary_index_end(admission.tree.count, &expected) < 0 ||
+                    snag_binary_index_tree_root(&admission.tree, root) < 0) {
+                    (void)close(index);
+                    goto done;
+                }
+                /* The journal may have committed after its derived index stopped.
+                 * Validate the whole frontier before attaching an append writer. */
+                if (info.st_size != expected || snag_binary_index_tree_load(index, &identity,
+                        admission.tree.count, root, &loaded) != 0) {
+                    (void)close(index);
+                    index = -1;
+                    rebuild = true;
+                }
             }
         }
         if (rebuild) {

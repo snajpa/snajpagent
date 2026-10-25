@@ -1797,7 +1797,14 @@ snag_provider_responses_compact(const struct snag_provider_connection *connectio
             &ctx, "compact request failed", error, error_size, retry_count);
     const struct snag_provider_failure *failure =
         ctx.stream.failed ? &ctx.stream.provider_failure : &ctx.provider_failure;
+    long status = ctx.http_status ? ctx.http_status : ctx.last_http_status;
     if (rc < 0 && snag_provider_failure_is_capacity(failure)) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
+    if (rc < 0 && status == 429 && !snag_provider_failure_is_policy(failure) &&
+        ((!strcmp(failure->code, "proxy_overloaded") &&
+             (!failure->type[0] ||
+                 snag_string_in(failure->type, "rate_limit_error server_error"))) ||
+            snag_provider_failure_retryable(status, failure->code, failure->type)))
+        rc = SNAG_PROVIDER_COMPACT_BUSY;
     if (rc == 0) {
         rc = codex ? codex_compact_output(&ctx, compact_request, output, error, error_size)
                    : parse_compact_body(&ctx, output, error, error_size);

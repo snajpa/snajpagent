@@ -32,6 +32,10 @@ typedef int (*snag_provider_progress_fn)(void *opaque, size_t output_bytes);
  * rejected, so shrinking the source would only re-send the same call. */
 #define SNAG_PROVIDER_REJECTED 6
 
+/* Native compaction was rate limited without producing a checkpoint. Keep this
+ * an error for ordinary callers; oversized turns may recover from durable history. */
+#define SNAG_PROVIDER_COMPACT_BUSY (-2)
+
 /* One synchronous caller owns this connection cache; nested requests use their
  * own transport while it is busy. Close after the owner's requests have joined. */
 struct snag_provider_transport {

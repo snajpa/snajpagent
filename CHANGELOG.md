@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+- Continue an oversized smaller-model turn through durable-history recovery when
+  native compaction is temporarily rate limited. Keep current input and earlier
+  tool results, and retain the previous context when manual compaction fails.
+
+- Rebuild stale native history indexes on resume. Recover a zero-filled retained
+  output tail from its verified prefix while preserving the damaged original.
+
+- Apply idle host controls such as `/compact` without starting armed goals or
+  reporting an already handled command as unknown.
+
 - Offer a local confirmation when interactive resume finds an occupied classic
   terminal. Confirming moves control to the new terminal while the session owner,
   work and draft continue; ordinary attachment still refuses an occupied session.

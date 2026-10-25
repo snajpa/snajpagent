@@ -6228,7 +6228,10 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                         app->control_requested || app->model_switch_requested))
                     goto steered_before_response;
                 if (compact_rc == 2 && app->interrupt_requested) goto user_interrupted;
-                if (compact_rc == 0) {
+                if (compact_rc == SNAG_PROVIDER_COMPACT_BUSY &&
+                    app_warning(app, "native compaction busy; recovering from durable history") < 0)
+                    goto output_fail;
+                if (compact_rc == 0 || compact_rc == SNAG_PROVIDER_COMPACT_BUSY) {
                     if (compacted) {
                         request_compacted = true;
                     } else {
@@ -6320,7 +6323,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 memcpy(over_budget_request_hash, projection.create_request.sha256,
                     sizeof(over_budget_request_hash));
             compact_rc = 0;
-            if (!request_compacted || over_hard)
+            if (!pure_history_recovery && (!request_compacted || over_hard))
                 compact_rc = snag_app_compact_before_response(app, &credential,
                     projection.input_tokens_bound, count_method, &compacted, error, sizeof(error));
             if (compact_rc == 1 &&
@@ -6329,6 +6332,14 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 goto steered_before_response;
             }
             if (compact_rc == 2 && app->interrupt_requested) goto user_interrupted;
+            if (compact_rc == SNAG_PROVIDER_COMPACT_BUSY && over_hard && !pure_history_recovery) {
+                if (app_warning(app,
+                        "native compaction busy; recovering from durable history") < 0)
+                    goto output_fail;
+                app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
+                app->history_recovery_rebase = true;
+                goto rebuild_request;
+            }
             if (compact_rc != 0) {
                 /* The consecutive-failure bound is terminal for this turn:
                  * retrying would only fail again until new input clears it. */
@@ -7625,8 +7636,8 @@ submit_idle(
         rc = snag_app_lifecycle_command(app, prompt, &handled, &exit_now);
         if (rc < 0 || exit_now) return rc < 0 ? 3 : 1;
     }
-    if (handled && starts_ready_chain) {
-        rc = run_ready_chains(app);
+    if (handled) {
+        rc = starts_ready_chain ? run_ready_chains(app) : apply_controls(app);
     } else if (single_line && strcmp(prompt, "/exit") == 0) {
         return 1;
     } else if (single_line && strcmp(prompt, "/next") == 0) {

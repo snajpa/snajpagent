@@ -995,6 +995,47 @@ test_native_history_observe(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_stale_native_history_index(struct snag_store *store, const char *cwd)
+{
+    for (unsigned int damage = 0u; damage < 3u; ++damage) {
+        struct snag_session source;
+        snag_session_init(&source);
+        char error[256], id[SNAG_ID_HEX_LEN + 1u];
+        assert(!snag_session_create(store, &source, cwd, "default", "history", "high",
+            error, sizeof(error)));
+        for (unsigned int i = 0u; i < 8u; ++i)
+            commit_event(&source, "retry_auto_changed", json_pack("{s:s}", "value", "on"));
+        assert(!snag_session_checkpoint(&source, error, sizeof(error)));
+        memcpy(id, source.id, sizeof(id));
+        uint64_t sequence = source.next_seq;
+        size_t expected_count = 0u;
+        uint64_t expected_before = 0u;
+        assert(!snag_session_each_event_reverse(&source, 0u, SIZE_MAX, count_cursor_event,
+            &expected_count, &expected_before, error, sizeof(error)) && !expected_before);
+        int64_t journal_end = source.log_end, index_end;
+        assert(!snag_binary_index_end(sequence - (damage ? 1u : 3u), &index_end));
+        int directory = dup(source.dir_fd);
+        snag_session_close(&source);
+        int index = snag_open_private_append_at(directory, "history.idx", false);
+        assert(index >= 0);
+        if (damage == 1u) --index_end;
+        if (damage == 2u) ++index_end;
+        assert(!snag_truncate(index, index_end) && !close(index) && !close(directory));
+        snag_session_init(&source);
+        assert(!snag_session_open(store, &source, id, error, sizeof(error)));
+        assert(source.next_seq == sequence && source.log_end == journal_end);
+        uint64_t before = 0u;
+        size_t count = 0u;
+        assert(!snag_session_each_event_reverse(&source, 0u, SIZE_MAX, count_cursor_event, &count,
+            &before, error, sizeof(error)));
+        assert(before == 0u && count == expected_count);
+        commit_event(&source, "retry_auto_changed", json_pack("{s:s}", "value", "off"));
+        assert(!snag_session_binary_index_status(&source, error, sizeof(error)));
+        snag_session_close(&source);
+    }
+}
+
+static void
 test_history_snapshot_refresh(struct snag_store *store, const char *cwd)
 {
     struct snag_session source, view;
@@ -3490,6 +3531,7 @@ main(int argc, char **argv)
     test_history_prefix(&store, cwd);
     test_history_snapshot_refresh(&store, cwd);
     test_native_history_observe(&store, cwd);
+    test_stale_native_history_index(&store, cwd);
     test_upload_staging_lifecycle(&store, cwd);
     test_retry_and_service_tier(&store, cwd);
     test_goal_wait_channel(&store, cwd);

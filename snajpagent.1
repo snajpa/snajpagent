@@ -852,7 +852,9 @@ Resume recovers source messages omitted by older checkpoints from the journal,
 using the saved admission receipt. Older prompts that also contain previously
 admitted catch-up messages recover those messages by their recorded stream IDs
 and sequence numbers. The next checkpoint retains the recovered sources.
-Resume rebuilds a missing or empty history index from the verified journal.
+Resume rebuilds a missing, empty or stale history index from the verified journal.
+It checks the index length and authenticated frontier before attaching its writer.
+The canonical journal remains unchanged during index recovery.
 Catch-up enters context once and stays out of later pending input batches.
 Recovery verifies the required journal records; ordinary request preparation
 uses the retained sources.
@@ -4440,7 +4442,13 @@ Responses compact endpoint. Set
 to summarize through ordinary Responses; the application wraps the returned
 summary text in its stored message format. Native compaction failures report an
 error and retain the original source and previous compacted context. An unavailable
-native endpoint does not switch to ordinary-text summarization. Exact preflight
+native endpoint does not switch to ordinary-text summarization.
+When a turn exceeds its hard context or request-size bound, a temporary HTTP 429
+from native compaction selects the durable-history recovery view. The next request
+keeps the current input; earlier work and tool results remain available through
+history tools. Manual compaction and requests within the hard bounds retain their
+previous context on failure.
+Exact preflight
 counts or explicit provider capacity rejections can select a smaller source.
 Each reduction must lower the source budget; fitting continues until a prefix
 fits or cannot shrink further. Other failures retain the source and previous
@@ -7202,6 +7210,13 @@ Keep them with the journal when backing up a native session.
 Derived native history index. Checkpoint admission uses the journal and images.
 Point queries that require unavailable old source membership remain unavailable;
 explicit sequential history inspection reads canonical journal records.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/.view-presentation.snb
+Retained terminal output. Resume can recover a zero-filled tail after verifying
+its last complete batch. It preserves the entire original as
+.B .view-presentation-recovery-ID
+in the same private session directory and reports that filename. Other closed
+corruption leaves output retention unavailable; canonical history remains separate.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/lock
 Live session lock.

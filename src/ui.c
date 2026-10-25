@@ -1896,6 +1896,13 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
                 snag_presentation_writer_close(display->presentation);
                 display->presentation = NULL;
             }
+            const char *recovered = snag_presentation_recovery(display->presentation);
+            if (recovered && !display->direct) {
+                char message[256];
+                (void)snprintf(message, sizeof(message),
+                    "Recovered retained output; original preserved as %s", recovered);
+                if (snag_render_warning_ctx(&display->render, message) < 0) return -1;
+            }
             if (!display->presentation) {
                 (void)snprintf(display->presentation_error, sizeof(display->presentation_error),
                     "Session output retention unavailable: %s", strerror(errno));

@@ -189,7 +189,12 @@ remove_view_reports(int dir_fd, char *error, size_t error_size)
         }
         bool catalog_temporary = !strncmp(name, ".catalog-", 9u) &&
             strlen(name + 9u) == SNAG_ID_HEX_LEN && snag_hex_is_lower(name + 9u, SNAG_ID_HEX_LEN);
-        if (!catalog_temporary && strcmp(name, ".view-presentation.snb") &&
+        bool output_recovery = !strncmp(name, ".view-presentation-recovery-", 28u) &&
+            strlen(name + 28u) == SNAG_ID_HEX_LEN && snag_hex_is_lower(name + 28u, SNAG_ID_HEX_LEN);
+        bool output_stage = !strncmp(name, ".view-presentation-stage-", 25u) &&
+            strlen(name + 25u) == SNAG_ID_HEX_LEN && snag_hex_is_lower(name + 25u, SNAG_ID_HEX_LEN);
+        if (!catalog_temporary && !output_recovery && !output_stage &&
+            strcmp(name, ".view-presentation.snb") &&
             strcmp(name, ".view-reports.jsonl") &&
             (strncmp(name, ".view-report-", 13u) || strlen(name + 13u) != SNAG_ID_HEX_LEN ||
                 !snag_hex_is_lower(name + 13u, SNAG_ID_HEX_LEN)))
