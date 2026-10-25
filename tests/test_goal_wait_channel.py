@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -32,6 +33,8 @@ class WaitChannelTests(unittest.TestCase):
         self.addCleanup(self.provider.close)
         self.requests = []
         self.steps = []
+        self.hold_after = None
+        self.hold_release = None
         self.children = []
         self.addCleanup(self.close_children)
         self.provider.runtime_handler = self.respond
@@ -46,6 +49,8 @@ class WaitChannelTests(unittest.TestCase):
         config.chmod(0o600)
 
     def close_children(self):
+        if self.hold_release is not None:
+            self.hold_release.set()
         for child in self.children:
             child.close()
         # Native owners survive frontend loss. Only this fixture's private path
@@ -68,7 +73,10 @@ class WaitChannelTests(unittest.TestCase):
     def respond(self, handler, request, sequence):
         self.requests.append(request)
         index = len(self.requests) - 1
-        if index < len(self.steps):
+        if self.hold_after is not None and index >= self.hold_after:
+            self.hold_release.wait(10)
+            body = self.provider.response_body(sequence, 'unexpected continuation')
+        elif index < len(self.steps):
             name, arguments = self.steps[index]
             body = self.provider.function_body(sequence, f'wait_call_{sequence}', name, arguments)
         elif index == len(self.steps) or index > len(self.steps) + 1:
@@ -78,6 +86,30 @@ class WaitChannelTests(unittest.TestCase):
             body = self.provider.function_body(sequence, f'cleanup_{sequence}', 'update_goal',
                                                {'action': 'complete', 'text': None})
         self.provider.reply(handler, body.encode(), close_header=True)
+
+    def test_host_setting_commands_do_not_resume_armed_goal(self):
+        self.steps = [('create_goal', {'objective': 'inspect local file'})]
+        self.hold_after = 2
+        self.hold_release = threading.Event()
+        child = self.start()
+        self.send(child, '/goal inspect local file', 'WAIT_DONE')
+        child.until(b'BUSY>', 10)
+        deadline = time.monotonic() + 10
+        while len(self.requests) < 3 and time.monotonic() < deadline:
+            time.sleep(.02)
+        self.assertGreaterEqual(len(self.requests), 3)
+
+        os.write(child.master, b'\x03')
+        child.until(b'turn interrupted', 10)
+        child.until(b'READY>', 10)
+        before = len(self.requests)
+
+        self.send(child, '/model', 'model cache is empty')
+        time.sleep(.2)
+        self.assertEqual(len(self.requests), before)
+        self.send(child, '/effort max', 'effort for next turn: max')
+        time.sleep(.2)
+        self.assertEqual(len(self.requests), before)
 
     def start(self, *args):
         child = RemoteProcess(self.root, [str(BINARY), '--dotdir', str(self.state),

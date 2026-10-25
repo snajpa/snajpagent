@@ -7528,12 +7528,74 @@ run_ready_chains(struct app_state *app)
     }
 }
 
+/* A host command is not a user/model turn.  In particular, changing a
+ * setting while a goal is armed must not accidentally resume that goal. */
+static bool
+command_starts_ready_chain(const char *line)
+{
+    const char *argument;
+    const char *word;
+    size_t length;
+
+    if (!line) return false;
+    if (snag_command_chained(line, strlen(line))) {
+        struct snag_command_line commands = {0};
+        bool ready = false;
+        if (snag_command_line_parse(line, strlen(line), '/', &commands) == 0) {
+            size_t offset = 0u;
+            for (size_t i = 0u; i < commands.count; ++i) {
+                const char *part = (const char *)commands.parts.data + offset;
+                if (command_starts_ready_chain(part)) ready = true;
+                offset += strlen(part) + 1u;
+            }
+        }
+        snag_buf_free(&commands.parts);
+        return ready;
+    }
+    while (isspace((unsigned char)*line)) ++line;
+    if (!strcmp(line, "/next") || !strcmp(line, "/retry")) return true;
+    if (!strncmp(line, "/state", 6u) && (!line[6] || isspace((unsigned char)line[6]))) {
+        argument = line + 6u;
+        while (isspace((unsigned char)*argument)) ++argument;
+        if (strncmp(argument, "goal", 4u) ||
+            (argument[4] && !isspace((unsigned char)argument[4])))
+            return false;
+        argument += 4u;
+        while (isspace((unsigned char)*argument)) ++argument;
+    } else if (!strncmp(line, "/goal", 5u) &&
+               (!line[5] || isspace((unsigned char)line[5]))) {
+        argument = line + 5u;
+        while (isspace((unsigned char)*argument)) ++argument;
+    } else {
+        return false;
+    }
+    if (!*argument) return false;
+    word = argument;
+    while (*argument && !isspace((unsigned char)*argument)) ++argument;
+    length = (size_t)(argument - word);
+    if ((length == 6u && !strncmp(word, "resume", length)) ||
+        (length == 3u && !strncmp(word, "add", length)) ||
+        (length == 3u && !strncmp(word, "set", length)))
+        return true;
+    if ((length == 6u && (!strncmp(word, "status", length) ||
+                          !strncmp(word, "unlock", length))) ||
+        (length == 4u && !strncmp(word, "help", length)) ||
+        (length == 5u && !strncmp(word, "pause", length)) ||
+        (length == 4u && !strncmp(word, "lock", length)) ||
+        (length == 8u && !strncmp(word, "complete", length)) ||
+        (length == 6u && !strncmp(word, "cancel", length)) ||
+        (length == 5u && !strncmp(word, "clear", length)))
+        return false;
+    return true;
+}
+
 static int
 submit_idle(
     struct app_state *app, const char *prompt, enum snag_render_view input_view, bool *prompt_ready)
 {
     bool single_line = strchr(prompt, '\n') == NULL;
     bool read_only, handled = false, exit_now = false;
+    bool starts_ready_chain = false;
     const char *query = snag_prompt_parse(prompt, &read_only);
     bool retry = single_line && strcmp(prompt, "/retry") == 0;
     int rc = 0;
@@ -7555,13 +7617,15 @@ submit_idle(
      * present, so subsequent ready chains (queue/timer/goal) may run. The
      * direct turn itself also clears interrupt_requested on entry. */
     app->interrupt_requested = false;
+    if (single_line && snag_prompt_command(prompt))
+        starts_ready_chain = command_starts_ready_chain(prompt);
     rc = snag_app_input_command(app, prompt, app->session.active_turn, &handled, prompt_ready);
     if (rc < 0) return 3;
     if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/') {
         rc = snag_app_lifecycle_command(app, prompt, &handled, &exit_now);
         if (rc < 0 || exit_now) return rc < 0 ? 3 : 1;
     }
-    if (handled) {
+    if (handled && starts_ready_chain) {
         rc = run_ready_chains(app);
     } else if (single_line && strcmp(prompt, "/exit") == 0) {
         return 1;
