@@ -3595,7 +3595,7 @@ test_session_client(void)
     assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, geometry, sizeof(geometry)));
 
     /* Refusal, EOF, timeout and an older peer retain the source attachment. */
-    for (unsigned int failure = 0u; failure < 7u; ++failure) {
+    for (unsigned int failure = 0u; failure < 8u; ++failure) {
         assert(snag_session_stream_pair(target) == 0);
         assert(snag_session_client_attach(&client, target[0]) == 0);
         client_receive_frame(&client, target[1], SNAG_SESSION_RESERVE, &packet);
@@ -3613,6 +3613,9 @@ test_session_client(void)
             assert(snag_session_packet_set(&packet, SNAG_SESSION_READY, NULL, 0u) == 0);
             packet.bytes[2] = 2u;
             assert(snag_session_packet_write(target[1], &packet) == 1);
+        } else if (failure == 7u) {
+            client.replacement_requested = true;
+            assert(close(target[1]) == 0);
         } else if (failure % 3u == 0u) {
             relay_send_frame(target[1], SNAG_SESSION_ERROR, "busy", 4u);
         } else if (failure % 3u == 1u) {
@@ -3623,6 +3626,10 @@ test_session_client(void)
         client_wait_event(&client, SNAG_SESSION_ERROR);
         assert(client.peer == source[0] && client.target == -1);
         assert(client.event_length > 0u);
+        if (failure == 7u)
+            assert(!strcmp((char *)client.event_data,
+                "running owner does not support moving an occupied terminal; "
+                "detach the old terminal first"));
         client_receive_frame(&client, source[1], SNAG_SESSION_INPUT, &packet);
         assert(snag_session_packet_length(&packet) == 7u);
         assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, "pending", 7u));

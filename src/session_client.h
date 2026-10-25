@@ -25,7 +25,7 @@ struct snag_session_client {
     unsigned char voice_offer[SNAG_SESSION_VOICE_BYTES];
     bool output_pending, resize_pending, quitting, peer_ended, ack_pending;
     bool ansi_output, target_verified, peer_draining;
-    bool voice_offered, voice_released, input_blocked;
+    bool voice_offered, voice_released, input_blocked, replacement_requested;
 };
 
 /* Takes ownership on success; peer may be an already-attached initial socket

@@ -151,7 +151,10 @@ target_read(struct snag_session_client *client, enum snag_session_message *event
     struct snag_session_packet *packet = &client->target_input;
     int rc = snag_session_packet_read(client->target, packet);
     if (rc < 0) {
-        target_failed(client, "destination connection ended before attachment", event);
+        target_failed(client, client->replacement_requested ?
+            "running owner does not support moving an occupied terminal; "
+            "detach the old terminal first" :
+            "destination connection ended before attachment", event);
         return 0;
     }
     if (!rc) return 0;
@@ -646,6 +649,7 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
                     goto out;
                 }
                 const unsigned char replace = SNAG_SESSION_REPLACE;
+                client.replacement_requested = true;
                 if (snag_session_packet_set(&client.target_output, SNAG_SESSION_RESERVE,
                         &replace, 1u) < 0) goto out;
                 continue;
