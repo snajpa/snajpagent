@@ -4067,6 +4067,13 @@ test_session_relay(void)
         assert(snag_session_relay_step(&relay, &listener, 1, &event) == 0 && !event);
     }
     assert(relay.input_pending && relay.input_deadline > snag_session_clock_ms());
+    competitor = snag_session_endpoint_connect(dir, root);
+    assert(competitor >= 0);
+    const unsigned char replace = SNAG_SESSION_REPLACE;
+    relay_send_frame(competitor, SNAG_SESSION_RESERVE, &replace, 1u);
+    relay_receive_frame(&relay, &listener, competitor, SNAG_SESSION_ERROR, &packet);
+    assert(relay.peer == pair[0] && relay.input_pending && relay.generation == initial);
+    assert(close(competitor) == 0);
     assert(close(pair[1]) == 0);
     relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
     assert(relay.peer == -1 && relay.master == master);
@@ -4391,6 +4398,75 @@ test_session_relay(void)
     snag_session_listener_close(&listener);
     assert(close(lock) == 0 && unlinkat(dir, "lock", 0) == 0);
     assert(close(dir) == 0 && rmdir(root) == 0);
+    free(root);
+}
+
+static void
+test_session_relay_replacement(void)
+{
+    char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-replace-XXXXXX");
+    assert(root && mkdtemp(root));
+    int dir = open(root, O_RDONLY | O_DIRECTORY);
+    assert(dir >= 0);
+    int lock = snag_create_private_at(dir, "lock", true);
+    assert(lock >= 0 && snag_lock_file(lock, false) == 0);
+    struct snag_session_listener listener;
+    assert(snag_session_listener_open(&listener, dir, root, lock) == 0);
+    int master[2], pair[2];
+    assert(pipe(master) == 0 && snag_session_stream_pair(pair) == 0);
+    struct snag_session_relay relay;
+    assert(snag_session_relay_init(&relay, master[0], pair[0]) == 0);
+    uint64_t initial = relay.generation;
+    struct snag_session_packet packet;
+    int next = snag_session_endpoint_connect(dir, root);
+    assert(next >= 0);
+    relay_send_frame(next, SNAG_SESSION_RESERVE, NULL, 0u);
+    relay_receive_frame(&relay, &listener, next, SNAG_SESSION_ERROR, &packet);
+    assert(relay.peer == pair[0] && relay.generation == initial);
+    assert(close(next) == 0);
+    next = snag_session_endpoint_connect(dir, root);
+    assert(next >= 0);
+    const unsigned char replace = SNAG_SESSION_REPLACE;
+    enum snag_session_message event;
+    assert(snag_session_relay_step(&relay, &listener, 100, &event) == 0 && !event);
+    assert(relay.reject >= 0);
+    unsigned char reference[SNAG_SESSION_COMMAND_BYTES];
+    memset(reference, 'a', sizeof(reference));
+    relay_send_frame(pair[1], SNAG_SESSION_COMMAND, reference, sizeof(reference));
+    relay_send_frame(next, SNAG_SESSION_RESERVE, &replace, 1u);
+    relay_wait_event(&relay, &listener, SNAG_SESSION_COMMAND);
+    assert(relay.peer == pair[0] && relay.generation == initial && relay.command_reply);
+    relay.command_admitted = true;
+    relay_receive_frame(&relay, &listener, next, SNAG_SESSION_ERROR, &packet);
+    relay_receive_frame(&relay, &listener, pair[1], SNAG_SESSION_COMMAND, &packet);
+    assert(packet.bytes[SNAG_SESSION_HEADER + SNAG_SESSION_COMMAND_BYTES] == 1u);
+    assert(close(next) == 0);
+    next = snag_session_endpoint_connect(dir, root);
+    assert(next >= 0);
+    relay_send_frame(next, SNAG_SESSION_RESERVE, &replace, 1u);
+    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    assert(relay.peer >= 0 && relay.generation == initial + 1u);
+    assert(relay.master == master[0] && relay.phase == SNAG_SESSION_RESERVED);
+    packet = (struct snag_session_packet){0};
+    assert(snag_session_packet_read(pair[1], &packet) < 0);
+    relay_receive_frame(&relay, &listener, next, SNAG_SESSION_READY, &packet);
+    assert(close(pair[1]) == 0 && close(next) == 0);
+    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    uint64_t view;
+    assert(snag_session_relay_view_reserve(&relay, &view) == 0);
+    next = snag_session_endpoint_connect(dir, root);
+    assert(next >= 0);
+    relay_send_frame(next, SNAG_SESSION_RESERVE, &replace, 1u);
+    relay_receive_frame(&relay, &listener, next, SNAG_SESSION_ERROR, &packet);
+    assert(relay.view_reserved && relay.generation == view);
+    assert(close(next) == 0);
+    snag_session_relay_view_release(&relay, view);
+    snag_session_relay_close(&relay);
+    snag_session_listener_close(&listener);
+    assert(close(master[1]) == 0 && close(lock) == 0);
+    assert(unlinkat(dir, "lock", 0) == 0 && close(dir) == 0);
+    assert(rmdir(root) == 0);
     free(root);
 }
 
@@ -5174,6 +5250,7 @@ run_base(int argc, char **argv)
     test_session_transport();
 #if defined(__linux__) && !defined(_WIN32)
     test_session_relay();
+    test_session_relay_replacement();
     test_session_relay_final_output();
     test_session_client();
     test_session_voice_client();

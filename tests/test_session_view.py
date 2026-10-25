@@ -250,6 +250,37 @@ class SessionViewTests(unittest.TestCase):
                              for event in self.events()))
         self.finish(resumed, b'/s d')
 
+    def test_resume_moves_classic_terminal_only_after_confirmation(self):
+        os.write(self.initial.master, b'retained resume draft')
+        self.initial.until(b'retained resume draft')
+        refused = RemoteProcess(self.root, [str(BINARY), '--dotdir', str(self.root / 'state'),
+                                            '--attach', self.sid], wrapped=None)
+        self.children.append(refused)
+        refused.until(b'session already has a terminal')
+        refused.wait(3)
+        for answer in (b'n\r', b'\r', b'\x1b', b'\x03'):
+            declined = self.start(['--resume', self.sid])
+            declined.until(b'Move it to this terminal? [y/N] ')
+            os.write(declined.master, answer)
+            declined.wait(0)
+            self.assertEqual(self.identity(), self.owner_identity)
+            self.assertIsNone(self.initial.process.poll())
+        self.assertFalse(any(event['type'] == 'turn_started' for event in self.events()))
+        resumed = self.start(['--resume', self.sid])
+        resumed.until(b'Move it to this terminal? [y/N] ')
+        os.write(resumed.master, b'y\r')
+        resumed.until(b'retained resume draft')
+        self.initial.wait(3)
+        self.assertEqual(self.identity(), self.owner_identity)
+        os.write(resumed.master, b'\x15resume confirmation submitted once\r')
+        resumed.until(b'semantic-answer', 10)
+        self.wait_event('turn_completed')
+        inputs = [event for event in self.events() if event['type'] == 'input_received']
+        self.assertEqual([row['data']['text'] for row in inputs],
+                         ['resume confirmation submitted once'])
+        self.finish(resumed, b'/s d')
+        self.status('detached')
+
     def test_retention_failure_preserves_bound_and_publishes_error(self):
         self.detach()
         peer = self.view()
