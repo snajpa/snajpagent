@@ -1046,8 +1046,11 @@ class ChannelTests(ChannelFixture):
         second = ChannelServer()
         self.addCleanup(second.close)
         self.run_calls(('irc_connect', dict(endpoint=second.endpoint)))
-        self.wait(lambda: len({e['data']['endpoint'] for e in self.events()
-                  if e['data'].get('routing', {}).get('joined')}) == 2)
+        # The operator or default room may join before the agent's target room.
+        self.wait(lambda: any(e['data'].get('endpoint') == second.endpoint and
+                  e['data'].get('room') == '#side' and
+                  e['data'].get('routing', {}).get('identity') == 'agent' and
+                  e['data']['routing'].get('joined') for e in self.events()))
         self.run_calls(self.send_call('#side', 'ambiguous-forbidden'),
                        self.send_call(second.endpoint + '/#side', 'second-endpoint-send'))
         self.assert_no_wire('ambiguous-forbidden')
