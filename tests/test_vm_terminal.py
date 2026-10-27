@@ -534,7 +534,12 @@ class NativePaneTests(unittest.TestCase):
         self.owner.status('detached')
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
         standalone = self.start(False)
-        standalone.wait(draft)
+        standalone.wait('shared-draft')
+        # tmux may truncate a cell's combining marks; inspect the complete draft.
+        saved = self.checkpoint(standalone)
+        restored = next(row for row in saved['drafts'] if row['route'] == 'rollout')
+        self.assertEqual(restored['text'], draft)
+        self.assertEqual(restored['cursor'], len(draft.encode()))
         standalone.send_key('C-u')
         standalone.wait_until(lambda screen: 'PROMPT> shared-draft' not in screen,
                               'restored draft cleared')
