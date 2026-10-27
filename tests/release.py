@@ -885,6 +885,10 @@ pdf_recipe = linux.split("pdf = (staticFixed.poppler.override {", 1)[1].split("}
 assert "inherit fontconfig;" in pdf_recipe
 print("PASS: portable PDF font fallback uses host directories")
 
+assert './fontconfig-macos-fallback.patch' in (root / 'nix/macos.nix').read_text()
+assert 'python3 tests/test_pdf.py ./$(BIN)' in (root / 'Makefile').read_text()
+print("PASS: macOS PDF ships native-font fallback and runtime regression coverage")
+
 # Nixpkgs curlMinimal disables WebSockets unless explicitly requested. Realtime
 # voice uses the linked library, covered at runtime by test_provider_transport.
 curl_recipe = linux.split("curl = (staticFixed.curlMinimal.override {", 1)[1].split("}).overrideAttrs", 1)[0]

@@ -472,6 +472,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_config
 	./tests/test_ui_input
 	./tests/test_batch_poll
+	SNAJPAGENT_TEST_WITH_PDF=$(WITH_PDF) python3 tests/test_pdf.py ./$(BIN)
 	python3 tests/test_top.py ./$(BIN)
 	python3 tests/test_session_catalog.py ./$(BIN)
 	python3 tests/test_session_listing.py ./$(BIN)
