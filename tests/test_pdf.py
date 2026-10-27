@@ -47,6 +47,7 @@ def contains_image(value):
 
 
 @unittest.skipUnless(WITH_PDF, 'native PDF disabled in this build')
+@unittest.skipIf(sys.platform in ('win32', 'cygwin', 'msys'), 'Windows uses native font lookup')
 class NativePDF(unittest.TestCase):
     def render(self, setting=None, contents=None):
         with tempfile.TemporaryDirectory(prefix='snag-pdf-fonts-') as temporary:
