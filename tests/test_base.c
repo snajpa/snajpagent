@@ -111,7 +111,7 @@ test_term_modes_pending_output(void)
             else
                 assert(snag_term_input_hidden(&host) == 0);
             assert(snag_term_input_restore(&host, false) == 0);
-            struct termios restored;
+            struct termios restored = {0};
             assert(tcgetattr(slave, &restored) == 0);
             assert(restored.c_iflag == host.input_mode.c_iflag);
             assert(restored.c_oflag == host.input_mode.c_oflag);
