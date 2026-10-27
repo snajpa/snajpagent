@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Use native macOS fonts directly when the implicit Fontconfig configuration is
+  absent, keeping PDF rendering quiet while preserving diagnostics for explicit
+  or malformed font configurations.
+
 - Continue an oversized smaller-model turn through durable-history recovery when
   native compaction is temporarily rate limited. Keep current input and earlier
   tool results, and retain the previous context when manual compaction fails.

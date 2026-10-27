@@ -1,0 +1,28 @@
+Use Darwin's existing font fallback when the implicit default file is absent.
+Explicit configuration and malformed existing files retain their diagnostics.
+
+--- a/src/fcinit.c
++++ b/src/fcinit.c
+@@ -113,6 +113,22 @@ FcInitLoadOwnConfig (FcConfig *config)
+ 
+     FcInitDebug();
+ 
++#ifdef __APPLE__
++    /* Standalone Darwin applications need no /etc/fonts installation. */
++    const char *env_file = getenv ("FONTCONFIG_FILE");
++    const char *env_path = getenv ("FONTCONFIG_PATH");
++    if ((!env_file || !env_file[0]) && (!env_path || !env_path[0])) {
++        FcChar8 *filename = FcConfigGetFilename (config, NULL);
++
++        if (!filename) {
++            const FcChar8 *sysroot = FcConfigGetSysRoot (config);
++
++            return FcInitFallbackConfigWithFilter (config, sysroot);
++        }
++        FcStrFree (filename);
++    }
++#endif
++
+     if (!FcConfigParseAndLoad (config, 0, FcTrue)) {
+ 	const FcChar8 *sysroot = FcConfigGetSysRoot (config);
+ 	FcConfig      *fallback = FcInitFallbackConfigWithFilter (config, sysroot);

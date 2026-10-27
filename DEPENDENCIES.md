@@ -237,8 +237,10 @@ alone do not qualify playback/capture.
 
 macOS PDF recipes link Poppler, FreeType, Fontconfig, Expat, libpng, libjpeg-turbo
 and OpenJPEG statically, using the SDK's libc++ runtime. Fontconfig retains its
-Darwin system/user font-directory fallback and `/etc/fonts` configuration;
-rendering still requires usable embedded or host fonts. The libpng generated
+Darwin system/user font-directory fallback and `/etc/fonts` configuration.
+When the implicit default configuration is absent, macOS uses that fallback
+directly. Explicit `FONTCONFIG_FILE` and `FONTCONFIG_PATH` overrides retain
+their diagnostics. Rendering still requires usable embedded or host fonts. The libpng generated
 header uses the explicit target triple; JPEG assembly selects the native build
 NASM and LLVM install-name tool. The existing static font metadata fix retains
 transitive link dependencies.

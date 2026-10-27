@@ -211,6 +211,7 @@ let
     "--disable-docs" "--disable-docbook" "--disable-cache-build" "--disable-nls"
     "--sysconfdir=/etc" "--with-cache-dir=/var/cache/fontconfig"
   ] [ expat freetype png zlib ]).overrideAttrs (old: {
+    patches = (old.patches or []) ++ [ ./fontconfig-macos-fallback.patch ];
     nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.gperf pkgs.python3 ];
     installFlags = [ "sysconfdir=$(out)/etc" "RUN_FC_CACHE_TEST=false" "fc_cachedir=$(TMPDIR)/fontconfig-cache" ];
   });
