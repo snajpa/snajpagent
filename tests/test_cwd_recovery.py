@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""An unavailable saved cwd must leave the model able to select an existing one."""
+"""An unavailable saved cwd falls home once, before model work touches the old path."""
 import contextlib
 import errno
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -46,11 +47,7 @@ def mounted_project(backing, mount):
             time.sleep(.01)
         mounted = True
 
-        def disconnect():
-            filesystem.kill()
-            filesystem.wait(timeout=5)
-
-        yield disconnect
+        yield filesystem
     finally:
         left.close()
         right.close()
@@ -76,10 +73,17 @@ class CwdRecoveryTests(unittest.TestCase):
                          "requires Linux FUSE, SSHFS and a local SFTP server")
     def test_resume_after_filesystem_disconnect(self):
         for legacy in (False, True):
-            with self.subTest(legacy=legacy):
-                self.check_recovery("disconnected", legacy)
+            for failure in ("disconnected", "stalled"):
+                with self.subTest(legacy=legacy, failure=failure):
+                    self.check_recovery(failure, legacy)
 
-    def check_recovery(self, replacement, legacy):
+    def test_read_only_and_disabled_project_discovery(self):
+        for legacy in (False, True):
+            for read_only, read_agents in ((True, True), (False, False)):
+                with self.subTest(legacy=legacy, read_only=read_only, read_agents=read_agents):
+                    self.check_recovery("missing", legacy, read_only, read_agents)
+
+    def check_recovery(self, replacement, legacy, read_only=False, read_agents=True):
         provider = harness.FakeResponses()
         self.addCleanup(provider.close)
         with tempfile.TemporaryDirectory(prefix="snag-cwd-recovery-") as tmp, \
@@ -87,12 +91,15 @@ class CwdRecoveryTests(unittest.TestCase):
             root = Path(tmp).resolve()
             home = root / "home"
             home.mkdir()
+            home_instruction = home / "AGENTS.md"
+            home_instruction.write_text("Home recovery instructions.\n")
+            (home / "marker").write_text("home relative file\n")
             old = home / "project" / "work"
-            if replacement == "disconnected":
+            if replacement in ("disconnected", "stalled"):
                 backing = root / "backing"
                 backing.mkdir()
                 old.parent.mkdir()
-                disconnect = cleanup.enter_context(mounted_project(backing, old.parent))
+                filesystem = cleanup.enter_context(mounted_project(backing, old.parent))
             old.mkdir(parents=True)
             (old / "AGENTS.md").write_text("Project instructions before the move.\n")
             docs = root / "docs"
@@ -108,7 +115,7 @@ class CwdRecoveryTests(unittest.TestCase):
             config = state / "config.ini"
             config.write_text(
                 "[agent]\nprovider=fixture\nmodel=host-model\nmax_turn_retries=0\n"
-                "read_agents_md=true\n"
+                f"read_agents_md={'true' if read_agents else 'false'}\n"
                 f"[provider fixture]\nbase_url=http://127.0.0.1:{provider.port}\n"
                 'api_key="irc-ui-secret"\nexact_token_count=false\n'
                 "[ui]\ncolor=never\nmarkdown=false\npager=off\n")
@@ -123,6 +130,8 @@ class CwdRecoveryTests(unittest.TestCase):
                 step = steps.pop(0)
                 arguments = {
                     "cd": {"path": str(target)},
+                    "get_cwd": {},
+                    "read_file": {"path": "marker"},
                     "create_goal": {"objective": "Wait for the synthetic dependency."},
                     "update_goal": {"action": "block", "text": "Synthetic input is missing.",
                                     "wait_for": "external: synthetic input"},
@@ -146,13 +155,17 @@ class CwdRecoveryTests(unittest.TestCase):
             journal, = journal_paths(state)
             self.assertEqual(sum(e["type"] == "goal_blocked" for e in read_events(journal)), 1)
             target = root / "moved"
-            if replacement == "disconnected":
+            if replacement in ("disconnected", "stalled"):
                 target.mkdir()
                 shutil.copyfile(old / "AGENTS.md", target / "AGENTS.md")
-                disconnect()
-                with self.assertRaises(OSError) as failure:
-                    old.stat()
-                self.assertEqual(failure.exception.errno, errno.ENOTCONN)
+                if replacement == "stalled":
+                    filesystem.send_signal(signal.SIGSTOP)
+                else:
+                    filesystem.kill()
+                    filesystem.wait(timeout=5)
+                    with self.assertRaises(OSError) as failure:
+                        old.stat()
+                    self.assertEqual(failure.exception.errno, errno.ENOTCONN)
             elif replacement == "missing-parent":
                 old.parent.rename(target)
                 target = target / "work"
@@ -163,27 +176,42 @@ class CwdRecoveryTests(unittest.TestCase):
                 elif replacement == "symlink-loop":
                     old.symlink_to(old.name)
             requests.clear()
-            steps[:] = ["cd", "answer"]
-            second = subprocess.run([*common, "--resume", session.name, "-e", "--", "recover"],
-                                    cwd=root, env=env, capture_output=True, text=True, timeout=20)
+            steps[:] = ["get_cwd", "read_file", "answer"]
+            started = time.monotonic()
+            prompt = "/ro recover" if read_only else "recover"
+            second = subprocess.run([*common, "--resume", session.name, "-e", "--", prompt],
+                                    cwd=root, env=env, capture_output=True, text=True, timeout=6)
+            elapsed = time.monotonic() - started
             self.assertEqual(second.returncode, 0, second.stderr)
             self.assertFalse(steps)
+            self.assertIn("Changed to home:", second.stderr)
             context = json.dumps(requests[0]["input"])
-            self.assertIn("Saved working directory is unavailable", context)
-            self.assertIn(str(old), context)
-            self.assertIn(str(global_file), context)
+            if not read_only:
+                self.assertIn(f"cwd={home};", context)
+            self.assertEqual(str(global_file) in context, read_agents)
             self.assertIn(str(explicit), context)
+            self.assertEqual(str(home_instruction) in context, read_agents)
             self.assertNotIn(str(old / "AGENTS.md"), context)
-            self.assertIn(f"cwd={target};", json.dumps(requests[-1]["input"]))
-            steps[:] = ["answer"]
+            self.assertIn("home relative file", json.dumps(requests[-1]["input"]))
+            changes = [e for e in read_events(journal) if e["type"] == "work_context_changed"]
+            self.assertEqual(changes[-1]["data"]["old_cwd"], str(old))
+            self.assertEqual(changes[-1]["data"]["new_cwd"], str(home))
+            steps[:] = ["get_cwd", "read_file", "cd", "answer"]
             requests.clear()
+            started = time.monotonic()
             third = subprocess.run([*common, "--resume", session.name, "-e", "--", "continue"],
-                                   cwd=root, env=env, capture_output=True, text=True, timeout=20)
+                                   cwd=root, env=env, capture_output=True, text=True, timeout=6)
+            reopen_elapsed = time.monotonic() - started
             self.assertEqual(third.returncode, 0, third.stderr)
             self.assertFalse(steps)
+            self.assertNotIn("Changed to home:", third.stderr)
             context = json.dumps(requests[0]["input"])
-            self.assertNotIn("Saved working directory is unavailable", context)
-            self.assertIn(str(target / "AGENTS.md"), context)
+            self.assertIn(f"cwd={home};", context)
+            self.assertNotIn(str(old / "AGENTS.md"), context)
+            self.assertEqual(str(target / "AGENTS.md") in json.dumps(requests[-1]["input"]),
+                             read_agents)
+            print(f"{replacement} legacy={legacy}: fallback={elapsed:.3f}s "
+                  f"reopen={reopen_elapsed:.3f}s", flush=True)
             self.assertFalse(any(e["type"] in ("goal_resumed", "goal_completed")
                                  for e in read_events(journal)))
 

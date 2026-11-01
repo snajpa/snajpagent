@@ -86,6 +86,43 @@ class WorkContext(skills.SkillsCase):
         self.assertFalse(any(event["type"] == "goal_started" for event in events))
         self.assertTrue(all(request["model"] == "host-model" for request in requests))
 
+    def test_disappeared_visit_falls_home_between_response_cycles(self):
+        provider = self.configured_provider()
+        role = self.project("architect")
+        self.skill(self.dotdir / "skills", "parent", body="PARENT-GUIDANCE")
+        requests = self.plan(provider, [
+            ("skills", {"action": "activate", "id": "parent"}),
+            ("work_context", {"action": "enter", "path": str(role), "task": "Design"}),
+            ("skills", {"action": "activate", "id": "architect"}),
+            ("get_cwd", {}),
+            ("work_context", {"action": "status"}),
+        ])
+        original = provider.runtime_handler
+
+        def disappear(handler, request, sequence):
+            if len(requests) == 3:
+                role.rename(self.root / "moved")
+            original(handler, request, sequence)
+
+        provider.runtime_handler = disappear
+        result = self.execute("Keep working after the temporary project disappears")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Changed to home:", result.stderr)
+        self.assertEqual(len(requests), 6)
+        recovered = self.guidance(requests[4])
+        self.assertIn(f"cwd={self.home};", recovered)
+        self.assertIn("No temporary work_context", recovered)
+        self.assertIn("PARENT-GUIDANCE", recovered)
+        self.assertNotIn("ARCHITECT-GUIDANCE", recovered)
+        self.assertNotIn(str(role / "AGENTS.md"), recovered)
+        changes = [event["data"] for event in self.runtime_events()
+                   if event["type"] == "work_context_changed"]
+        self.assertEqual(len(changes), 2)
+        self.assertEqual(changes[-1]["old_cwd"], str(role))
+        self.assertEqual(changes[-1]["new_cwd"], str(self.home))
+        self.assertIsNone(changes[-1]["work_context"])
+        self.assertTrue(all("visit_id" not in entry for entry in changes[-1]["active"]))
+
     def test_direct_switch_retires_role_skills_and_keeps_parent_return(self):
         provider = self.configured_provider()
         first, second = self.project("engineer"), self.project("debugger")
