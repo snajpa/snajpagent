@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""A missing saved cwd must leave the model able to select an existing one."""
+"""An unavailable saved cwd must leave the model able to select an existing one."""
+import contextlib
+import errno
 import json
 import os
+import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -16,21 +21,78 @@ from store_history import create_legacy, journal_paths, read_events
 BINARY = Path(sys.argv.pop(1)).resolve()
 
 
+@contextlib.contextmanager
+def mounted_project(backing, mount):
+    """Use a local SFTP socket so the disconnected-mount fixture needs no SSH host."""
+    left, right = socket.socketpair()
+    server = None
+    filesystem = None
+    mounted = False
+    try:
+        server = subprocess.Popen(["/usr/lib/openssh/sftp-server"],
+                                  stdin=left, stdout=left, stderr=subprocess.DEVNULL)
+        filesystem = subprocess.Popen(
+            ["sshfs", "-f", "-o", "passive,attr_timeout=0,entry_timeout=0,negative_timeout=0",
+             ":" + str(backing), str(mount)],
+            stdin=right, stdout=right, stderr=subprocess.DEVNULL)
+        left.close()
+        right.close()
+        deadline = time.monotonic() + 5
+        while not os.path.ismount(mount):
+            if filesystem.poll() is not None:
+                raise unittest.SkipTest("SSHFS mounting is unavailable")
+            if time.monotonic() >= deadline:
+                raise RuntimeError("SSHFS fixture did not mount")
+            time.sleep(.01)
+        mounted = True
+
+        def disconnect():
+            filesystem.kill()
+            filesystem.wait(timeout=5)
+
+        yield disconnect
+    finally:
+        left.close()
+        right.close()
+        for process in (filesystem, server):
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+        if mounted or os.path.ismount(mount):
+            subprocess.run(["fusermount3", "-u", str(mount)], check=True, timeout=5)
+
+
 class CwdRecoveryTests(unittest.TestCase):
     def test_resume_after_cwd_disappears(self):
         for legacy in (False, True):
-            for replacement in ("missing", "file", "missing-parent"):
+            for replacement in ("missing", "file", "missing-parent", "symlink-loop"):
                 with self.subTest(replacement=replacement, legacy=legacy):
                     self.check_recovery(replacement, legacy)
+
+    @unittest.skipUnless(sys.platform.startswith("linux") and Path("/dev/fuse").exists() and
+                         Path("/usr/lib/openssh/sftp-server").is_file() and
+                         shutil.which("sshfs") and shutil.which("fusermount3"),
+                         "requires Linux FUSE, SSHFS and a local SFTP server")
+    def test_resume_after_filesystem_disconnect(self):
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                self.check_recovery("disconnected", legacy)
 
     def check_recovery(self, replacement, legacy):
         provider = harness.FakeResponses()
         self.addCleanup(provider.close)
-        with tempfile.TemporaryDirectory(prefix="snag-cwd-recovery-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="snag-cwd-recovery-") as tmp, \
+                contextlib.ExitStack() as cleanup:
             root = Path(tmp).resolve()
             home = root / "home"
             home.mkdir()
             old = home / "project" / "work"
+            if replacement == "disconnected":
+                backing = root / "backing"
+                backing.mkdir()
+                old.parent.mkdir()
+                disconnect = cleanup.enter_context(mounted_project(backing, old.parent))
             old.mkdir(parents=True)
             (old / "AGENTS.md").write_text("Project instructions before the move.\n")
             docs = root / "docs"
@@ -84,13 +146,22 @@ class CwdRecoveryTests(unittest.TestCase):
             journal, = journal_paths(state)
             self.assertEqual(sum(e["type"] == "goal_blocked" for e in read_events(journal)), 1)
             target = root / "moved"
-            if replacement == "missing-parent":
+            if replacement == "disconnected":
+                target.mkdir()
+                shutil.copyfile(old / "AGENTS.md", target / "AGENTS.md")
+                disconnect()
+                with self.assertRaises(OSError) as failure:
+                    old.stat()
+                self.assertEqual(failure.exception.errno, errno.ENOTCONN)
+            elif replacement == "missing-parent":
                 old.parent.rename(target)
                 target = target / "work"
             else:
                 old.rename(target)
                 if replacement == "file":
                     old.write_text("A file now occupies the saved directory path.\n")
+                elif replacement == "symlink-loop":
+                    old.symlink_to(old.name)
             requests.clear()
             steps[:] = ["cd", "answer"]
             second = subprocess.run([*common, "--resume", session.name, "-e", "--", "recover"],
