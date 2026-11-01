@@ -996,6 +996,14 @@ snag_stat(const char *path, snag_file_info *out)
 }
 
 int
+snag_cwd_probe(const char *path)
+{
+    snag_file_info info;
+    if (snag_stat(path, &info) < 0) return errno;
+    return S_ISDIR(info.st_mode) ? 0 : ENOTDIR;
+}
+
+int
 snag_lstat(const char *path, snag_file_info *out)
 {
     return path_stat(-1, path, false, true, out);
@@ -3288,6 +3296,65 @@ int
 snag_stat(const char *path, snag_file_info *out)
 {
     return stat(path, out);
+}
+
+int
+snag_cwd_probe(const char *path)
+{
+    int channel[2];
+    if (pipe(channel) < 0) return -1;
+    if (snag_fd_cloexec(channel[0]) < 0 || snag_fd_cloexec(channel[1]) < 0) {
+        int failure = errno;
+        (void)close(channel[0]);
+        (void)close(channel[1]);
+        return snag_errno(failure);
+    }
+    pid_t child = fork();
+    if (!child) {
+        /* Only async-signal-safe calls: the parent may have other threads.
+         * A stalled network mount must never block the controller itself. */
+        struct stat info;
+        int failure = stat(path, &info) < 0 ? errno :
+            !S_ISDIR(info.st_mode) ? ENOTDIR : access(path, X_OK) < 0 ? errno : 0;
+        (void)close(channel[0]);
+        ssize_t written;
+        do {
+            written = write(channel[1], &failure, sizeof(failure));
+        } while (written < 0 && errno == EINTR);
+        _exit(written == sizeof(failure) ? 0 : 1);
+    }
+    int failure = errno;
+    (void)close(channel[1]);
+    if (child < 0) {
+        (void)close(channel[0]);
+        return snag_errno(failure);
+    }
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    struct pollfd ready = {.fd = channel[0], .events = POLLIN};
+    int result = ETIMEDOUT;
+    for (;;) {
+        uint64_t now = snag_monotonic_ms();
+        if (now >= deadline) break;
+        int rc = poll(&ready, 1u, (int)(deadline - now));
+        if (rc < 0 && errno == EINTR) continue;
+        if (rc < 0) { failure = errno; result = -1; break; }
+        if (!rc) break;
+        if (read(channel[0], &result, sizeof(result)) != sizeof(result)) {
+            failure = EIO;
+            result = -1;
+        }
+        break;
+    }
+    (void)close(channel[0]);
+    (void)kill(child, SIGKILL);
+    while (waitpid(child, NULL, 0) < 0) {
+        if (errno == EINTR) continue;
+        failure = errno;
+        result = -1;
+        break;
+    }
+    if (result < 0) errno = failure;
+    return result;
 }
 
 int

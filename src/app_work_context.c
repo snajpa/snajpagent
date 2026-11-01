@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
+#include "fs.h"
 #include "json.h"
 #include "skills.h"
 #include "tools.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -45,6 +47,70 @@ visit_result(const char *cwd, const json_t *visit, const char *summary)
     free(text);
     json_decref(state);
     return result;
+}
+
+int
+snag_app_recover_cwd(struct app_state *app, char *error, size_t size)
+{
+    int unavailable = snag_cwd_probe(app->session.cwd);
+    if (unavailable < 0)
+        return snag_errorf(error, size, "cannot check working directory: %s", strerror(errno));
+    if (!unavailable) return 0;
+    char *home = snag_home_directory();
+    char *resolved = NULL;
+    json_t *active = NULL, *paths = NULL, *catalog = NULL;
+    struct snag_instruction_set instructions = {0};
+    struct snag_buf notice = {0};
+    int rc = -1;
+    snag_buf_init(&notice, 2u * SNAG_PATH_MAX_BYTES + 256u);
+    if (!home || snag_cwd_probe(home) != 0 ||
+        !(resolved = snag_cwd_resolve(home, "home", error, size))) {
+        (void)snag_errorf(error, size, "working directory and home directory are unavailable");
+        goto done;
+    }
+    if (!strcmp(resolved, app->session.cwd)) {
+        (void)snag_errorf(error, size, "home working directory is unavailable: %s",
+            strerror(unavailable));
+        goto done;
+    }
+    if (app->config->read_agents_md && snag_instructions_discover(&instructions,
+        resolved, error, size) < 0) goto done;
+    for (size_t i = 0; i < app->cli->doc_instructions.count; ++i) {
+        const char *label = app->cli->doc_instructions.labels[i];
+        if (snag_instructions_add_file(&instructions, app->cli->doc_instructions.paths[i],
+            error, size) < 0 || (label && snag_instructions_label_last(&instructions,
+                label, error, size) < 0)) goto done;
+    }
+    active = app->session.work_context && !json_is_null(app->session.work_context) ?
+        visit_bindings(&app->session, true) : app->session.active_skills ?
+        json_incref(app->session.active_skills) : json_array();
+    paths = snag_instructions_metadata_json(&instructions);
+    catalog = snag_app_skills_catalog(app, resolved, NULL, error, size);
+    if (!active || !paths || !catalog || snag_buf_printf(&notice,
+        "Working directory unavailable: %s (%s). Changed to home: %s.",
+        app->session.cwd, strerror(unavailable), resolved) < 0 ||
+        snag_buf_terminate(&notice) < 0) goto done;
+    json_t *event = json_pack("{s:s,s:s,s:n,s:O,s:O}", "old_cwd", app->session.cwd,
+        "new_cwd", resolved, "work_context", "active", active, "instructions", paths);
+    if (snag_app_commit_event(app, "work_context_changed", event, error, size) < 0) goto done;
+    snag_instructions_free(&app->turn_instructions);
+    app->turn_instructions = instructions;
+    instructions = (struct snag_instruction_set){0};
+    json_decref(app->session.skills_catalog);
+    app->session.skills_catalog = catalog;
+    catalog = NULL;
+    snag_context_skills_changed(&app->session);
+    app->ui.view_state_seq = UINT64_MAX;
+    rc = snag_ui_text(&app->ui, SNAG_UI_WARNING, (char *)notice.data);
+done:
+    free(home);
+    free(resolved);
+    json_decref(active);
+    json_decref(paths);
+    json_decref(catalog);
+    snag_instructions_free(&instructions);
+    snag_buf_free(&notice);
+    return rc;
 }
 
 int

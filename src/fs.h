@@ -60,6 +60,9 @@ int snag_fstat(int fd, snag_file_info *out);
  * access time. This supplements the caller's locking and content validation. */
 bool snag_file_unchanged(const snag_file_info *before, const snag_file_info *after);
 int snag_stat(const char *path, snag_file_info *out);
+/* 0 usable directory, positive errno unavailable, -1 probe infrastructure error.
+ * POSIX metadata probes are killed and reaped after one second. */
+int snag_cwd_probe(const char *path);
 int snag_lstat(const char *path, snag_file_info *out);
 int snag_lstat_at(int dirfd, const char *path, snag_file_info *out);
 int snag_unlink_at(int dirfd, const char *path, bool directory);

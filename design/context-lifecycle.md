@@ -179,11 +179,15 @@ model-switched paths share this order:
 2. Build one canonical item sequence: fixed instructions, compatible retained
    summary, uncovered complete transcript groups, then current host facts.
    Create/count/accounting envelopes refer to those same items and tool shapes.
-   An unavailable saved cwd skips project discovery while retaining global and
-   explicit instruction pointers. Current host facts report the unavailable cwd,
-   including disconnected mounts, permission failures and symbolic-link loops.
-   Only a successful explicit `cd` changes the durable path. Explicit documentation
-   roots and instruction files still require successful discovery.
+   An unavailable saved cwd automatically falls back to the home directory before
+   startup discovery or response preparation. POSIX availability checks run in a
+   child with a one-second deadline; the child is killed and reaped before return.
+   The existing working-context event durably records the change, clears the
+   temporary visit and its skill bindings, and refreshes instructions from home.
+   Global and explicit instruction pointers, goals and running command directories
+   remain intact. Subsequent requests and resumes use home without probing the
+   abandoned path. Explicit documentation roots and instruction files still
+   require successful discovery.
 3. Measure or classify the outgoing request under that exact binding. Freeze its
    hashes, capacity provenance and current host snapshot for the response attempt.
 4. If reduction is required, compact a bounded complete prefix and rebuild and

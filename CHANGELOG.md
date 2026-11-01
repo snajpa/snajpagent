@@ -4,10 +4,11 @@
 
 ## Unreleased
 
-- Keep resumed turns usable when the saved working directory becomes inaccessible,
-  loses its filesystem connection or resolves through a symbolic-link loop.
-  Retain global and explicit guidance so the model can select an existing
-  directory with `cd`.
+- Automatically move an unavailable saved working directory home and save the
+  change for resume. Bound POSIX directory checks to one second so a stalled
+  filesystem is abandoned once instead of delaying every model request.
+  Refresh home guidance while retaining global/explicit documentation roots,
+  goals and running commands.
 
 - Use native macOS fonts directly when the implicit Fontconfig configuration is
   absent, keeping PDF rendering quiet while preserving diagnostics for explicit

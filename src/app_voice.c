@@ -172,6 +172,7 @@ snag_app_voice_read(struct app_state *app, const struct snag_response_item *call
     json_t *context = NULL;
     json_t *paths = NULL;
     struct snag_instruction_set discovered = {0};
+    if (snag_app_recover_cwd(app, error, size) < 0) return -1;
     int rc = snag_session_voice_context(&app->session, &context, error, size);
     if (rc < 0) goto out;
     rc = voice_queue_view(&app->session, context, after, (size_t)limit);

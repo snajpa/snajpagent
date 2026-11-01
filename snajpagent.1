@@ -327,12 +327,17 @@ to change it; absolute paths work anywhere the process can access.
 If a saved working directory has been moved, removed, replaced by a file,
 made inaccessible, disconnected from its filesystem or redirected through a
 symbolic-link loop,
-new turns retain global and explicit documentation roots and skip project
-instruction discovery for that path. The model receives a recovery notice and
-can call
+the session automatically changes to the home directory before preparing
+the next model request. The change is reported locally and saved for resume.
+POSIX directory checks allow one second for a stalled filesystem before falling
+back. Later requests use the home directory without retrying the abandoned path.
+Global and explicit documentation roots remain active; home-directory guidance
+is refreshed and any temporary work-context visit ends. Goals and running
+commands retain their state and original execution directories.
+The model can call
 .B cd
-with an existing absolute directory. The saved cwd changes only after that
-call succeeds; relative tools continue to use the saved path until then.
+with an existing absolute directory to select another workspace.
+Relative tools use the current directory reported by the host.
 File and command tools run with your OS permissions, without per-call approval.
 Tool calls are hidden at the default verbosity.
 .PP

@@ -914,6 +914,7 @@ context_preview(struct app_state *app, const struct snag_provider_config *provid
     char error[256] = {0};
     int rc = -1;
 
+    if (snag_app_recover_cwd(app, error, sizeof(error)) < 0) goto out;
 #ifndef SNAJPAGENT_TEST_FIXTURE
     if (snag_auth_load(app->store.root_fd, provider, &tokens, error, sizeof(error)) != 0)
         goto out;
@@ -5978,6 +5979,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         app->turn_model, app->turn_effort));
     provider_capacity_source_sha256(app->turn_provider, app->turn_model, provider_source_hash);
     graph = (struct snag_response_graph){0};
+    if (snag_app_recover_cwd(app, error, sizeof(error)) < 0) goto fail;
     if (continuing) {
         snag_instructions_free(&app->turn_instructions);
         if (app->session.active_instructions &&
@@ -8157,6 +8159,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         if (recover_session(&app, error, sizeof(error)) < 0) {
             goto fail;
         }
+        if (snag_app_recover_cwd(&app, error, sizeof(error)) < 0) goto fail;
         app.history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
         if (snag_app_running_resume(&app) < 0) goto fail;
         app.history_recovery_rebase = app.session.active_turn;
