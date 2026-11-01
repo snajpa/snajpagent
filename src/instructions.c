@@ -303,18 +303,19 @@ add_project(struct snag_instruction_set *set, const char *cwd, char *error, size
     int rc = -1;
 
     canonical_cwd = snag_realpath(cwd);
-    /* Keep global guidance when the saved cwd vanished; cd can recover it. */
-    if (!canonical_cwd && (errno == ENOENT || errno == ENOTDIR)) {
+    /* Failed filesystem lookups, including disconnected mounts, allow cd recovery. */
+    if (!canonical_cwd) {
+        if (errno == ENOMEM)
+            return snag_errorf(error, error_size, "cannot resolve cwd: %s", strerror(errno));
         rc = 0;
         goto out;
     }
-    if (!snag_text_valid(canonical_cwd, 0u, SNAG_PATH_MAX_BYTES) ||
-        snag_stat(canonical_cwd, &st) < 0) {
+    if (!snag_text_valid(canonical_cwd, 0u, SNAG_PATH_MAX_BYTES)) {
         (void)snag_fail(error, error_size, EINVAL,
             "cwd must be an existing UTF-8 directory for instruction discovery");
         goto out;
     }
-    if (!S_ISDIR(st.st_mode)) {
+    if (snag_stat(canonical_cwd, &st) < 0 || !S_ISDIR(st.st_mode)) {
         rc = 0;
         goto out;
     }

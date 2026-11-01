@@ -324,7 +324,9 @@ with the home directory as their working directory. The model can call
 to inspect it and
 .B cd
 to change it; absolute paths work anywhere the process can access.
-If a saved working directory has been moved, removed or replaced by a file,
+If a saved working directory has been moved, removed, replaced by a file,
+made inaccessible, disconnected from its filesystem or redirected through a
+symbolic-link loop,
 new turns retain global and explicit documentation roots and skip project
 instruction discovery for that path. The model receives a recovery notice and
 can call

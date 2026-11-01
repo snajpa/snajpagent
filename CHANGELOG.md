@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Keep resumed turns usable when the saved working directory becomes inaccessible,
+  loses its filesystem connection or resolves through a symbolic-link loop.
+  Retain global and explicit guidance so the model can select an existing
+  directory with `cd`.
+
 - Use native macOS fonts directly when the implicit Fontconfig configuration is
   absent, keeping PDF rendering quiet while preserving diagnostics for explicit
   or malformed font configurations.
