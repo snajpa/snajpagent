@@ -87,7 +87,9 @@ static const char *outside[] = {
 static bool
 outside_field(const char *name)
 {
-    if (!strcmp(name, "irc_conversations") || !strcmp(name, "irc_activity")) return true;
+    if (!strcmp(name, "irc_conversations") || !strcmp(name, "irc_activity") ||
+        !strcmp(name, "work_context") || !strcmp(name, "active_skills") ||
+        !strcmp(name, "cwd_recovery")) return true;
     for (size_t i = 0u; i < COUNT(outside); ++i)
         if (!strcmp(name, outside[i])) return true;
     return false;
@@ -102,7 +104,13 @@ same_controls(const struct snag_session *a, const struct snag_session *b)
         assert(!json_object_del(left, outside[i]));
         assert(!json_object_del(right, outside[i]));
     }
-    /* Optional IRC objects belong to separate core blocks. */
+    /* Optional runtime objects belong to separate core blocks. */
+    json_object_del(left, "work_context");
+    json_object_del(right, "work_context");
+    json_object_del(left, "active_skills");
+    json_object_del(right, "active_skills");
+    json_object_del(left, "cwd_recovery");
+    json_object_del(right, "cwd_recovery");
     json_object_del(left, "irc_conversations");
     json_object_del(right, "irc_conversations");
     json_object_del(left, "irc_activity");

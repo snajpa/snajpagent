@@ -4895,7 +4895,7 @@ static void
 test_prepared_native_seed(const char *cwd)
 {
     char error[512];
-    for (unsigned int variant = 0u; variant < 18u; ++variant) {
+    for (unsigned int variant = 0u; variant < 19u; ++variant) {
         struct snag_session prepared;
         struct snag_session target;
         snag_session_init(&prepared);
@@ -4969,6 +4969,13 @@ test_prepared_native_seed(const char *cwd)
             commit_data(&prepared, "retry_auto_changed", json_pack("{s:s}", "value",
                 variant == 16u ? "on" : "off"));
         }
+        if (variant == 18u) {
+            commit_data(&prepared, "work_context_changed", json_pack(
+                "{s:s,s:s,s:n,s:[],s:[],s:s}", "old_cwd", prepared.cwd,
+                "new_cwd", "/", "work_context", "active", "instructions",
+                "recovery_reason", "No such file or directory"));
+            assert(prepared.cwd_recovery);
+        }
         target.log_fd = temporary_fd();
         target.lock_fd = temporary_fd();
         int log_fd = target.log_fd;
@@ -4995,7 +5002,7 @@ test_prepared_native_seed(const char *cwd)
         if (variant == 15u) index.max = SNAG_BINARY_INDEX_HEADER_SIZE;
         int rc = snag_store_seed_binary_session(&prepared, &target, &index, error, sizeof(error));
         if (variant < 2u || variant == 6u || variant == 11u || variant == 12u ||
-            variant == 16u || variant == 17u) {
+            variant == 16u || variant == 17u || variant == 18u) {
             if (rc < 0) fprintf(stderr, "prepared native seed: %s (%d)\n", error, errno);
             assert(!rc && target.binary && target.log_fd == log_fd && target.lock_fd == lock_fd);
             same_core_state(&prepared, &target);
@@ -5024,7 +5031,23 @@ test_prepared_native_seed(const char *cwd)
                 assert(!strcmp(snag_goal_wait_for(&target), "operator"));
                 test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
             }
+            if (variant == 18u) {
+                assert(target.cwd_recovery);
+                test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
+            }
             snag_binary_checkpoint_sources_free(&sources);
+            if (variant == 18u) {
+                commit_data(&target, "cwd_changed", json_pack("{s:s,s:s}",
+                    "old_cwd", "/", "new_cwd", "/selected"));
+                commit_data(&target, "cwd_changed", json_pack("{s:s,s:s}",
+                    "old_cwd", "/selected", "new_cwd", "/"));
+                assert(!target.cwd_recovery);
+                assert(!snag_session_binary_checkpoint_capture(&target, &boundary, &tree,
+                    &sources, error, sizeof(error)));
+                test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
+                snag_binary_checkpoint_sources_free(&sources);
+                sequence += 2u;
+            }
             commit_data(&target, "model_selection_changed", json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
                 "old_provider", "default", "new_provider", "default",
                 "old_model", "selected", "new_model", "after seed",

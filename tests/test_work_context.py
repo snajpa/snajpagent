@@ -112,6 +112,10 @@ class WorkContext(skills.SkillsCase):
         recovered = self.guidance(requests[4])
         self.assertIn(f"cwd={self.home};", recovered)
         self.assertIn("No temporary work_context", recovered)
+        self.assertIn("Working-directory recovery (", recovered)
+        self.assertIn(str(role), recovered)
+        self.assertIn(str(self.home), recovered)
+        self.assertIn("became unavailable", recovered)
         self.assertIn("PARENT-GUIDANCE", recovered)
         self.assertNotIn("ARCHITECT-GUIDANCE", recovered)
         self.assertNotIn(str(role / "AGENTS.md"), recovered)
@@ -122,6 +126,19 @@ class WorkContext(skills.SkillsCase):
         self.assertEqual(changes[-1]["new_cwd"], str(self.home))
         self.assertIsNone(changes[-1]["work_context"])
         self.assertTrue(all("visit_id" not in entry for entry in changes[-1]["active"]))
+
+        session = self.saved_session()
+        self.compact_session(provider, session)
+        requests = self.plan(provider, [("cd", {"path": str(self.workspace)})])
+        result = self.execute("Continue after recovery", session=session)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Working-directory recovery (", self.guidance(requests[0]))
+        self.assertIn(str(role), self.guidance(requests[0]))
+        self.assertNotIn("Working-directory recovery (", self.guidance(requests[1]))
+        requests = self.plan(provider, [])
+        result = self.execute("Continue after navigation", session=session)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Working-directory recovery (", self.guidance(requests[0]))
 
     def test_direct_switch_retires_role_skills_and_keeps_parent_return(self):
         provider = self.configured_provider()
@@ -284,7 +301,6 @@ class WorkContext(skills.SkillsCase):
             key=lambda path: path.stat().st_mtime_ns).name
 
     def test_completed_turn_and_compaction_retain_visit_and_parent_guidance(self):
-        import tmux_terminal as harness
         provider = self.configured_provider()
         role = self.project("architect")
         self.skill(self.dotdir / "skills", "parent", body="PARENT-GUIDANCE")
@@ -297,6 +313,21 @@ class WorkContext(skills.SkillsCase):
         result = self.execute("Start a temporary design visit")
         self.assertEqual(result.returncode, 0, result.stderr)
         session = self.saved_session()
+        self.compact_session(provider, session)
+        requests = self.plan(provider, [("work_context", {"action": "leave"})])
+        result = self.execute("Continue the existing visit and return", session=session)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ARCHITECT-GUIDANCE", self.guidance(requests[0]))
+        self.assertIn("PARENT-GUIDANCE", self.guidance(requests[0]))
+        self.assertIn("Design beneath", self.guidance(requests[0]))
+        self.assertNotIn("ARCHITECT-GUIDANCE", self.guidance(requests[1]))
+        self.assertIn("PARENT-GUIDANCE", self.guidance(requests[1]))
+        events = self.runtime_events()
+        self.assertTrue(any(event["type"] == "compaction_completed" for event in events))
+        self.assertFalse(any(event["type"] == "goal_started" for event in events))
+
+    def compact_session(self, provider, session):
+        import tmux_terminal as harness
         summary_requests = []
 
         def summarize(handler, request, sequence):
@@ -318,17 +349,6 @@ class WorkContext(skills.SkillsCase):
             terminal.submit_wait("/compact", "• Compacted")
             terminal.exit()
         self.assertTrue(summary_requests)
-        requests = self.plan(provider, [("work_context", {"action": "leave"})])
-        result = self.execute("Continue the existing visit and return", session=session)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("ARCHITECT-GUIDANCE", self.guidance(requests[0]))
-        self.assertIn("PARENT-GUIDANCE", self.guidance(requests[0]))
-        self.assertIn("Design beneath", self.guidance(requests[0]))
-        self.assertNotIn("ARCHITECT-GUIDANCE", self.guidance(requests[1]))
-        self.assertIn("PARENT-GUIDANCE", self.guidance(requests[1]))
-        events = self.runtime_events()
-        self.assertTrue(any(event["type"] == "compaction_completed" for event in events))
-        self.assertFalse(any(event["type"] == "goal_started" for event in events))
 
     def test_running_command_keeps_spawn_cwd_across_role_switch(self):
         import re

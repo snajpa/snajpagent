@@ -193,6 +193,14 @@ class CwdRecoveryTests(unittest.TestCase):
             self.assertEqual(str(home_instruction) in context, read_agents)
             self.assertNotIn(str(old / "AGENTS.md"), context)
             self.assertIn("home relative file", json.dumps(requests[-1]["input"]))
+            notice = next((item for item in requests[0]["input"]
+                           if "Working-directory recovery (" in json.dumps(item)), None)
+            self.assertIsNotNone(notice)
+            self.assertEqual(notice["role"], "system")
+            self.assertIn(str(old), json.dumps(notice))
+            self.assertIn(str(home), json.dumps(notice))
+            self.assertIn("became unavailable", json.dumps(notice))
+            self.assertIn("execution directories are unchanged", json.dumps(notice))
             changes = [e for e in read_events(journal) if e["type"] == "work_context_changed"]
             self.assertEqual(changes[-1]["data"]["old_cwd"], str(old))
             self.assertEqual(changes[-1]["data"]["new_cwd"], str(home))
@@ -207,6 +215,9 @@ class CwdRecoveryTests(unittest.TestCase):
             self.assertNotIn("Changed to home:", third.stderr)
             context = json.dumps(requests[0]["input"])
             self.assertIn(f"cwd={home};", context)
+            self.assertIn("Working-directory recovery (", context)
+            self.assertIn(str(old), context)
+            self.assertNotIn("Working-directory recovery (", json.dumps(requests[-1]["input"]))
             self.assertNotIn(str(old / "AGENTS.md"), context)
             self.assertEqual(str(target / "AGENTS.md") in json.dumps(requests[-1]["input"]),
                              read_agents)
