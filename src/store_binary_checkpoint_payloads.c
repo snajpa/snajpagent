@@ -146,6 +146,7 @@ snag_binary_checkpoint_payloads_free(struct snag_binary_checkpoint_payloads_stat
     json_decref(value->resume_options);
     json_decref(value->skills);
     json_decref(value->work_context);
+    json_decref(value->cwd_recovery);
     json_decref(value->pinned_commands);
     memset(value, 0, sizeof(*value));
 }
@@ -475,6 +476,7 @@ snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *th
         json_decref(data);
         if (applied < 0) goto done;
         value.work_context = json_incref(staged->work_context);
+        value.cwd_recovery = json_incref(staged->cwd_recovery);
         if (state->active_turn && view->work_context > view->turn) {
             json_decref(value.instructions);
             value.instructions = json_incref(staged->active_instructions);

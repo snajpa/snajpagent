@@ -268,6 +268,7 @@ free_session_state(struct snag_session *session)
     json_decref(session->pinned_commands);
     json_decref(session->pinned_status);
     json_decref(session->work_context);
+    json_decref(session->cwd_recovery);
     json_decref(session->goals);
     json_decref(session->timers);
     json_decref(session->active_skills);
@@ -1566,7 +1567,11 @@ apply_event_one(struct snag_session *session, const char *type, const json_t *da
         json_t *visit = json_object_get(data, "work_context");
         json_t *active = json_object_get(data, "active");
         json_t *instructions = json_object_get(data, "instructions");
-        if (!snag_json_exact_keys(data, "old_cwd new_cwd work_context active instructions") ||
+        const char *reason = snag_json_string(data, "recovery_reason");
+        if (!snag_json_arg_keys(data, "old_cwd new_cwd work_context active instructions",
+                "recovery_reason", error, error_size) ||
+            (json_object_get(data, "recovery_reason") &&
+                (!snag_text_valid(reason, 1u, SNAG_MAX_EVENT_LINE) || !json_is_null(visit))) ||
             !before || !session->cwd || strcmp(before, session->cwd) ||
             !snag_text_valid(after, 1u, SNAG_PATH_MAX_BYTES) || !snag_path_root_len(after) ||
             !visit || !snag_work_context_valid(visit) || !snag_skill_bindings_valid(active) ||
@@ -1577,6 +1582,8 @@ apply_event_one(struct snag_session *session, const char *type, const json_t *da
             return -1;
         json_decref(session->work_context);
         session->work_context = json_incref(visit);
+        json_decref(session->cwd_recovery);
+        session->cwd_recovery = reason ? json_incref((json_t *)data) : NULL;
         json_decref(session->active_skills);
         session->active_skills = json_incref(active);
         if (session->active_turn) {
@@ -1591,6 +1598,8 @@ apply_event_one(struct snag_session *session, const char *type, const json_t *da
             !snag_path_root_len(new_cwd) || !snag_text_valid(new_cwd, 0u, SNAG_PATH_MAX_BYTES) ||
             replace_text(session, &session->cwd, "cwd", new_cwd, SNAG_PATH_MAX_BYTES) < 0)
             goto invalid;
+        json_decref(session->cwd_recovery);
+        session->cwd_recovery = NULL;
     } else if (snag_string_in(type, "session_archived session_unarchived")) {
         const char *origin = snag_json_string(data, "origin");
         /* Old journals retain these inert markers; new writers cannot create them. */
@@ -4780,6 +4789,7 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->pinned_commands = json_incref(source->pinned_commands);
     staged->pinned_status = json_incref(source->pinned_status);
     staged->work_context = json_incref(source->work_context);
+    staged->cwd_recovery = json_incref(source->cwd_recovery);
     staged->goals = json_incref(source->goals);
     staged->timers = json_incref(source->timers);
     staged->active_skills = json_deep_copy(source->active_skills);

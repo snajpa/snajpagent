@@ -185,8 +185,11 @@ model-switched paths share this order:
    The existing working-context event durably records the change, clears the
    temporary visit and its skill bindings, and refreshes instructions from home.
    Global and explicit instruction pointers, goals and running command directories
-   remain intact. Subsequent requests and resumes use home without probing the
-   abandoned path. Explicit documentation roots and instruction files still
+   remain intact. The same event retains the failure reason for a current host
+   notice naming the old/new cwd and preserved state. Existing working-context
+   checkpoint custody restores that notice across resume and compaction; explicit
+   navigation clears it. Subsequent requests and resumes use home without probing
+   the abandoned path. Explicit documentation roots and instruction files still
    require successful discovery.
 3. Measure or classify the outgoing request under that exact binding. Freeze its
    hashes, capacity provenance and current host snapshot for the response attempt.

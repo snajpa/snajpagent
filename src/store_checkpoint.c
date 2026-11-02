@@ -388,6 +388,7 @@ encode_state(const struct snag_session *s)
     if (s->active_skills) JSON_FIELD(active_skills);
     if (s->pinned_commands) JSON_FIELD(pinned_commands);
     if (s->work_context) JSON_FIELD(work_context);
+    if (s->cwd_recovery) JSON_FIELD(cwd_recovery);
 #undef JSON_FIELD
 #define TEXT_FIELD(f) PUT("has_" #f, json_boolean(s->f != NULL))
     TEXT_FIELD(cwd); TEXT_FIELD(first_user); TEXT_FIELD(last_user);
@@ -534,6 +535,17 @@ decode_state(const json_t *data, struct snag_session *s)
     if (work_context) {
         if (!snag_work_context_valid(work_context)) return -1;
         s->work_context = json_incref(work_context);
+    }
+    json_t *recovery = json_object_get(data, "cwd_recovery");
+    if (recovery) {
+        const char *before = snag_json_string(recovery, "old_cwd");
+        const char *after = snag_json_string(recovery, "new_cwd");
+        const char *reason = snag_json_string(recovery, "recovery_reason");
+        if (!snag_text_valid(before, 1u, SNAG_PATH_MAX_BYTES) ||
+            !snag_text_valid(reason, 1u, SNAG_MAX_EVENT_LINE) ||
+            !after || !s->cwd || strcmp(after, s->cwd) ||
+            !json_is_null(json_object_get(recovery, "work_context"))) return -1;
+        s->cwd_recovery = json_incref(recovery);
     }
     json_t *pins = json_object_get(data, "pinned_commands");
     if (pins) {

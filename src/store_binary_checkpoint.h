@@ -341,7 +341,7 @@ struct snag_binary_checkpoint_payloads {
 
 struct snag_binary_checkpoint_payloads_state {
     json_t *instructions, *compact_output, *response_public, *downloads;
-    json_t *resume_options, *skills, *work_context, *pinned_commands;
+    json_t *resume_options, *skills, *work_context, *cwd_recovery, *pinned_commands;
     size_t response_public_bytes;
 };
 

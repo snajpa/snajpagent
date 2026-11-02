@@ -1639,6 +1639,19 @@ append_skills(struct context_builder *builder)
     const struct snag_session *session = builder->session;
     struct snag_buf text = {.max = SNAG_MAX_EVENT_LINE};
     int rc = 0;
+    if (session->cwd_recovery) {
+        rc = append_messagef(builder, "system", SNAG_MAX_EVENT_LINE,
+            "Working-directory recovery (current host state, not a new request): "
+            "the previous working directory %s became unavailable (%s). "
+            "The host automatically changed the saved working directory to %s. "
+            "Relative tools now use this directory. Home guidance has been refreshed; "
+            "any temporary work-context visit has ended. Goals and running command "
+            "execution directories are unchanged. Do not automatically retry the abandoned "
+            "path; use cd with an existing directory when another workspace is needed.",
+            snag_json_string(session->cwd_recovery, "old_cwd"),
+            snag_json_string(session->cwd_recovery, "recovery_reason"), session->cwd);
+        if (rc < 0) return rc;
+    }
     if (session->work_context) {
         if (json_is_null(session->work_context)) {
             rc = append_message(builder, "system", "No temporary work_context is active. "

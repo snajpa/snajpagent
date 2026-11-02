@@ -90,8 +90,9 @@ snag_app_recover_cwd(struct app_state *app, char *error, size_t size)
         "Working directory unavailable: %s (%s). Changed to home: %s.",
         app->session.cwd, strerror(unavailable), resolved) < 0 ||
         snag_buf_terminate(&notice) < 0) goto done;
-    json_t *event = json_pack("{s:s,s:s,s:n,s:O,s:O}", "old_cwd", app->session.cwd,
-        "new_cwd", resolved, "work_context", "active", active, "instructions", paths);
+    json_t *event = json_pack("{s:s,s:s,s:n,s:O,s:O,s:s}", "old_cwd", app->session.cwd,
+        "new_cwd", resolved, "work_context", "active", active, "instructions", paths,
+        "recovery_reason", strerror(unavailable));
     if (snag_app_commit_event(app, "work_context_changed", event, error, size) < 0) goto done;
     snag_instructions_free(&app->turn_instructions);
     app->turn_instructions = instructions;

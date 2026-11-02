@@ -226,6 +226,7 @@ struct snag_session {
     json_t *pinned_status; /* Derived request snapshot, never checkpointed. */
     json_t *skills_catalog; /* Derived owner catalog; not checkpointed. */
     json_t *work_context; /* Current temporary visit, or NULL; journal-owned and immutable. */
+    json_t *cwd_recovery; /* Automatic switch receipt, retained until explicit navigation. */
     /* Scalar goal fields retain the legacy last-event view. */
     json_t *goals; /* Immutable ID-keyed goal states. */
     json_t *timers; /* Immutable ID-keyed armed timers. */

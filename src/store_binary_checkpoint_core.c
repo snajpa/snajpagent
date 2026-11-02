@@ -773,6 +773,12 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     payload_state.pinned_commands = NULL;
     state->work_context = payload_state.work_context;
     payload_state.work_context = NULL;
+    if (sources.texts.slots[SNAG_BINARY_TEXT_CWD].declaration == payloads.work_context) {
+        state->cwd_recovery = payload_state.cwd_recovery;
+    } else {
+        json_decref(payload_state.cwd_recovery);
+    }
+    payload_state.cwd_recovery = NULL;
     state->active_skills = payload_state.skills;
     payload_state.skills = NULL;
     state->active_instructions = payload_state.instructions;

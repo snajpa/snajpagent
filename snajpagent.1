@@ -329,6 +329,9 @@ made inaccessible, disconnected from its filesystem or redirected through a
 symbolic-link loop,
 the session automatically changes to the home directory before preparing
 the next model request. The change is reported locally and saved for resume.
+The model receives a host notice naming the old and new directories, the failure
+reason and the preserved state. That notice survives resume and compaction until
+explicit navigation selects a working directory.
 POSIX directory checks allow one second for a stalled filesystem before falling
 back. Later requests use the home directory without retrying the abandoned path.
 Global and explicit documentation roots remain active; home-directory guidance

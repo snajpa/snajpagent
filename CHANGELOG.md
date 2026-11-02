@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Tell the model when the host automatically falls back to the home directory.
+  The notice explains the unavailable path, replacement directory and preserved
+  state, survives resume and compaction, and clears after explicit navigation.
+
 - Automatically move an unavailable saved working directory home and save the
   change for resume. Bound POSIX directory checks to one second so a stalled
   filesystem is abandoned once instead of delaying every model request.
