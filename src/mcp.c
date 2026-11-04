@@ -21,16 +21,9 @@ snag_mcp_open(int root_fd, struct snag_config *config)
     if (!config->mcp_credentials) config->mcp_credentials = json_array();
     client->secrets = json_incref(config->mcp_credentials);
     if (!client->secrets) goto fail;
-    client->pending = json_object();
-    client->approved = json_object();
-    client->inspected = json_object();
-    client->uncertain = json_object();
     size_t count = json_object_size(config->mcp_servers);
     if (count) client->servers = calloc(count, sizeof(*client->servers));
-    if (!client->pending || !client->approved || !client->inspected || !client->uncertain ||
-        (count && !client->servers)) {
-        goto fail;
-    }
+    if (count && !client->servers) goto fail;
     const char *name;
     json_t *value;
     json_object_foreach(config->mcp_servers, name, value) {
@@ -112,10 +105,6 @@ snag_mcp_close(struct snag_mcp *client)
     free(client->servers);
     json_decref(client->tools);
     json_decref(client->routes);
-    json_decref(client->pending);
-    json_decref(client->approved);
-    json_decref(client->inspected);
-    json_decref(client->uncertain);
     json_decref(client->secrets);
     snag_mcp_close(client->replacement);
     free(client);
@@ -300,26 +289,6 @@ call_remote(struct snag_mcp *client, const struct snag_response_item *call,
         json_decref(request);
         return -1;
     }
-    bool admitted = (json_is_true(json_object_get(route, "allowed")) &&
-        !json_object_get(client->uncertain, digest)) ||
-        json_is_true(json_object_get(client->approved, digest));
-    if (!admitted) {
-        if (json_object_set(client->pending, digest, request) < 0) {
-            json_decref(request);
-            return -1;
-        }
-        char message[256];
-        (void)snprintf(message, sizeof(message),
-            "MCP call requires exact operator approval. Inspect /mcp pending %s; "
-            "use /mcp approve %s, then repeat these exact arguments.", digest, digest);
-        *result = snag_tool_result("not_run", "mcp_approval_required", message, -1, 0u);
-        json_decref(request);
-        return *result ? 0 : -1;
-    }
-    (void)json_object_del(client->approved, digest);
-    (void)json_object_del(client->inspected, digest);
-    (void)json_object_del(client->uncertain, digest);
-    (void)json_object_del(client->pending, digest);
     json_decref(request);
     struct curl_slist *headers = NULL;
     if (snag_mcp_parameter_headers(json_object_get(tool, "inputSchema"), call->arguments,
@@ -346,19 +315,12 @@ call_remote(struct snag_mcp *client, const struct snag_response_item *call,
     json_decref(params);
     curl_slist_free_all(headers);
     if (rc || !response) {
-        if (sent && !json_is_true(json_object_get(route, "read_only")) &&
-            json_object_set_new(client->uncertain, digest, json_true()) < 0) {
-            json_decref(response);
-            return -1;
-        }
         *result = sent ? snag_tool_result("outcome_unknown", "mcp_outcome_unknown",
             server->error, -1, 0u)
             : snag_tool_result("not_run", "mcp_transport", server->error, -1, 0u);
     } else {
         bool incomplete = !strcmp(snag_mcp_string(response, "resultType"), "input_required");
         bool failed = incomplete || json_is_true(json_object_get(response, "isError"));
-        if (incomplete && !json_is_true(json_object_get(route, "read_only")))
-            (void)json_object_set_new(client->uncertain, digest, json_true());
         json_t *clean = redacted(server, response);
         json_t *receipt = clean ? json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s,s:O}",
             "server", server->name, "tool", name, "action_sha256", digest,
@@ -379,8 +341,6 @@ call_remote(struct snag_mcp *client, const struct snag_response_item *call,
             *result = snag_tool_result(failed ? "failed" : "succeeded", NULL, text, 0,
                 snag_monotonic_ms() - started);
         } else {
-            if (!json_is_true(json_object_get(route, "read_only")))
-                (void)json_object_set_new(client->uncertain, digest, json_true());
             *result = snag_tool_result("outcome_unknown", "mcp_outcome_unknown",
                 "MCP result could not be retained; inspect remote state before repeating", -1, 0u);
         }
@@ -438,47 +398,9 @@ snag_mcp_command(struct snag_mcp *client, const char *command, struct snag_buf *
         }
         return client->count ? 0 : snag_buf_printf(report, "No MCP servers configured.\n");
     }
-    if (!strcmp(verb, "pending")) {
-        json_t *pending = *argument ? json_object_get(client->pending, argument) : client->pending;
-        if (!pending) return snag_buf_printf(report, "No pending call with that digest.\n");
-        if (!*argument) {
-            if (!json_object_size(pending))
-                return snag_buf_printf(report, "No pending MCP calls.\n");
-            const char *digest;
-            json_t *entry;
-            json_object_foreach(pending, digest, entry) {
-                if (snag_buf_printf(report, "%s: %s / %s\n", digest,
-                    snag_mcp_string(entry, "server"),
-                    snag_mcp_string(json_object_get(entry, "tool"), "name")) < 0) return -1;
-            }
-            return 0;
-        }
-        int rc = snag_buf_printf(report, "Pending MCP call: %s\nServer: %s\nEndpoint: %s\n"
-            "Tool declaration: ", argument, snag_mcp_string(pending, "server"),
-            snag_mcp_string(pending, "endpoint"));
-        if (rc == 0) rc = snag_json_inspect(json_object_get(pending, "tool"), report);
-        if (rc == 0) rc = snag_buf_printf(report, "Arguments: ");
-        if (rc == 0) rc = snag_json_inspect(json_object_get(pending, "arguments"), report);
-        if (rc == 0) rc = json_object_set_new(client->inspected, argument, json_true());
-        return rc;
-    }
-    if (!strcmp(verb, "approve") || !strcmp(verb, "deny")) {
-        json_t *pending = json_object_get(client->pending, argument);
-        if (!pending) return snag_buf_printf(report, "No pending call with that digest.\n");
-        if (!strcmp(verb, "approve")) {
-            if (!json_is_true(json_object_get(client->inspected, argument))) {
-                return snag_buf_printf(report,
-                    "Inspect /mcp pending %s before approving.\n", argument);
-            }
-            if (json_object_set_new(client->approved, argument, json_true()) < 0) return -1;
-            return snag_buf_printf(report,
-                "Approved exactly one matching MCP call: %s\n", argument);
-        }
-        (void)json_object_del(client->approved, argument);
-        (void)json_object_del(client->inspected, argument);
-        (void)json_object_del(client->pending, argument);
-        return snag_buf_printf(report, "Denied MCP call: %s\n", argument);
-    }
+    if (!snag_string_in(verb, "status tools reload login logout"))
+        return snag_buf_printf(report,
+            "usage: /mcp list|status|tools|reload|login|logout [SERVER]\n");
     struct snag_mcp_server *s = server_named(client, argument);
     if (!s) return snag_buf_printf(report, "Unknown MCP server. Use /mcp list.\n");
     if (!strcmp(verb, "reload")) {
@@ -539,8 +461,7 @@ snag_mcp_command(struct snag_mcp *client, const char *command, struct snag_buf *
             json_object_size(s->filtered), s->watch ? "listening" : "refresh at turn boundary",
             (unsigned long long)s->contact_ms, *s->error ? s->error : "none");
     }
-    return snag_buf_printf(report, "usage: /mcp list|status|tools|reload|login|logout SERVER; "
-        "pending [DIGEST]; approve|deny DIGEST\n");
+    return snag_errno(EINVAL);
 }
 
 json_t *
@@ -573,5 +494,5 @@ snag_mcp_requirement(const struct snag_mcp *client, const json_t *requirement)
     }
     return json_pack("{s:O,s:s,s:s,s:I,s:s}", "requirement", requirement,
         "state", state, "binding", binding, "generation", (json_int_t)generation,
-        "action", "Use normal MCP status/configuration/authentication and exact tool approval");
+        "action", "Use normal MCP status/configuration/authentication");
 }

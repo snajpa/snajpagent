@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Remove the MCP per-call approval queue and its pending/approve/deny commands.
+  Enabled, non-denied tools dispatch directly; read-only filtering and uncertain
+  outcome reporting remain. Existing allow_tools settings still load.
+
+- Keep interactive owners open after command, input-admission and turn failures.
+  Hold automatic work for explicit recovery. Give timer admission its own receipt
+  time so an earlier idle command cannot trigger a native reducer rejection.
+
 - Tell the model when the host automatically falls back to the home directory.
   The notice explains the unavailable path, replacement directory and preserved
   state, survives resume and compaction, and clears after explicit navigation.
@@ -165,8 +173,7 @@
   defaults in the selected config, with explicit CLI options taking precedence.
 
 - Display concise human-readable skill command reports by default; preserve
-  explicit CLI `--json` and model tool results. Summarize MCP tools and pending
-  calls while keeping exact approval arguments inspectable.
+  explicit CLI `--json` and model tool results. Summarize MCP tool catalogs.
 
 - Add `skills` tool action `deactivate` alongside `activate` so the model can load
   and unload task guidance.
@@ -541,9 +548,6 @@
 - Preserve complete workspace prompts and history-search labels through typing
   and mouse cursor placement, including long session names and search queries.
 
-- Keep the complete inspection, approval and retry instructions in pending MCP
-  tool results, including both exact request identifiers.
-
 - Chain slash commands and workspace Ex commands with semicolons, quoted or
   escaped literals, ordered dispatch, error/exit boundaries and completion after
   separators. Keep one entered line and semantic receipt; preserve separate file reports.
@@ -565,7 +569,7 @@
 - Add native MCP tools over current and initialized Streamable HTTP, with
   registered-client OAuth/PKCE, private credentials, catalog notifications and
   immutable tool contracts across turn resume. Inspect servers with `/mcp` and
-  admit consequential calls through exact, single-use approvals or local policy.
+  filter tools through local deny and read-only policies.
   Preserve structured receipts and large results; report uncertain effects
   without automatic mutation retries.
 

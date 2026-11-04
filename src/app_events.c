@@ -61,7 +61,7 @@ admit_irc_input(struct app_state *app, struct snag_buf *refs, size_t used, const
 {
     if (!intent) {
         snag_errorf(error, error_size, "cannot construct network input intent");
-        app->input_closed = true;
+        snag_app_hold_work(app);
         return -1;
     }
     struct irc_input_ref *items = (struct irc_input_ref *)refs->data;
@@ -90,7 +90,7 @@ admit_irc_input(struct app_state *app, struct snag_buf *refs, size_t used, const
     json_decref(sequences);
     json_decref(intent);
     if (rc < 0) {
-        app->input_closed = true;
+        snag_app_hold_work(app);
         return -1;
     }
     if (refs->len) {
@@ -639,7 +639,7 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     if (!app || !snag_app_model_enabled(app)) return NULL;
     if (app) {
         int sleeping = snag_app_irc_sleeping(app, NULL, 0);
-        if (sleeping < 0) app->input_closed = true;
+        if (sleeping < 0) snag_app_hold_work(app);
         if (sleeping) return NULL;
     }
     if (local_operator) *local_operator = false;
@@ -684,7 +684,7 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     if (source == &app->irc_urgent) {
         if (admit_replies(app, used) < 0) {
             free(copy);
-            app->input_closed = true;
+            snag_app_hold_work(app);
             return NULL;
         }
         if (local_operator) *local_operator = snag_app_irc_replies_pending(app);

@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 /* One replaceable file per session pins the remote contract through a crash.
- * Credentials and approvals are never included. The session owns its writer lock. */
+ * Credentials are never included. The session owns its writer lock. */
 int
 snag_mcp_snapshot(struct snag_mcp *client, int dir, const char *turn, bool write_snapshot)
 {

@@ -24,10 +24,10 @@ the dirty flag; the next turn refreshes the immutable contract. Lost streams
 schedule refresh instead of creating a retry loop. Shutdown closes all owned
 streams before bounded legacy-session deletion.
 
-Local configuration owns admission. A remote readOnlyHint is descriptive only.
-An unlisted call returns an inspectable pending request; an operator approval
-binds the configured endpoint, catalog declaration and canonical arguments.
-Approval is single use. No network failure retries tools/call automatically.
+Enabled servers expose supported, non-denied tools for direct dispatch. Local
+read_only_tools selects the tools available in read-only turns; a remote
+readOnlyHint is descriptive only. The legacy allow_tools key still parses and has
+no admission effect. No network failure retries tools/call automatically.
 Transport loss after dispatch reports outcome unknown; a successful MCP result
 reports server acceptance and preserves the server's data without inferring that
 an external object was delivered or read back.

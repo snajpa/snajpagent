@@ -33,7 +33,7 @@ struct snag_mcp {
     struct snag_mcp_server *servers;
     size_t count;
     char turn_id[SNAG_ID_HEX_LEN + 1u];
-    json_t *tools, *routes, *pending, *approved, *inspected, *uncertain, *secrets;
+    json_t *tools, *routes, *secrets;
     bool busy;
 };
 struct snag_mcp_http {

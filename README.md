@@ -302,8 +302,9 @@ Configure Streamable HTTP tools with `[mcp NAME]`, an endpoint and registered OA
 client. Run `snajpagent mcp login NAME` and open the consent URL.
 `/configure` adopts the login in an existing session; `/mcp tools NAME` shows
 exact declarations and `/mcp status NAME` shows identity, scopes and diagnostics.
-Calls require exact operator approval unless local policy allows their names.
-See the manual's **Native MCP** section for setup, approval and recovery, or
+Enabled servers expose supported tools for direct execution. Use `deny_tools`
+to withhold tools and `read_only_tools` to select the tools available in `/ro`.
+See the manual's **Native MCP** section for setup, execution and recovery, or
 [the configuration example](examples/mcp.ini).
 
 ### Restrict what the model may do

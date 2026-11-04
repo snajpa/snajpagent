@@ -172,6 +172,7 @@ struct app_state {
     enum snag_history_orientation history_orientation;
     bool history_recovery_rebase;
     bool recovery_wait;
+    bool automatic_work_held;
     bool provider_active;
     bool provider_request_ready;
     bool turn_prompt_seen; /* This turn has displayed an active composer. */
@@ -326,6 +327,7 @@ enum {
     SNAG_APP_COMPACT_DEFERRED = 8
 };
 
+void snag_app_hold_work(struct app_state *);
 int snag_app_input_command(struct app_state *, const char *, bool, bool *, bool *);
 /* Fresh local consent for a rule-requested action. 0 confirmed, 1 not
  * confirmed (or not presentable), -1 on error. */

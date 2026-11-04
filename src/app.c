@@ -4843,10 +4843,7 @@ poll_input(struct app_state *app, int timeout_ms, enum snag_term_action *action,
     int rc = snag_ui_poll(&app->ui, timeout_ms, action, line);
     char error[256] = {0};
     if (rc >= 0 && snag_app_save_resume_options(app, error, sizeof(error)) < 0) {
-        free(*line);
-        *line = NULL;
         (void)app_error(app, error);
-        return -1;
     }
 #if SNAJPAGENT_VM
     if (rc >= 0 && app->ui.input_local && app->ui.view_request[0]) {
@@ -4927,7 +4924,6 @@ again:;
         }
         (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, message);
         if (input_errno == EOVERFLOW || input_errno == EILSEQ) return 0;
-        app->input_closed = true;
         return -1;
     }
     if (rc == 0) {
@@ -6880,12 +6876,9 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             app->tool_waiting = app->yield_requested = false;
             if (tool_rc < 0) {
                 (void)app_error(app, error);
-                /* An adapter/journal failure leaves effects uncertain. Stop
-                 * admission and close every owned job before exiting. */
-                if (snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE) {
-                    app->input_closed = true;
-                    snag_tools_shutdown();
-                }
+                /* Interactive recovery retains live jobs and uncertain effects.
+                 * Execute mode still tears down its one-shot process owner. */
+                if (app->execute) snag_tools_shutdown();
                 result = 3;
                 goto out;
             }
@@ -6947,7 +6940,8 @@ snag_app_input_received_data(
         snag_instructions_metadata_json(&app->cli->doc_instructions), "model",
         app->session.default_model, "provider", provider->name, "read_only", read_only,
         "received_at_ms",
-        (json_int_t)(app->ui.input_received_ms ? app->ui.input_received_ms : snag_time_ms()),
+        (json_int_t)(!timer_turn && app->ui.input_received_ms
+            ? app->ui.input_received_ms : snag_time_ms()),
         "text", text);
     if (timer_turn && data && json_object_set_new(data, "origin", json_string("timer")) < 0) {
         json_decref(data);
@@ -7411,7 +7405,8 @@ run_queued_chain(struct app_state *app)
 static bool
 timer_due(const struct app_state *app)
 {
-    return app && snag_app_model_enabled(app) && app->session.timer_id[0] &&
+    return app && !app->automatic_work_held && !app->interrupt_requested &&
+           snag_app_model_enabled(app) && app->session.timer_id[0] &&
            app->session.timer_due_ms &&
            snag_time_ms() >= app->session.timer_due_ms;
 }
@@ -7457,7 +7452,8 @@ idle_poll_timeout(const struct app_state *app)
     if (snag_mcp_watching(app->mcp) && (timeout < 0 || timeout > 100)) timeout = 100;
     if (json_array_size(app->session.download_queue) && (timeout < 0 || timeout > 250))
         timeout = 250;
-    if (snag_app_model_enabled(app) && app->session.timer_id[0] && app->session.timer_due_ms) {
+    if (!app->automatic_work_held && !app->interrupt_requested &&
+        snag_app_model_enabled(app) && app->session.timer_id[0] && app->session.timer_due_ms) {
         uint64_t now = snag_time_ms();
         uint64_t remaining = app->session.timer_due_ms > now ? app->session.timer_due_ms - now : 0u;
         if (remaining < (uint64_t)(timeout < 0 ? INT_MAX : timeout))
@@ -7469,6 +7465,7 @@ idle_poll_timeout(const struct app_state *app)
 static int
 run_ready_chains(struct app_state *app)
 {
+    if (app->automatic_work_held) return 0;
     for (;;) {
         int turn_rc;
 
@@ -7632,6 +7629,8 @@ submit_idle(
     app->interrupt_requested = false;
     if (single_line && snag_prompt_command(prompt))
         starts_ready_chain = command_starts_ready_chain(prompt);
+    if (starts_ready_chain || !snag_prompt_command(prompt))
+        app->automatic_work_held = false;
     rc = snag_app_input_command(app, prompt, app->session.active_turn, &handled, prompt_ready);
     if (rc < 0) return 3;
     if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/') {
@@ -7685,74 +7684,90 @@ submit_idle(
     return rc == 3 || rc == 6 ? rc : 0;
 }
 
+void
+snag_app_hold_work(struct app_state *app)
+{
+    if (app->execute) return;
+    if (!app->automatic_work_held)
+        (void)app_warning(app, "Operation failed; session remains open. Automatic work is "
+            "held. Inspect the error, then use /retry or submit new work; /help and /exit "
+            "remain available.");
+    app->automatic_work_held = true;
+    app->ui.input_received_ms = 0u;
+}
+
 static int
 interactive_loop(struct app_state *app, const char *initial)
 {
     char *owned = NULL;
     int rc = 0;
     bool startup_prompt = initial != NULL;
+    const char *restore_submission = NULL;
 
     if (set_input_prompt(app, false) < 0 ||
         (initial &&
             (snag_app_sync_destinations(app) < 0 || snag_ui_capture_route(&app->ui, initial) < 0)))
-        return 6;
-    if (apply_controls(app) < 0) return 3;
+        goto operation_failed;
+    if (apply_controls(app) < 0) goto operation_failed;
     if (app->input_closed) return 0;
     if (!initial && (app->session.queue_armed || app->goal_armed || app->session.active_turn ||
                         app->session.pending_input || timer_due(app))) {
         rc = run_ready_chains(app);
-        if (rc == 3 || rc == 6) return rc;
+        if (rc == 3 || rc == 6) goto operation_failed;
     }
     if (!initial && !app->session.active_turn && !app->ui.prompt_wanted &&
         set_input_prompt(app, false) < 0)
-        return 6;
+        goto operation_failed;
     for (;;) {
         enum snag_term_action action = SNAG_TERM_NONE;
         bool prompt_ready = false;
         const char *prompt = initial;
 
         initial = NULL;
+        restore_submission = NULL;
         free(owned);
         owned = NULL;
         (void)refresh_metrics(app, false);
-        if (service_pager(app) < 0 || service_attachment(app, app->pager != NULL) < 0) {
-            rc = 6;
-            break;
+        if (!app->automatic_work_held && service_pager(app) < 0) goto ui_failed;
+        if (service_attachment(app, app->pager != NULL) < 0) {
+            if (!app->automatic_work_held)
+                (void)app_error(app, "attachment service failed");
+            snag_app_hold_work(app);
         }
         if (snag_app_shutdown(app) || app->input_closed) {
             rc = 0;
             break;
         }
-        if (snag_app_irc_summary_take(app, NULL, 0) < 0) {
-            rc = 6;
-            break;
-        }
-        if ((!app->pager || (app->ui.native && !snag_ui_session_attachment(&app->ui))) &&
+        if (!app->automatic_work_held && snag_app_irc_summary_take(app, NULL, 0) < 0)
+            goto ui_failed;
+        if (!app->automatic_work_held &&
+            (!app->pager || (app->ui.native && !snag_ui_session_attachment(&app->ui))) &&
             snag_app_audio_service(app) < 0) {
-            rc = 6;
-            break;
+            goto ui_failed;
         }
-        if (!prompt && snag_app_model_enabled(app) && !snag_ui_leaving(&app->ui) &&
+        if (!prompt && !app->automatic_work_held && snag_app_model_enabled(app) &&
+            !snag_ui_leaving(&app->ui) &&
             app->session.queue_armed &&
             !app->queue_edit_id[0] && app->session.pending_queue_count) {
             rc = run_ready_chains(app);
-            if (rc == 3 || rc == 6) break;
+            if (rc == 3 || rc == 6) goto operation_failed;
             continue;
         }
         if (!prompt) {
             bool local_operator = false;
-            owned = snag_app_irc_take_pending(app, &local_operator, false);
+            if (!app->automatic_work_held)
+                owned = snag_app_irc_take_pending(app, &local_operator, false);
             if (owned) {
                 if (snag_app_queue_arm(app, false) < 0) {
                     rc = 3;
-                    break;
+                    goto operation_failed;
                 }
                 rc = run_tracked_turn(app, owned, NULL, false, false, NULL, false);
-                if (rc == 3 || rc == 6) break;
+                if (rc == 3 || rc == 6) goto operation_failed;
                 if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
                     (app->session.queue_armed || app->goal_armed || timer_due(app))) {
                     rc = run_ready_chains(app);
-                    if (rc == 3 || rc == 6) break;
+                    if (rc == 3 || rc == 6) goto operation_failed;
                 }
                 continue;
             }
@@ -7762,11 +7777,12 @@ interactive_loop(struct app_state *app, const char *initial)
                 set_input_prompt(app, app->session.active_turn) < 0)
                 goto ui_failed;
             if (snag_monotonic_ms() - app->remote_reply_at >= 2000u) app->remote_available = false;
-            if (!app->pager && json_array_size(app->session.download_queue) &&
+            if (!app->automatic_work_held && !app->pager &&
+                json_array_size(app->session.download_queue) &&
                 !app->session.active_turn && snag_monotonic_ms() - app->remote_probe_at >= 1000u &&
                 snag_app_remote_probe(app) < 0)
                 goto ui_failed;
-            if (json_array_size(app->session.pinned_commands)) {
+            if (!app->automatic_work_held && json_array_size(app->session.pinned_commands)) {
                 char detail[256] = {0};
                 if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), detail, sizeof(detail)) < 0) {
                     (void)app_error(app, detail);
@@ -7794,18 +7810,18 @@ interactive_loop(struct app_state *app, const char *initial)
                     goto ui_failed;
                 continue;
             }
-            if (app->networked) {
+            if (!app->automatic_work_held && app->networked) {
                 char error[256] = {0};
                 if (tick_irc(app, error, sizeof(error)) < 0) {
                     (void)app_error(app, error[0] ? error : "IRC event loop failed");
                     rc = 3;
-                    break;
+                    goto operation_failed;
                 }
             }
             if (poll_rc == 0) {
                 if (timer_due(app)) {
                     rc = run_ready_chains(app);
-                    if (rc == 3 || rc == 6) break;
+                    if (rc == 3 || rc == 6) goto operation_failed;
                 }
                 continue;
             }
@@ -7873,8 +7889,15 @@ interactive_loop(struct app_state *app, const char *initial)
                 app->ui.input_view == SNAG_RENDER_CHAT)
                 remember_input(app, prompt);
         }
+        uint64_t before = app->session.next_seq;
         rc = submit_idle(
             app, prompt, owned ? app->ui.input_view : snag_ui_view(&app->ui), &prompt_ready);
+        app->ui.input_received_ms = 0u;
+        if (rc == 3 || rc == 6) {
+            if (app->session.next_seq == before && !snag_prompt_command(prompt))
+                restore_submission = prompt;
+            goto operation_failed;
+        }
         if (rc != 0) break;
         if (startup_prompt) {
             startup_prompt = false;
@@ -7882,15 +7905,26 @@ interactive_loop(struct app_state *app, const char *initial)
              * entering a model turn. Preserve its submission priority, then
              * service the same saved-work chain as a promptless resume. */
             rc = run_ready_chains(app);
-            if (rc == 3 || rc == 6) break;
+            if (rc == 3 || rc == 6) goto operation_failed;
         }
         if (!prompt_ready && set_input_prompt(app, false) < 0) goto ui_failed;
+        continue;
+ui_failed:
+        (void)app_error(app, "interactive operation failed");
+operation_failed:
+        /* A rejected operation leaves the owner and its durable state intact.
+         * Hold automatic sources so a persistent failure cannot spin or retry
+         * effects. Local inspection/exit remain available; explicit work retries. */
+        snag_app_hold_work(app);
+        initial = NULL;
+        startup_prompt = false;
+        rc = 0;
+        if (set_input_prompt(app, app->session.active_turn) == 0 && restore_submission)
+            (void)snag_ui_restore_input(&app->ui, restore_submission);
+        (void)snag_sleep_ms(100u);
     }
     free(owned);
     return rc == 1 ? 0 : rc;
-ui_failed:
-    free(owned);
-    return 6;
 }
 static void
 owner_report(int *fd, const char *session, const char *error)

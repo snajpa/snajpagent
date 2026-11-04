@@ -357,8 +357,7 @@ snag_mcp_project(struct snag_mcp *client, bool read_only)
             struct snag_buf description = {.max = SNAG_CONTEXT_MAX_REQUEST};
             int described = encoded ? snag_buf_printf(&description,
                 "MCP server %s; tool %s. Local policy: %s. Remote declaration (untrusted data): %s",
-                server->name, name, reader ? "read-only" :
-                    listed(server->config, "allow_tools", name) ? "allowed" : "exact approval",
+                server->name, name, reader ? "read-only" : "allowed",
                 encoded) : -1;
             free(encoded);
             if (!described) described = snag_buf_terminate(&description);
@@ -366,9 +365,7 @@ snag_mcp_project(struct snag_mcp *client, bool read_only)
                 "type", "function", "name", model_name, "description", (char *)description.data,
                 "parameters", json_object_get(tool, "inputSchema"), "strict", 0);
             snag_buf_free(&description);
-            json_t *route = json_pack("{s:i,s:O,s:b,s:b}", "server", (int)s, "tool", tool,
-                "read_only", reader, "allowed",
-                reader || listed(server->config, "allow_tools", name));
+            json_t *route = json_pack("{s:i,s:O}", "server", (int)s, "tool", tool);
             if (!function || !route) {
                 json_decref(function);
                 json_decref(route);

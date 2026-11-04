@@ -2123,6 +2123,16 @@ active transfer. A yielded /receive retains verified files in the unsent draft
 when its batch completes. File preparation precedes keyboard-tail replay.
 The workspace terminal command stays pending until the transfer ends; its saved
 report includes the final completion or cancellation receipt.
+.SS Interactive operation failures
+Interactive command, input-admission and turn failures report the error and keep
+the session owner open. Automatic model, queue, timer and background work waits
+for explicit input. Use /help and local inspection commands to investigate,
+then /retry or a new prompt to resume work. A failed durable write never claims
+admission or completion; fix the storage problem before retrying. Existing
+committed state and uncertain remote effects retain their original meaning.
+.PP
+Explicit /exit, terminal EOF and shutdown requests still end the owner.
+Execute mode continues to return a nonzero status on failure.
 .SS Cancellation and recovery
 Transfers take exclusive terminal input until completion, cancellation or error.
 Cancel the workstation selector or press Ctrl-C during the transfer. Ordinary
@@ -3453,21 +3463,6 @@ server advertises an endpoint. Report the two outcomes separately. The session
 stops admitting that server's calls. An active MCP request must finish or be
 cancelled first. Other owners keep their admitted settings until reload or refresh.
 .TP
-.BR /mcp " pending [DIGEST]"
-List concise pending-call summaries, or inspect the complete server/tool
-declaration and arguments as a readable value tree for a particular digest.
-Quoted strings preserve whitespace and escaped control characters.
-Inspect a particular digest before approval.
-.TP
-.BR /mcp " approve DIGEST"
-Admit one subsequent call matching the inspected server, tool declaration and
-arguments exactly. Any changed argument requires another inspection and approval.
-Approvals stay in this owner and expire when consumed or configuration is replaced.
-Voice-generated UI commands cannot approve MCP calls; type the approval directly.
-.TP
-.BR /mcp " deny DIGEST"
-Remove a pending request and its approval.
-.TP
 .B /configure
 Reload the saved configuration, provider credentials, MCP server settings and
 credentials, redaction secrets and local model cache for this session owner at a safe request boundary. Preserve the
@@ -4703,35 +4698,30 @@ owners sharing a credential. A changed login requires /configure; a refresh keep
 its original grant. Status distinguishes missing login, rejected grant, denied
 scope and transport/server failure. Logout removes local credentials and reports
 whether remote revocation was available and succeeded.
-.SS Tool contracts and approval
+.SS Tool contracts and execution
 Each remote tool receives a deterministic namespaced function name. Its exact
 inputSchema becomes the model function parameters; its description, annotations,
 outputSchema and other declaration metadata accompany it as untrusted data.
 The client checks schema structure for the default JSON Schema 2020-12 dialect
 and explicitly declared draft-07. It preserves local references and never fetches
 external schema references; unsupported declarations appear in the filtered list.
-Server annotations never grant local permission. Deny lists take precedence;
-read_only_tools admits the named tools in ordinary and /ro turns. allow_tools
-admits the named tools in ordinary turns. Other tools require exact approval.
-.PP
-The pending result supplies inspection and approval commands for one exact
-request. Inspect /mcp pending DIGEST, then approve or deny it. Approval permits
-one subsequent call with unchanged arguments; the model receives a not-run result
-until then. This is an MCP dispatch control. Local command tools still run with
-the account's filesystem and process permissions, so use account isolation where
-OS confinement is required.
+Enabled servers expose their supported tools for direct execution in ordinary
+turns. deny_tools withholds the named tools. Only tools named in read_only_tools
+are exposed in /ro turns; remote readOnlyHint annotations are descriptive.
+The legacy allow_tools setting is accepted for configuration compatibility and
+has no effect. Local command tools run with the account's filesystem and process
+permissions, so use account isolation where OS confinement is required.
 .PP
 A call is sent once. A disconnect or cancellation after dispatch reports an
-unknown outcome; inspect remote state before repeating a mutation. The owner
-requires fresh approval to repeat the same uncertain mutation even when its name
-is allowed in configuration. A received MCP result preserves text, structured
+unknown outcome; inspect remote state before explicitly repeating a mutation.
+The client never automatically retries tools/call. A received MCP result preserves text, structured
 content, resource links, annotations and metadata. The local receipt includes
 server, endpoint, tool, argument/declaration digest and receive time. Server
 acceptance does not establish external delivery; read back the object when the
 server offers a reader. Results larger than 2 MiB are retained intact in a private
 session mcp-results JSON file, referenced with byte count and SHA-256 in the result.
-The repeat-approval guard lasts for the owning process; uncertain effects still
-require inspection after a restart. Optional server requests for elicitation,
+Uncertain effects still require inspection after a restart.
+Optional server requests for elicitation,
 sampling or roots are not advertised. An input_required result is retained as
 incomplete and requires explicit operator action.
 .SS Catalog lifetime and recovery
@@ -4955,9 +4945,10 @@ Positive request/complete-catalog timeout in milliseconds; default 60000.
 OAuth consent has its separate ten-minute deadline.
 .TP
 .BR read_only_tools ", " allow_tools ", " deny_tools
-JSON arrays of exact remote tool names; default empty. Deny overrides both other
-lists. Locally classified read-only tools may run in /ro; server readOnlyHint
-alone supplies no authority. Unlisted tools require exact operator approval.
+JSON arrays of exact remote tool names; default empty. deny_tools withholds
+matching tools. read_only_tools selects the tools exposed in /ro; a server
+readOnlyHint alone supplies no read-only authority. allow_tools is accepted for
+legacy configuration compatibility and has no effect on ordinary dispatch.
 .SS agent
 .TP
 .B provider
