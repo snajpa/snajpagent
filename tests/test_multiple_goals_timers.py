@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -190,6 +191,65 @@ class MultipleControllersTests(unittest.TestCase):
         self.assertEqual([receipt['text'] for receipt in delivered], ['WAKE_FIRST', 'WAKE_SECOND'])
         self.assertTrue(all(receipt['next_due_ms'] == 0 for receipt in delivered))
         self.assertFalse(any(event['type'] == 'timer_cancelled' for event in events))
+        self.stop(child)
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX file-size limits')
+    def test_native_write_failure_keeps_interactive_owner_and_local_commands(self):
+        self.check_write_failure(False)
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX file-size limits')
+    def test_adapter_write_failure_keeps_interactive_owner_and_local_commands(self):
+        self.check_write_failure(True)
+
+    def check_write_failure(self, tool_result):
+        launcher = self.root / 'limited-owner.py'
+        launcher.write_text(
+            'import os, resource, signal, sys\n'
+            'signal.signal(signal.SIGXFSZ, signal.SIG_IGN)\n'
+            'resource.setrlimit(resource.RLIMIT_FSIZE, (49152, 49152))\n'
+            'os.execv(sys.argv[1], sys.argv[1:])\n')
+        self.steps = ([('exec_command', {'command': "printf '%30000s' x",
+                                       'max_output_bytes': 17000, 'yield_ms': 1000})] * 10
+                      if tool_result else [(None, 'LARGE_RESPONSE_' + 'x' * (128 * 1024))])
+        child = fixture.RemoteProcess(self.root,
+            [sys.executable, str(launcher), str(fixture.BINARY), '--dotdir', str(self.state),
+             '--no-listen', '--no-client'], wrapped=None, winsize=(30, 220))
+        self.children.append(child)
+        child.until(b'READY>', 10)
+        self.send(child, 'Exercise a real native retention failure.', 'session remains open')
+        self.assertIsNone(child.process.poll())
+        count = len(self.requests)
+        self.assertGreaterEqual(count, 1)
+        self.send(child, '/help', '/mcp')
+        self.assertIsNone(child.process.poll())
+        time.sleep(.2)
+        self.assertEqual(len(self.requests), count, 'failed work must not loop automatically')
+        _, events = self.events()
+        self.assertEqual(sum(e['type'] == 'input_received' for e in events), 1)
+        self.assertFalse(any(e['type'] == 'turn_completed' for e in events))
+        self.stop(child)
+
+    def test_idle_command_receipt_cannot_predate_timer_admission(self):
+        self.steps = [
+            ('timer', {'delay_ms': 1800, 'text': 'AFTER_IDLE_COMMAND', 'recurring': True}),
+            (None, 'COMMAND_TIMER_ARMED'),
+            ('timer', {'action': 'cancel'}),
+            (None, 'COMMAND_TIMER_DELIVERED'),
+        ]
+        child = self.start()
+        self.send(child, 'Schedule the fixture reminder.', 'COMMAND_TIMER_ARMED')
+        child.until(b'READY>', 10)
+        self.send(child, '/mcp list', 'No MCP servers configured.')
+        child.until(b'COMMAND_TIMER_DELIVERED', 10)
+        self.assertIsNone(child.process.poll())
+        _, events = self.events()
+        scheduled, = [e['data'] for e in events if e['type'] == 'timer_scheduled']
+        received, = [e['data'] for e in events if e['type'] == 'input_received'
+                      and e['data'].get('origin') == 'timer']
+        self.assertGreaterEqual(received['received_at_ms'], scheduled['due_ms'])
+        self.assertGreater(received['next_due_ms'], received['received_at_ms'])
+        self.assertEqual(received['timer_id'], scheduled['timer_id'])
+        self.send(child, '/help', '/mcp')
         self.stop(child)
 
     def test_recurring_timer_coalesces_missed_intervals_and_can_be_cancelled(self):

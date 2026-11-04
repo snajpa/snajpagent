@@ -413,16 +413,14 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(headers['Mcp-Param-Destination'], 'channel-42')
         self.assertIn('resource_link', json.dumps(requests[-1]))
 
-    def test_unapproved_call_has_no_external_effect(self):
-        result, _ = self.model_call(permitted=False)
-        self.assertEqual(result['status'], 'not_run')
-        self.assertEqual(result['reason'], 'mcp_approval_required')
-        hint = result['model_text']
-        self.assertTrue(hint.endswith('then repeat these exact arguments.'), hint)
-        pending = re.search(r'/mcp pending ([0-9a-f]{64})', hint)
-        self.assertIsNotNone(pending, hint)
-        self.assertIn('/mcp approve ' + pending.group(1), hint)
-        self.assertEqual(self.server.calls, [])
+    def test_unlisted_call_dispatches_without_approval(self):
+        result, requests = self.model_call(permitted=False)
+        self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(len(self.server.calls), 1)
+        tool = next(t for t in requests[0]['tools'] if t.get('name', '').startswith('mcp_'))
+        self.assertIn('Local policy: allowed.', tool['description'])
+        self.assertNotIn('approval', tool['description'])
+        self.assertNotIn('/mcp pending', result['model_text'])
 
     def test_uncertain_mutation_is_never_retried(self):
         result, _ = self.model_call(disconnect=True)
@@ -586,7 +584,7 @@ class MCPTests(unittest.TestCase):
                 return results[-1] if tools else finished[-1]
         self.fail(bytes(term.output[-5000:]))
 
-    def test_exact_approval_changed_arguments_and_single_use_in_terminal(self):
+    def test_unlisted_calls_repeat_with_changed_and_identical_arguments_in_terminal(self):
         count = 0
         arguments = {'destination': 'channel-42', 'message': 'first\n  body', 'mode': 'draft'}
 
@@ -595,45 +593,66 @@ class MCPTests(unittest.TestCase):
             count += 1
             if count % 2:
                 tool = next(t for t in request['tools'] if t.get('name', '').startswith('mcp_'))
-                body = self.provider.function_body(sequence, f'approval-{count}', tool['name'], arguments)
+                body = self.provider.function_body(sequence, f'direct-{count}', tool['name'], arguments)
             else:
-                body = self.provider.response_body(sequence, 'approval cycle finished')
+                body = self.provider.response_body(sequence, 'direct cycle finished')
             self.provider.reply(handler, body.encode(), close_header=True)
 
         self.provider.runtime_handler = respond
         term = self.interactive()
-        term.write(b'propose\r')
-        result = self.wait_result(term, 1)
-        digest = re.search(r'/mcp pending ([0-9a-f]{64})', result['model_text']).group(1)
-        term.output.clear()
-        term.write(f'/mcp approve {digest}\r'.encode())
-        term.until(b'Inspect /mcp pending')
-        self.assertEqual(self.server.calls, [])
-        term.output.clear()
-        term.write(f'/mcp pending {digest}\r'.encode())
-        term.until(b'channel-42')
-        term.until(b'first\\u000a  body')
-        self.assertIn(b'Pending MCP call:', term.output)
-        self.assertIn(b'Tool declaration: object (', term.output)
-        self.assertIn(b'Arguments: object (', term.output)
-        self.assertNotIn(b'"arguments": {', term.output)
-        term.output.clear()
-        term.write(f'/mcp approve {digest}\r'.encode())
-        term.until(b'Approved exactly one')
+        term.write(b'first payload\r')
+        self.assertEqual(self.wait_result(term, 1)['status'], 'succeeded')
         arguments['message'] = 'changed'
         term.write(b'changed payload\r')
-        changed = self.wait_result(term, 2)
-        self.assertEqual(changed['status'], 'not_run')
-        self.assertEqual(self.server.calls, [])
-        arguments['message'] = 'first\n  body'
-        term.write(b'exact payload\r')
-        self.assertEqual(self.wait_result(term, 3)['status'], 'succeeded')
+        self.assertEqual(self.wait_result(term, 2)['status'], 'succeeded')
         term.write(b'same payload again\r')
-        self.assertEqual(self.wait_result(term, 4)['status'], 'not_run')
-        self.assertEqual(len(self.server.calls), 1)
-        self.assertEqual(self.server.calls[0]['arguments'], arguments)
+        self.assertEqual(self.wait_result(term, 3)['status'], 'succeeded')
+        self.assertEqual([c['arguments']['message'] for c in self.server.calls],
+                         ['first\n  body', 'changed', 'changed'])
         term.write(b'/exit\r')
         term.wait_exit()
+
+    def test_approval_commands_are_removed(self):
+        term = self.interactive()
+        for verb in ('pending', 'approve', 'deny'):
+            with self.subTest(verb=verb):
+                term.output.clear()
+                term.write(f'/mcp {verb} {"0" * 64}\r'.encode())
+                term.until(b'usage: /mcp list|status|tools|reload|login|logout')
+                self.assertNotIn(b'Inspect /mcp', term.output)
+                self.assertNotIn(b'Approved', term.output)
+        term.output.clear()
+        term.write(b'/help\r')
+        term.until(b'/mcp')
+        self.assertNotIn(b'/mcp approve', term.output)
+        self.assertNotIn(b'/mcp pending', term.output)
+        self.assertNotIn(b'/mcp deny', term.output)
+        self.assertEqual(self.server.calls, [])
+        term.write(b'/exit\r')
+        term.wait_exit()
+
+    def test_read_only_and_deny_lists_still_withhold_tools(self):
+        for policy, prompt in (('', '/ro inspect MCP'),
+                               ('deny_tools = ["send.message"]\n', 'inspect MCP')):
+            with self.subTest(policy=policy, prompt=prompt):
+                self.policy = policy
+                self.write_config()
+                seen = []
+
+                def respond(handler, request, sequence):
+                    seen.append(request)
+                    self.assertFalse(any(t.get('name', '').startswith('mcp_')
+                                         for t in request['tools']))
+                    body = self.provider.response_body(sequence, 'filtered tools')
+                    self.provider.reply(handler, body.encode(), close_header=True)
+
+                self.provider.runtime_handler = respond
+                result = subprocess.run(self.args('-e', '--', prompt), cwd=self.root,
+                                        env=self.env, capture_output=True, timeout=12)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIsNone(self.provider.failure)
+                self.assertEqual(len(seen), 1)
+                self.assertEqual(self.server.calls, [])
 
     def test_resume_preserves_original_tool_schema(self):
         held = threading.Event()
@@ -1060,7 +1079,7 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(self.server.token_headers[-1]['Authorization'], 'Basic ' + expected)
         self.assertNotIn('client_secret', self.server.tokens[-1][1])
 
-    def test_uncertain_allowed_mutation_requires_new_approval_on_repeat(self):
+    def test_explicit_repeat_after_unknown_outcome_has_no_approval_gate(self):
         self.policy = 'allow_tools = ["send.message"]\n'
         self.write_config()
         self.server.disconnect = True
@@ -1071,18 +1090,19 @@ class MCPTests(unittest.TestCase):
             tool = next(t for t in request['tools'] if t.get('name', '').startswith('mcp_'))
             body = (self.provider.function_body(sequence, f'repeat-{len(seen)}', tool['name'],
                 {'destination': 'channel-42', 'message': 'exact'}) if len(seen) < 3 else
-                self.provider.response_body(sequence, 'repeat refused'))
+                self.provider.response_body(sequence, 'explicit repeat finished'))
             self.provider.reply(handler, body.encode(), close_header=True)
 
         self.provider.runtime_handler = respond
         result = subprocess.run(self.args('-e', '--', 'repeat uncertain call'), cwd=self.root,
             env=self.env, capture_output=True, timeout=12)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(len(self.server.calls), 1)
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(len(self.server.calls), 2)
         _, events = read_events(self.state)
         results = [e['data']['result'] for e in events if e['type'] == 'tool_finished']
-        self.assertEqual([r['status'] for r in results], ['outcome_unknown', 'not_run'])
-        self.assertEqual(results[-1]['reason'], 'mcp_approval_required')
+        self.assertEqual([r['status'] for r in results], ['outcome_unknown', 'outcome_unknown'])
+        self.assertTrue(all(r['reason'] == 'mcp_outcome_unknown' for r in results))
 
     def test_read_only_turn_does_not_admit_forged_writer(self):
         self.policy = 'read_only_tools = ["send.message"]\n'
