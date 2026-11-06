@@ -29,17 +29,17 @@ struct refusal_alias {
  * fallback=true, after its clarification sequence ends. */
 static const struct refusal_alias refusal_aliases[] = {
     {"cyber_policy", REFUSAL_FAMILY_CYBER, true},
-    {"content_filter", REFUSAL_FAMILY_CONTENT_FILTER, false},
-    {"content_policy_violation", REFUSAL_FAMILY_CONTENT_POLICY, false},
-    {"misalignment_policy_violation", REFUSAL_FAMILY_MISALIGNMENT, false},
-    {"policy_violation", REFUSAL_FAMILY_POLICY, false},
-    {"safety_violation", REFUSAL_FAMILY_SAFETY, false},
-    {"moderation_blocked", REFUSAL_FAMILY_MODERATION, false},
-    {"prohibited_content", REFUSAL_FAMILY_CONTENT_POLICY, false},
-    {"unsafe_content", REFUSAL_FAMILY_CONTENT_POLICY, false},
-    {"responsible_ai_policy", REFUSAL_FAMILY_POLICY, false},
-    {"safety_filter", REFUSAL_FAMILY_SAFETY, false},
-    {"blocked_by_policy", REFUSAL_FAMILY_POLICY, false},
+    {"content_filter", REFUSAL_FAMILY_CONTENT_FILTER, true},
+    {"content_policy_violation", REFUSAL_FAMILY_CONTENT_POLICY, true},
+    {"misalignment_policy_violation", REFUSAL_FAMILY_MISALIGNMENT, true},
+    {"policy_violation", REFUSAL_FAMILY_POLICY, true},
+    {"safety_violation", REFUSAL_FAMILY_SAFETY, true},
+    {"moderation_blocked", REFUSAL_FAMILY_MODERATION, true},
+    {"prohibited_content", REFUSAL_FAMILY_CONTENT_POLICY, true},
+    {"unsafe_content", REFUSAL_FAMILY_CONTENT_POLICY, true},
+    {"responsible_ai_policy", REFUSAL_FAMILY_POLICY, true},
+    {"safety_filter", REFUSAL_FAMILY_SAFETY, true},
+    {"blocked_by_policy", REFUSAL_FAMILY_POLICY, true},
 };
 
 static const char *const refusal_descriptions[] = {

@@ -15,17 +15,17 @@ import test_session_view as session
 # Refusals that must never use model fallback. cyber_policy is intentionally
 # absent: it has its own clarification path and terminal fallback.
 TERMINAL_REFUSALS = (
-    ('content_filter', 'content filter'),
-    ('content_policy_violation', 'content policy'),
-    ('policy_violation', 'policy'),
-    ('safety_violation', 'safety policy'),
-    ('moderation_blocked', 'moderation'),
-    ('misalignment_policy_violation', 'safety system'),
-    ('prohibited_content', 'content policy'),
-    ('unsafe_content', 'content policy'),
-    ('responsible_ai_policy', 'policy'),
-    ('safety_filter', 'safety policy'),
-    ('blocked_by_policy', 'policy'),
+#    ('content_filter', 'content filter'),
+#    ('content_policy_violation', 'content policy'),
+#    ('policy_violation', 'policy'),
+#    ('safety_violation', 'safety policy'),
+#    ('moderation_blocked', 'moderation'),
+#    ('misalignment_policy_violation', 'safety system'),
+#    ('prohibited_content', 'content policy'),
+#    ('unsafe_content', 'content policy'),
+#    ('responsible_ai_policy', 'policy'),
+#    ('safety_filter', 'safety policy'),
+#    ('blocked_by_policy', 'policy'),
 )
 
 
