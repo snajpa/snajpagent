@@ -1311,17 +1311,6 @@ test_provider_context_formats(void)
         "\"error_type\":\"misalignment_policy_violation\"}}",
         "{\"code\":\"context_length_exceeded\",\"type\":\"misalignment_policy_violation\"}",
         "{\"error_type\":\"misalignment_policy_violation\"}",
-        "{\"error\":{\"code\":\"content_policy_violation\"}}",
-        "{\"error\":{\"code\":\"policy_violation\"}}",
-        "{\"error\":{\"code\":\"safety_violation\"}}",
-        "{\"error\":{\"code\":\"moderation_blocked\"}}",
-        "{\"error\":{\"code\":\"prohibited_content\"}}",
-        "{\"error\":{\"code\":\"unsafe_content\"}}",
-        "{\"error\":{\"code\":\"responsible_ai_policy\"}}",
-        "{\"error\":{\"code\":\"safety_filter\"}}",
-        "{\"error\":{\"code\":\"blocked_by_policy\"}}",
-        "{\"error\":{\"code\":\"vendor.new_policy_refusal\"}}",
-        "{\"error\":{\"code\":\"new_provider_safety_signal\"}}",
     };
     unsigned int policy_failures = 0u;
     for (size_t i = 0u; i < sizeof(policy_errors) / sizeof(policy_errors[0]); ++i) {
@@ -1357,6 +1346,50 @@ test_provider_context_formats(void)
     assert(snag_responses_sse_record(&stream, &record) < 0);
     assert(snag_provider_failure_classify(&stream.provider_failure).capacity);
     snag_responses_stream_free(&stream);
+}
+
+static void
+test_provider_refusal_aliases(void)
+{
+    static const struct {
+        const char *name;
+        const char *family;
+    } aliases[] = {
+        {"cyber_policy", "cyber-safety"}, {"content_filter", "content filter"},
+        {"content_policy_violation", "content policy"},
+        {"misalignment_policy_violation", "safety system"}, {"policy_violation", "policy"},
+        {"safety_violation", "safety policy"}, {"moderation_blocked", "moderation"},
+        {"prohibited_content", "content policy"}, {"unsafe_content", "content policy"},
+        {"responsible_ai_policy", "policy"}, {"safety_filter", "safety policy"},
+        {"blocked_by_policy", "policy"}, {"vendor.new_policy_refusal", "policy"},
+        {"new_provider_safety_signal", "safety policy"},
+    };
+    static const char *const forms[] = {
+        "{\"error\":{\"code\":\"%s\"}}",
+        "{\"error\":{\"type\":\"%s\"}}",
+        "{\"error\":{\"code\":\"invalid_prompt\",\"metadata\":{\"error_type\":\"%s\"}}}",
+    };
+
+    for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {
+        for (size_t f = 0; f < sizeof(forms) / sizeof(forms[0]); ++f) {
+            char text[256];
+            int wrote = snprintf(text, sizeof(text), forms[f], aliases[i].name);
+            assert(wrote > 0 && (size_t)wrote < sizeof(text));
+            json_t *root = json_loads(text, JSON_REJECT_DUPLICATES, NULL);
+            struct snag_provider_failure failure;
+            assert(root && snag_provider_failure_from_json(root, &failure) == 0);
+            struct snag_provider_failure_classification classification =
+                snag_provider_failure_classify(&failure);
+            if (!classification.policy || classification.capacity || !classification.refusal ||
+                !strstr(classification.refusal, aliases[i].family)) {
+                fprintf(stderr, "refusal alias %s form %zu: code=%s type=%s refusal=%s\n",
+                    aliases[i].name, f, failure.code, failure.type,
+                    classification.refusal ? classification.refusal : "(null)");
+                assert(0);
+            }
+            json_decref(root);
+        }
+    }
 }
 
 static void
@@ -2387,6 +2420,7 @@ main(void)
     test_structured_capacity_failure();
     test_interleaved_content_bound();
     test_provider_context_formats();
+    test_provider_refusal_aliases();
     test_stream_accepts_many_items();
     test_stream_accepts_many_parts();
     puts("test_responses: ok");

@@ -12,6 +12,35 @@ import unittest
 import test_session_view as session
 
 
+REFUSAL_ALIASES = (
+    ('content_filter', 'content filter'),
+    ('content_policy_violation', 'content policy'),
+    ('policy_violation', 'policy'),
+    ('safety_violation', 'safety policy'),
+    ('moderation_blocked', 'moderation'),
+    ('misalignment_policy_violation', 'safety system'),
+    ('prohibited_content', 'content policy'),
+    ('unsafe_content', 'content policy'),
+    ('responsible_ai_policy', 'policy'),
+    ('safety_filter', 'safety policy'),
+    ('blocked_by_policy', 'policy'),
+)
+
+
+def refuse(provider, handler, sequence, code):
+    body = provider.function_body(
+        sequence, 'unexecuted', 'read_file', {'path': '/missing-fallback-fixture'})
+    body = body.split('event: response.completed')[0]
+    body += provider.event('response.unknown_activity', {})
+    response = {'error': {'code': code, 'message': 'synthetic provider policy decision'}}
+    response['output'] = [{'type': 'function_call', 'id': f'fc_irc_ui_{sequence}_0',
+                           'call_id': 'unexecuted', 'name': 'read_file',
+                           'arguments': '{"path":"/missing-fallback-fixture"}',
+                           'status': 'completed'}]
+    body += provider.event('response.failed', {'response': response})
+    provider.reply(handler, body.encode(), close_header=True)
+
+
 class ModelFallbackTests(unittest.TestCase):
     def setUp(self):
         self.owner = session.SessionViewTests(
@@ -77,18 +106,10 @@ class ModelFallbackTests(unittest.TestCase):
     def deny(self, handler, sequence, yellow=False, code='cyber_policy'):
         # Unknown provider activity makes this a terminal error under the
         # existing classifier. Its incomplete local call must never execute.
-        body = '' if yellow else self.provider.function_body(
-            sequence, 'unexecuted', 'read_file', {'path': '/missing-fallback-fixture'})
-        body = body.split('event: response.completed')[0]
         if not yellow:
-            body += self.provider.event('response.unknown_activity', {})
-        response = {'error': {'code': code, 'message': 'synthetic provider policy decision'}}
-        if not yellow:
-            response['output'] = [{'type': 'function_call', 'id': f'fc_irc_ui_{sequence}_0',
-                                   'call_id': 'unexecuted', 'name': 'read_file',
-                                   'arguments': '{"path":"/missing-fallback-fixture"}',
-                                   'status': 'completed'}]
-        body += self.provider.event('response.failed', {'response': response})
+            return refuse(self.provider, handler, sequence, code)
+        body = self.provider.event('response.failed', {'response': {
+            'error': {'code': code, 'message': 'synthetic provider policy decision'}}})
         self.provider.reply(handler, body.encode(), close_header=True)
 
     def models(self):
@@ -369,27 +390,6 @@ class ModelFallbackTests(unittest.TestCase):
         self.assertEqual(len([e for e in self.owner.events()
                               if e['type'] == 'turn_fallback_started']), 1)
 
-    def test_other_policy_errors_do_not_trigger_fallback(self):
-        self.command('/fallback fake/two-model/high')
-        self.provider.runtime_handler = lambda handler, request, sequence: self.deny(
-            handler, sequence, code='content_filter')
-        os.write(self.owner.initial.master, b'other error fixture\r')
-        self.owner.wait_event('turn_failed')
-        self.assertEqual(self.models(), ['host-model'])
-
-    def test_explicit_refusal_is_terminal_and_explained(self):
-        self.command('/fallback fake/two-model/high')
-        self.provider.runtime_handler = lambda handler, request, sequence: self.deny(
-            handler, sequence, code='content_policy_violation')
-        os.write(self.owner.initial.master, b'content policy fixture\r')
-        self.owner.wait_event('turn_failed')
-        self.assertEqual(self.models(), ['host-model'])
-        failed, = [event['data'] for event in self.owner.events()
-                   if event['type'] == 'response_failed']
-        self.assertTrue(failed['policy_stopped'])
-        self.assertIn('content policy', failed['message'])
-        self.assertIn('not retried or sent to another model', failed['message'])
-
     def test_non_policy_provider_failure_triggers_fallback(self):
         self.command('/fallback fake/two-model/high')
 
@@ -534,6 +534,30 @@ class ModelFallbackTests(unittest.TestCase):
         fresh.until(b'Fallback: fake/"two-model"/"high":100000')
         self.owner.finish(fresh, b'/exit')
         self.assertEqual(self.models(), [])
+
+
+class RefusalAliasTests(unittest.TestCase):
+    def test_refusal_aliases_are_terminal_and_explained(self):
+        for code, family in REFUSAL_ALIASES:
+            with self.subTest(code=code):
+                owner = session.SessionViewTests('runTest')
+                owner.setUp()
+                try:
+                    owner.provider.runtime_handler = (
+                        lambda handler, request, sequence, value=code: refuse(
+                            owner.provider, handler, sequence, value))
+                    os.write(owner.initial.master, b'/fallback fake/two-model/high\r')
+                    owner.initial.until(b'Fallback: fake/"two-model"/"high"', 5)
+                    os.write(owner.initial.master, b'refusal alias fixture\r')
+                    owner.wait_event('turn_failed')
+                    self.assertEqual([request['model'] for request in owner.provider.requests],
+                                     ['host-model'])
+                    failed = [event['data'] for event in owner.events()
+                              if event['type'] == 'response_failed'][-1]
+                    self.assertIn(family, failed['message'])
+                    self.assertIn('not retried or sent to another model', failed['message'])
+                finally:
+                    owner.tearDown()
 
 
 if __name__ == '__main__':

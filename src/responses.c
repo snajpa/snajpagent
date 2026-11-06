@@ -9,33 +9,54 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct refusal_name {
-    const char *name;
-    const char *description;
+enum refusal_family {
+    REFUSAL_FAMILY_CYBER,
+    REFUSAL_FAMILY_MISALIGNMENT,
+    REFUSAL_FAMILY_CONTENT_FILTER,
+    REFUSAL_FAMILY_CONTENT_POLICY,
+    REFUSAL_FAMILY_SAFETY,
+    REFUSAL_FAMILY_MODERATION,
+    REFUSAL_FAMILY_POLICY,
 };
 
-static const struct refusal_name refusal_names[] = {
-    {"cyber_policy", "The provider's cyber-safety policy blocked this request."},
-    {"content_filter", "The provider's content filter blocked this request."},
-    {"content_policy_violation", "The provider's content policy blocked this request."},
-    {"misalignment_policy_violation",
-        "The provider's safety system flagged this request as potentially misaligned."},
-    {"policy_violation", "The provider's policy blocked this request."},
-    {"safety_violation", "The provider's safety policy blocked this request."},
-    {"moderation_blocked", "The provider's moderation system blocked this request."},
-    {"prohibited_content", "The provider rejected this request as prohibited content."},
-    {"unsafe_content", "The provider rejected this request as unsafe content."},
-    {"responsible_ai_policy", "The provider's responsible-AI policy blocked this request."},
-    {"safety_filter", "The provider's safety filter blocked this request."},
-    {"blocked_by_policy", "The provider's policy blocked this request."},
+struct refusal_alias {
+    const char *name;
+    enum refusal_family family;
+};
+
+/* Provider-specific refusal names map to one canonical family. */
+static const struct refusal_alias refusal_aliases[] = {
+    {"cyber_policy", REFUSAL_FAMILY_CYBER},
+    {"content_filter", REFUSAL_FAMILY_CONTENT_FILTER},
+    {"content_policy_violation", REFUSAL_FAMILY_CONTENT_POLICY},
+    {"misalignment_policy_violation", REFUSAL_FAMILY_MISALIGNMENT},
+    {"policy_violation", REFUSAL_FAMILY_POLICY},
+    {"safety_violation", REFUSAL_FAMILY_SAFETY},
+    {"moderation_blocked", REFUSAL_FAMILY_MODERATION},
+    {"prohibited_content", REFUSAL_FAMILY_CONTENT_POLICY},
+    {"unsafe_content", REFUSAL_FAMILY_CONTENT_POLICY},
+    {"responsible_ai_policy", REFUSAL_FAMILY_POLICY},
+    {"safety_filter", REFUSAL_FAMILY_SAFETY},
+    {"blocked_by_policy", REFUSAL_FAMILY_POLICY},
+};
+
+static const char *const refusal_descriptions[] = {
+    [REFUSAL_FAMILY_CYBER] = "The provider's cyber-safety policy blocked this request.",
+    [REFUSAL_FAMILY_MISALIGNMENT] =
+        "The provider's safety system flagged this request as potentially misaligned.",
+    [REFUSAL_FAMILY_CONTENT_FILTER] = "The provider's content filter blocked this request.",
+    [REFUSAL_FAMILY_CONTENT_POLICY] = "The provider's content policy blocked this request.",
+    [REFUSAL_FAMILY_SAFETY] = "The provider's safety policy blocked this request.",
+    [REFUSAL_FAMILY_MODERATION] = "The provider's moderation system blocked this request.",
+    [REFUSAL_FAMILY_POLICY] = "The provider's policy blocked this request.",
 };
 
 static bool
 is_refusal_name(const char *value)
 {
     if (!value || !*value) return false;
-    for (size_t i = 0; i < sizeof(refusal_names) / sizeof(refusal_names[0]); ++i)
-        if (!strcmp(value, refusal_names[i].name)) return true;
+    for (size_t i = 0; i < sizeof(refusal_aliases) / sizeof(refusal_aliases[0]); ++i)
+        if (!strcmp(value, refusal_aliases[i].name)) return true;
     /* Treat new provider-specific refusal families as terminal too. */
     return strstr(value, "policy") || strstr(value, "safety") ||
            strstr(value, "moderation") || strstr(value, "refusal") ||
@@ -50,8 +71,19 @@ refusal_description(const char *code, const char *type)
 
     for (size_t v = 0; v < sizeof(values) / sizeof(values[0]); ++v) {
         if (!values[v] || !*values[v]) continue;
-        for (size_t i = 0; i < sizeof(refusal_names) / sizeof(refusal_names[0]); ++i)
-            if (!strcmp(values[v], refusal_names[i].name)) return refusal_names[i].description;
+        for (size_t i = 0; i < sizeof(refusal_aliases) / sizeof(refusal_aliases[0]); ++i)
+            if (!strcmp(values[v], refusal_aliases[i].name))
+                return refusal_descriptions[refusal_aliases[i].family];
+        if (is_refusal_name(values[v])) {
+            if (strstr(values[v], "safety")) return refusal_descriptions[REFUSAL_FAMILY_SAFETY];
+            if (strstr(values[v], "moderation"))
+                return refusal_descriptions[REFUSAL_FAMILY_MODERATION];
+            if (strstr(values[v], "content_filter"))
+                return refusal_descriptions[REFUSAL_FAMILY_CONTENT_FILTER];
+            if (strstr(values[v], "prohibited_content") || strstr(values[v], "unsafe_content"))
+                return refusal_descriptions[REFUSAL_FAMILY_CONTENT_POLICY];
+            return refusal_descriptions[REFUSAL_FAMILY_POLICY];
+        }
     }
     return "The provider refused this request under its policy.";
 }
