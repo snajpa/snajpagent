@@ -22,22 +22,24 @@ enum refusal_family {
 struct refusal_alias {
     const char *name;
     enum refusal_family family;
+    bool fallback;
 };
 
-/* Provider-specific refusal names map to one canonical family. */
+/* Terminal refusals never use model fallback. Only cyber_policy is marked
+ * fallback=true, after its clarification sequence ends. */
 static const struct refusal_alias refusal_aliases[] = {
-    {"cyber_policy", REFUSAL_FAMILY_CYBER},
-    {"content_filter", REFUSAL_FAMILY_CONTENT_FILTER},
-    {"content_policy_violation", REFUSAL_FAMILY_CONTENT_POLICY},
-    {"misalignment_policy_violation", REFUSAL_FAMILY_MISALIGNMENT},
-    {"policy_violation", REFUSAL_FAMILY_POLICY},
-    {"safety_violation", REFUSAL_FAMILY_SAFETY},
-    {"moderation_blocked", REFUSAL_FAMILY_MODERATION},
-    {"prohibited_content", REFUSAL_FAMILY_CONTENT_POLICY},
-    {"unsafe_content", REFUSAL_FAMILY_CONTENT_POLICY},
-    {"responsible_ai_policy", REFUSAL_FAMILY_POLICY},
-    {"safety_filter", REFUSAL_FAMILY_SAFETY},
-    {"blocked_by_policy", REFUSAL_FAMILY_POLICY},
+    {"cyber_policy", REFUSAL_FAMILY_CYBER, true},
+    {"content_filter", REFUSAL_FAMILY_CONTENT_FILTER, false},
+    {"content_policy_violation", REFUSAL_FAMILY_CONTENT_POLICY, false},
+    {"misalignment_policy_violation", REFUSAL_FAMILY_MISALIGNMENT, false},
+    {"policy_violation", REFUSAL_FAMILY_POLICY, false},
+    {"safety_violation", REFUSAL_FAMILY_SAFETY, false},
+    {"moderation_blocked", REFUSAL_FAMILY_MODERATION, false},
+    {"prohibited_content", REFUSAL_FAMILY_CONTENT_POLICY, false},
+    {"unsafe_content", REFUSAL_FAMILY_CONTENT_POLICY, false},
+    {"responsible_ai_policy", REFUSAL_FAMILY_POLICY, false},
+    {"safety_filter", REFUSAL_FAMILY_SAFETY, false},
+    {"blocked_by_policy", REFUSAL_FAMILY_POLICY, false},
 };
 
 static const char *const refusal_descriptions[] = {
@@ -52,11 +54,19 @@ static const char *const refusal_descriptions[] = {
 };
 
 static bool
-is_refusal_name(const char *value)
+is_refusal_alias(const char *value)
 {
     if (!value || !*value) return false;
     for (size_t i = 0; i < sizeof(refusal_aliases) / sizeof(refusal_aliases[0]); ++i)
         if (!strcmp(value, refusal_aliases[i].name)) return true;
+    return false;
+}
+
+static bool
+is_refusal_name(const char *value)
+{
+    if (is_refusal_alias(value)) return true;
+    if (!value || !*value) return false;
     /* Treat new provider-specific refusal families as terminal too. */
     return strstr(value, "policy") || strstr(value, "safety") ||
            strstr(value, "moderation") || strstr(value, "refusal") ||
@@ -71,9 +81,11 @@ refusal_description(const char *code, const char *type)
 
     for (size_t v = 0; v < sizeof(values) / sizeof(values[0]); ++v) {
         if (!values[v] || !*values[v]) continue;
-        for (size_t i = 0; i < sizeof(refusal_aliases) / sizeof(refusal_aliases[0]); ++i)
-            if (!strcmp(values[v], refusal_aliases[i].name))
-                return refusal_descriptions[refusal_aliases[i].family];
+        if (is_refusal_alias(values[v])) {
+            for (size_t i = 0; i < sizeof(refusal_aliases) / sizeof(refusal_aliases[0]); ++i)
+                if (!strcmp(values[v], refusal_aliases[i].name))
+                    return refusal_descriptions[refusal_aliases[i].family];
+        }
         if (is_refusal_name(values[v])) {
             if (strstr(values[v], "safety")) return refusal_descriptions[REFUSAL_FAMILY_SAFETY];
             if (strstr(values[v], "moderation"))
@@ -125,9 +137,14 @@ snag_provider_failure_classify(const struct snag_provider_failure *failure)
     if (!failure) return result;
     result.policy = is_refusal_name(failure->code) || is_refusal_name(failure->type);
     if (result.policy) {
-        result.cyber_policy = !strcmp(failure->code, "cyber_policy") ||
-                              !strcmp(failure->type, "cyber_policy");
-        result.fallback = result.cyber_policy;
+        for (size_t i = 0; i < sizeof(refusal_aliases) / sizeof(refusal_aliases[0]); ++i) {
+            if (strcmp(failure->code, refusal_aliases[i].name) &&
+                strcmp(failure->type, refusal_aliases[i].name))
+                continue;
+            if (refusal_aliases[i].family == REFUSAL_FAMILY_CYBER)
+                result.cyber_policy = true;
+            result.fallback |= refusal_aliases[i].fallback;
+        }
         result.refusal = refusal_description(failure->code, failure->type);
     } else {
         result.capacity = !strcmp(failure->code, "context_length_exceeded");

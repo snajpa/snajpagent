@@ -12,7 +12,9 @@ import unittest
 import test_session_view as session
 
 
-REFUSAL_ALIASES = (
+# Refusals that must never use model fallback. cyber_policy is intentionally
+# absent: it has its own clarification path and terminal fallback.
+TERMINAL_REFUSALS = (
     ('content_filter', 'content filter'),
     ('content_policy_violation', 'content policy'),
     ('policy_violation', 'policy'),
@@ -538,7 +540,7 @@ class ModelFallbackTests(unittest.TestCase):
 
 class RefusalAliasTests(unittest.TestCase):
     def test_refusal_aliases_are_terminal_and_explained(self):
-        for code, family in REFUSAL_ALIASES:
+        for code, family in TERMINAL_REFUSALS:
             with self.subTest(code=code):
                 owner = session.SessionViewTests('runTest')
                 owner.setUp()

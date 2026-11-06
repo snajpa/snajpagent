@@ -1354,15 +1354,18 @@ test_provider_refusal_aliases(void)
     static const struct {
         const char *name;
         const char *family;
+        bool fallback;
     } aliases[] = {
-        {"cyber_policy", "cyber-safety"}, {"content_filter", "content filter"},
-        {"content_policy_violation", "content policy"},
-        {"misalignment_policy_violation", "safety system"}, {"policy_violation", "policy"},
-        {"safety_violation", "safety policy"}, {"moderation_blocked", "moderation"},
-        {"prohibited_content", "content policy"}, {"unsafe_content", "content policy"},
-        {"responsible_ai_policy", "policy"}, {"safety_filter", "safety policy"},
-        {"blocked_by_policy", "policy"}, {"vendor.new_policy_refusal", "policy"},
-        {"new_provider_safety_signal", "safety policy"},
+        {"cyber_policy", "cyber-safety", true}, {"content_filter", "content filter", false},
+        {"content_policy_violation", "content policy", false},
+        {"misalignment_policy_violation", "safety system", false},
+        {"policy_violation", "policy", false}, {"safety_violation", "safety policy", false},
+        {"moderation_blocked", "moderation", false},
+        {"prohibited_content", "content policy", false},
+        {"unsafe_content", "content policy", false},
+        {"responsible_ai_policy", "policy", false}, {"safety_filter", "safety policy", false},
+        {"blocked_by_policy", "policy", false}, {"vendor.new_policy_refusal", "policy", false},
+        {"new_provider_safety_signal", "safety policy", false},
     };
     static const char *const forms[] = {
         "{\"error\":{\"code\":\"%s\"}}",
@@ -1381,7 +1384,8 @@ test_provider_refusal_aliases(void)
             struct snag_provider_failure_classification classification =
                 snag_provider_failure_classify(&failure);
             if (!classification.policy || classification.capacity || !classification.refusal ||
-                !strstr(classification.refusal, aliases[i].family)) {
+                !strstr(classification.refusal, aliases[i].family) ||
+                classification.fallback != aliases[i].fallback) {
                 fprintf(stderr, "refusal alias %s form %zu: code=%s type=%s refusal=%s\n",
                     aliases[i].name, f, failure.code, failure.type,
                     classification.refusal ? classification.refusal : "(null)");
