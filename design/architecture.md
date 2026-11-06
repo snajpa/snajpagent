@@ -364,6 +364,11 @@ eligibility; active turns cannot be retried. Failures hint `/retry` in both
 views. Queued turns and paused goals stay paused. This uses ordinary durable
 turn events; retry eligibility is derived while replaying the session.
 
+A `misalignment_policy_violation` code or type follows the terminal policy-stop
+path: retain the error, pause active goals and return control without automatic
+retry, clarification or model fallback. Gateway error-type metadata retains the
+same classification, including when capacity aliases are also present.
+
 An eligible `cyber_policy` rejection receives up to five model-facing
 clarifications through `response_output_correction`. Public text is retained;
 unexecuted local calls are discarded. Hosted/unknown activity and unsupported

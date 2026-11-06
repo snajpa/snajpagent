@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+static const char policy_types[] = "cyber_policy content_filter misalignment_policy_violation";
+
 static int
 stream_fail(struct snag_responses_stream *stream, int code, const char *fmt, ...)
 {
@@ -48,8 +50,8 @@ snag_provider_failure_is_capacity(const struct snag_provider_failure *failure)
 bool
 snag_provider_failure_is_policy(const struct snag_provider_failure *failure)
 {
-    return failure && (snag_string_in(failure->code, "cyber_policy content_filter") ||
-                          snag_string_in(failure->type, "cyber_policy content_filter"));
+    return failure && (snag_string_in(failure->code, policy_types) ||
+                          snag_string_in(failure->type, policy_types));
 }
 
 int
@@ -88,8 +90,8 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
         object = (json_t *)root;
     if (!json_is_object(object)) return object && !json_is_null(object) ? -1 : 0;
     const char *metadata_type = snag_json_string(json_object_get(object, "metadata"), "error_type");
-    if (!typed || (!snag_string_in(typed, "cyber_policy content_filter") && metadata_type &&
-                      snag_string_in(metadata_type, "cyber_policy content_filter")))
+    if (!typed || (!snag_string_in(typed, policy_types) && metadata_type &&
+                      snag_string_in(metadata_type, policy_types)))
         typed = metadata_type;
     {
         const char *keys[] = {"code", "reason", "type"};
@@ -112,12 +114,11 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
     /* Recognized top-level error categories survive; SSE event names do not. */
     const char *category = snag_json_string(object, "type");
     if (category &&
-        (object != root ||
-            snag_string_in(category,
-                "exceed_context_size_error invalid_request_error cyber_policy content_filter"))) {
+        (object != root || snag_string_in(category, policy_types) ||
+            snag_string_in(category, "exceed_context_size_error invalid_request_error"))) {
         snprintf(failure->type, sizeof(failure->type), "%s", category);
     }
-    if (typed && snag_string_in(typed, "cyber_policy content_filter")) {
+    if (typed && snag_string_in(typed, policy_types)) {
         snprintf(failure->type, sizeof(failure->type), "%s", typed);
     }
     if (snag_text_valid(message, 0u, sizeof(failure->message) - 1u))

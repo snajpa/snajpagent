@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Stop automatic retries after `misalignment_policy_violation`, including during
+  active-goal recovery. Retain the provider diagnostic and pause active goals
+  while leaving the interactive session open for inspection.
+
 - Remove the MCP per-call approval queue and its pending/approve/deny commands.
   Enabled, non-denied tools dispatch directly; read-only filtering and uncertain
   outcome reporting remain. Existing allow_tools settings still load.

@@ -7669,6 +7669,11 @@ can include a temporary gateway access-verification failure; it receives the
 same bounded retry of the unchanged request as other transient server errors.
 It does not trigger model-facing policy clarification. Access, quota and unknown
 failures retain paced turn recovery.
+A
+.B misalignment_policy_violation
+error stops automatic retries, clarification and model fallback. Its diagnostic
+is retained, active goals pause, and the interactive session remains available
+for inspection. Review the blocked workflow before submitting further work.
 For an eligible
 .B cyber_policy
 rejection, the model receives a durable clarification instruction immediately,
