@@ -28,6 +28,7 @@ struct snag_provider_failure_classification {
     bool cyber_policy;
     bool capacity;
     bool fallback;
+    const char *refusal;
 };
 
 /* Text fragments are borrowed for the call. A NULL text with zero length closes

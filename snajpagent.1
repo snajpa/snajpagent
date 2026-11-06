@@ -7701,6 +7701,21 @@ automatic clarification. After five clarification attempts, a further rejection
 stops automatic retries and pauses an active goal. Other policy rejections also
 stop automatic retries. A policy pause is recorded as a provider rejection;
 an explicit model refusal has a separate pause reason and notice.
+Recognized refusals include
+.BR content_policy_violation ,
+.BR policy_violation ,
+.BR safety_violation ,
+.BR moderation_blocked ,
+.BR prohibited_content ,
+.BR unsafe_content ,
+.BR responsible_ai_policy ,
+.BR safety_filter
+and
+.BR blocked_by_policy .
+Any code or type containing policy, safety, moderation, refusal,
+content_filter, prohibited_content or unsafe_content is treated the same way.
+The failure notice names the refusal family and explains that the request was
+not retried or sent to another model.
 Existing running commands are retained while the policy-stopped turn waits.
 The input prompt stays hidden while the command is retained.
 Press Ctrl-C to leave that turn before submitting a clarification or another

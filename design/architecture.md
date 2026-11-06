@@ -369,6 +369,16 @@ path: retain the error, pause active goals and return control without automatic
 retry, clarification or model fallback. Gateway error-type metadata retains the
 same classification, including when capacity aliases are also present.
 
+Refusal names are explicit: `cyber_policy`, `content_filter`,
+`content_policy_violation`, `misalignment_policy_violation`, `policy_violation`,
+`safety_violation`, `moderation_blocked`, `prohibited_content`, `unsafe_content`,
+`responsible_ai_policy`, `safety_filter` and `blocked_by_policy`. Unknown names
+containing policy, safety, moderation, refusal, content_filter,
+prohibited_content or unsafe_content take the same terminal path. Except for
+the `cyber_policy` clarification path, these refusals do not retry or switch
+models. The user-facing failure notice names the refusal family and explains
+that the request was not retried or sent to another model.
+
 An eligible `cyber_policy` rejection receives up to five model-facing
 clarifications through `response_output_correction`. Public text is retained;
 unexecuted local calls are discarded. Hosted/unknown activity and unsupported

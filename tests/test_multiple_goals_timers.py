@@ -268,11 +268,14 @@ class MultipleControllersTests(unittest.TestCase):
     def test_http_misalignment_error_pauses_goal(self):
         self.check_misalignment_stop(True, http=True)
 
-    def check_misalignment_stop(self, goal, kind='code', http=False, resume=False):
+    def test_content_policy_error_pauses_goal(self):
+        self.check_misalignment_stop(True, code='content_policy_violation')
+
+    def check_misalignment_stop(self, goal, kind='code', http=False, resume=False,
+                                code='misalignment_policy_violation'):
         config = self.state / 'config.ini'
         config.write_text(config.read_text().replace('max_turn_retries=0',
             'max_turn_retries=5\nfallback_model=fixture/fallback-model/medium:60000'))
-        code = 'misalignment_policy_violation'
         message = ('This request was blocked by our safety systems. '
                    'Reason: Potentially unintended activity.')
         error = {'message': message, kind: code} if kind != 'metadata' else {
@@ -306,6 +309,9 @@ class MultipleControllersTests(unittest.TestCase):
         self.assertTrue(failed['policy_stopped'])
         self.assertIn(code, failed['policy'].values())
         self.assertIn(message, failed['message'])
+        self.assertIn('not retried or sent to another model', failed['message'])
+        self.assertIn('content policy' if code == 'content_policy_violation' else 'safety system',
+                      failed['message'])
         self.assertFalse(any(e['type'] in ('turn_recovery', 'turn_fallback_started',
             'response_output_correction', 'turn_completed') for e in events))
         if goal:

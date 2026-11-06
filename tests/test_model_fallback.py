@@ -377,6 +377,19 @@ class ModelFallbackTests(unittest.TestCase):
         self.owner.wait_event('turn_failed')
         self.assertEqual(self.models(), ['host-model'])
 
+    def test_explicit_refusal_is_terminal_and_explained(self):
+        self.command('/fallback fake/two-model/high')
+        self.provider.runtime_handler = lambda handler, request, sequence: self.deny(
+            handler, sequence, code='content_policy_violation')
+        os.write(self.owner.initial.master, b'content policy fixture\r')
+        self.owner.wait_event('turn_failed')
+        self.assertEqual(self.models(), ['host-model'])
+        failed, = [event['data'] for event in self.owner.events()
+                   if event['type'] == 'response_failed']
+        self.assertTrue(failed['policy_stopped'])
+        self.assertIn('content policy', failed['message'])
+        self.assertIn('not retried or sent to another model', failed['message'])
+
     def test_non_policy_provider_failure_triggers_fallback(self):
         self.command('/fallback fake/two-model/high')
 

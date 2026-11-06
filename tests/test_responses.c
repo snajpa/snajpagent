@@ -1311,14 +1311,26 @@ test_provider_context_formats(void)
         "\"error_type\":\"misalignment_policy_violation\"}}",
         "{\"code\":\"context_length_exceeded\",\"type\":\"misalignment_policy_violation\"}",
         "{\"error_type\":\"misalignment_policy_violation\"}",
+        "{\"error\":{\"code\":\"content_policy_violation\"}}",
+        "{\"error\":{\"code\":\"policy_violation\"}}",
+        "{\"error\":{\"code\":\"safety_violation\"}}",
+        "{\"error\":{\"code\":\"moderation_blocked\"}}",
+        "{\"error\":{\"code\":\"prohibited_content\"}}",
+        "{\"error\":{\"code\":\"unsafe_content\"}}",
+        "{\"error\":{\"code\":\"responsible_ai_policy\"}}",
+        "{\"error\":{\"code\":\"safety_filter\"}}",
+        "{\"error\":{\"code\":\"blocked_by_policy\"}}",
+        "{\"error\":{\"code\":\"vendor.new_policy_refusal\"}}",
+        "{\"error\":{\"code\":\"new_provider_safety_signal\"}}",
     };
     unsigned int policy_failures = 0u;
     for (size_t i = 0u; i < sizeof(policy_errors) / sizeof(policy_errors[0]); ++i) {
         struct snag_provider_failure failure;
         json_t *root = json_loads(policy_errors[i], JSON_REJECT_DUPLICATES, NULL);
         assert(root && snag_provider_failure_from_json(root, &failure) == 0);
-        if (!snag_provider_failure_classify(&failure).policy ||
-            snag_provider_failure_classify(&failure).capacity ||
+        struct snag_provider_failure_classification classification =
+            snag_provider_failure_classify(&failure);
+        if (!classification.policy || classification.capacity || !classification.refusal ||
             failure.context_limit_tokens != (!i ? 42u : 0u) ||
             failure.requested_input_tokens != (!i ? 43u : 0u)) {
             fprintf(stderr, "policy/capacity case %zu: code=%s type=%s\n", i, failure.code,

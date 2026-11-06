@@ -8,6 +8,12 @@
   terminal `cyber_policy` rejection. `content_filter` and
   `misalignment_policy_violation` remain terminal without switching.
 
+- Recognize `content_policy_violation`, `policy_violation`, `safety_violation`,
+  `moderation_blocked`, `prohibited_content`, `unsafe_content`,
+  `responsible_ai_policy`, `safety_filter` and `blocked_by_policy` refusals,
+  plus unknown names in those policy/safety families. Keep them terminal and
+  explain that the request was not retried or sent to another model.
+
 - Stop automatic retries after `misalignment_policy_violation`, including during
   active-goal recovery. Retain the provider diagnostic and pause active goals
   while leaving the interactive session open for inspection.

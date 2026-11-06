@@ -9,12 +9,51 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char policy_types[] = "cyber_policy content_filter misalignment_policy_violation";
+struct refusal_name {
+    const char *name;
+    const char *description;
+};
+
+static const struct refusal_name refusal_names[] = {
+    {"cyber_policy", "The provider's cyber-safety policy blocked this request."},
+    {"content_filter", "The provider's content filter blocked this request."},
+    {"content_policy_violation", "The provider's content policy blocked this request."},
+    {"misalignment_policy_violation",
+        "The provider's safety system flagged this request as potentially misaligned."},
+    {"policy_violation", "The provider's policy blocked this request."},
+    {"safety_violation", "The provider's safety policy blocked this request."},
+    {"moderation_blocked", "The provider's moderation system blocked this request."},
+    {"prohibited_content", "The provider rejected this request as prohibited content."},
+    {"unsafe_content", "The provider rejected this request as unsafe content."},
+    {"responsible_ai_policy", "The provider's responsible-AI policy blocked this request."},
+    {"safety_filter", "The provider's safety filter blocked this request."},
+    {"blocked_by_policy", "The provider's policy blocked this request."},
+};
 
 static bool
-is_policy_type(const char *value)
+is_refusal_name(const char *value)
 {
-    return snag_string_in(value, policy_types);
+    if (!value || !*value) return false;
+    for (size_t i = 0; i < sizeof(refusal_names) / sizeof(refusal_names[0]); ++i)
+        if (!strcmp(value, refusal_names[i].name)) return true;
+    /* Treat new provider-specific refusal families as terminal too. */
+    return strstr(value, "policy") || strstr(value, "safety") ||
+           strstr(value, "moderation") || strstr(value, "refusal") ||
+           strstr(value, "content_filter") || strstr(value, "prohibited_content") ||
+           strstr(value, "unsafe_content");
+}
+
+static const char *
+refusal_description(const char *code, const char *type)
+{
+    const char *values[] = {code, type};
+
+    for (size_t v = 0; v < sizeof(values) / sizeof(values[0]); ++v) {
+        if (!values[v] || !*values[v]) continue;
+        for (size_t i = 0; i < sizeof(refusal_names) / sizeof(refusal_names[0]); ++i)
+            if (!strcmp(values[v], refusal_names[i].name)) return refusal_names[i].description;
+    }
+    return "The provider refused this request under its policy.";
 }
 
 static int
@@ -52,11 +91,12 @@ snag_provider_failure_classify(const struct snag_provider_failure *failure)
     struct snag_provider_failure_classification result = {0};
 
     if (!failure) return result;
-    result.policy = is_policy_type(failure->code) || is_policy_type(failure->type);
+    result.policy = is_refusal_name(failure->code) || is_refusal_name(failure->type);
     if (result.policy) {
         result.cyber_policy = !strcmp(failure->code, "cyber_policy") ||
                               !strcmp(failure->type, "cyber_policy");
         result.fallback = result.cyber_policy;
+        result.refusal = refusal_description(failure->code, failure->type);
     } else {
         result.capacity = !strcmp(failure->code, "context_length_exceeded");
         result.fallback = true;
@@ -100,7 +140,7 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
         object = (json_t *)root;
     if (!json_is_object(object)) return object && !json_is_null(object) ? -1 : 0;
     const char *metadata_type = snag_json_string(json_object_get(object, "metadata"), "error_type");
-    if (!typed || (!is_policy_type(typed) && metadata_type && is_policy_type(metadata_type)))
+    if (!typed || (!is_refusal_name(typed) && metadata_type && is_refusal_name(metadata_type)))
         typed = metadata_type;
     {
         const char *keys[] = {"code", "reason", "type"};
@@ -123,11 +163,11 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
     /* Recognized top-level error categories survive; SSE event names do not. */
     const char *category = snag_json_string(object, "type");
     if (category &&
-        (object != root || is_policy_type(category) ||
+        (object != root || is_refusal_name(category) ||
             snag_string_in(category, "exceed_context_size_error invalid_request_error"))) {
         snprintf(failure->type, sizeof(failure->type), "%s", category);
     }
-    if (typed && is_policy_type(typed)) {
+    if (typed && is_refusal_name(typed)) {
         snprintf(failure->type, sizeof(failure->type), "%s", typed);
     }
     if (snag_text_valid(message, 0u, sizeof(failure->message) - 1u))

@@ -6547,13 +6547,22 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                                      : capacity_failure ? "context"
                                                         : "provider";
             int exit_status = app->stream_failed && strcmp(class_name, "output") == 0 ? 6 : 4;
-            char failure[256];
+            char failure[512];
             json_t *partial;
-            (void)snprintf(failure, sizeof(failure), "%s",
-                app->stream_failed
-                    ? (app->stream_error[0] ? app->stream_error
-                                            : "assistant output could not be delivered")
-                    : (error[0] ? error : "provider response failed"));
+            if (!app->stream_failed && classification.policy) {
+                (void)snprintf(failure, sizeof(failure),
+                    "%s The request was not retried or sent to another model. Review it before "
+                    "trying again.%s%s",
+                    classification.refusal ? classification.refusal
+                                           : "The provider refused this request under its policy.",
+                    error[0] ? " Provider detail: " : "", error[0] ? error : "");
+            } else {
+                (void)snprintf(failure, sizeof(failure), "%s",
+                    app->stream_failed
+                        ? (app->stream_error[0] ? app->stream_error
+                                                : "assistant output could not be delivered")
+                        : (error[0] ? error : "provider response failed"));
+            }
             if (replay_safe && !pure_history_recovery &&
                 strcmp(rejected_request_hash, projection.create_request.sha256)) {
                 if (commit_event(app, "response_capacity_rejected",
