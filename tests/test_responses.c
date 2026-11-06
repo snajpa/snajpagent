@@ -1298,6 +1298,19 @@ test_provider_context_formats(void)
         "{\"error\":{\"code\":\"invalid_prompt\",\"metadata\":{\"error_type\":\"cyber_policy\"}},"
         "\"error_type\":\"context_length_exceeded\"}",
         "{\"code\":\"context_length_exceeded\",\"metadata\":{\"error_type\":\"content_filter\"}}",
+        "{\"error\":{\"code\":\"misalignment_policy_violation\"}}",
+        "{\"error\":{\"code\":\"context_length_exceeded\","
+        "\"type\":\"misalignment_policy_violation\"}}",
+        "{\"error\":{\"code\":\"misalignment_policy_violation\","
+        "\"type\":\"exceed_context_size_error\"}}",
+        "{\"error\":{\"code\":\"invalid_prompt\"},"
+        "\"error_type\":\"misalignment_policy_violation\"}",
+        "{\"error\":{\"code\":\"context_length_exceeded\","
+        "\"metadata\":{\"error_type\":\"misalignment_policy_violation\"}}}",
+        "{\"response\":{\"error\":{\"code\":\"context_length_exceeded\"},"
+        "\"error_type\":\"misalignment_policy_violation\"}}",
+        "{\"code\":\"context_length_exceeded\",\"type\":\"misalignment_policy_violation\"}",
+        "{\"error_type\":\"misalignment_policy_violation\"}",
     };
     unsigned int policy_failures = 0u;
     for (size_t i = 0u; i < sizeof(policy_errors) / sizeof(policy_errors[0]); ++i) {

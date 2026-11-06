@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Exercise goal-set scheduling and independent timers through the real owner."""
 
+import json
 import os
 import re
 import signal
@@ -251,6 +252,74 @@ class MultipleControllersTests(unittest.TestCase):
         self.assertEqual(received['timer_id'], scheduled['timer_id'])
         self.send(child, '/help', '/mcp')
         self.stop(child)
+
+    def test_misalignment_error_stops_ordinary_retries_with_fallback_configured(self):
+        self.check_misalignment_stop(False)
+
+    def test_misalignment_error_pauses_goal_and_stays_stopped_after_resume(self):
+        self.check_misalignment_stop(True, resume=True)
+
+    def test_misalignment_type_pauses_goal(self):
+        self.check_misalignment_stop(True, kind='type')
+
+    def test_misalignment_metadata_pauses_goal(self):
+        self.check_misalignment_stop(True, kind='metadata')
+
+    def test_http_misalignment_error_pauses_goal(self):
+        self.check_misalignment_stop(True, http=True)
+
+    def check_misalignment_stop(self, goal, kind='code', http=False, resume=False):
+        config = self.state / 'config.ini'
+        config.write_text(config.read_text().replace('max_turn_retries=0',
+            'max_turn_retries=5\nfallback_model=fixture/fallback-model/medium:60000'))
+        code = 'misalignment_policy_violation'
+        message = ('This request was blocked by our safety systems. '
+                   'Reason: Potentially unintended activity.')
+        error = {'message': message, kind: code} if kind != 'metadata' else {
+            'message': message, 'code': 'invalid_prompt', 'metadata': {'error_type': code}}
+
+        def respond(handler, request, sequence):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                body = (json.dumps({'error': error}) if http else self.provider.event(
+                    'response.failed', {'response': {'error': error}}))
+                self.provider.reply(handler, body.encode(),
+                    'application/json' if http else 'text/event-stream',
+                    status=403 if http else 200, close_header=True)
+            else:
+                # Bound the old active-goal loop without relaxing the one-request assertion.
+                body = (self.provider.function_body(sequence, 'cleanup', 'update_goal',
+                    {'action': 'complete'}) if goal and len(self.requests) == 2 else
+                    self.provider.response_body(sequence, 'UNEXPECTED_AUTOMATIC_RECOVERY'))
+                self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        child = self.start()
+        self.send(child, '/goal Review the fixture workflow.' if goal else
+            'Review the fixture workflow.', code if kind == 'code' else message)
+        child.until(b'READY>', 10)
+        time.sleep(.75)
+        self.assertEqual(len(self.requests), 1, 'policy rejection must not retry or switch models')
+        self.assertIsNone(child.process.poll())
+        journal, events = self.events()
+        failed, = [e['data'] for e in events if e['type'] == 'response_failed']
+        self.assertTrue(failed['policy_stopped'])
+        self.assertIn(code, failed['policy'].values())
+        self.assertIn(message, failed['message'])
+        self.assertFalse(any(e['type'] in ('turn_recovery', 'turn_fallback_started',
+            'response_output_correction', 'turn_completed') for e in events))
+        if goal:
+            paused, = [e['data'] for e in events if e['type'] == 'goal_paused']
+            self.assertEqual(paused['reason'], 'provider_policy')
+        self.send(child, '/help', '/mcp')
+        self.assertEqual(len(self.requests), 1)
+        self.stop(child)
+        if resume:
+            child = self.start('--resume', journal.parent.name)
+            self.send(child, '/goal', 'paused')
+            time.sleep(.3)
+            self.assertEqual(len(self.requests), 1, 'resume must preserve the policy stop')
+            self.stop(child)
 
     def test_recurring_timer_coalesces_missed_intervals_and_can_be_cancelled(self):
         def delayed_response(request):
