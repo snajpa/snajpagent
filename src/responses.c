@@ -11,6 +11,12 @@
 
 static const char policy_types[] = "cyber_policy content_filter misalignment_policy_violation";
 
+static bool
+is_policy_type(const char *value)
+{
+    return snag_string_in(value, policy_types);
+}
+
 static int
 stream_fail(struct snag_responses_stream *stream, int code, const char *fmt, ...)
 {
@@ -40,18 +46,22 @@ record_diagnostic(struct snag_responses_stream *stream, const struct snag_sse_re
         root && json_is_object(root) ? json_object_size(root) : 0u);
 }
 
-bool
-snag_provider_failure_is_capacity(const struct snag_provider_failure *failure)
+struct snag_provider_failure_classification
+snag_provider_failure_classify(const struct snag_provider_failure *failure)
 {
-    return failure && !snag_provider_failure_is_policy(failure) &&
-           strcmp(failure->code, "context_length_exceeded") == 0;
-}
+    struct snag_provider_failure_classification result = {0};
 
-bool
-snag_provider_failure_is_policy(const struct snag_provider_failure *failure)
-{
-    return failure && (snag_string_in(failure->code, policy_types) ||
-                          snag_string_in(failure->type, policy_types));
+    if (!failure) return result;
+    result.policy = is_policy_type(failure->code) || is_policy_type(failure->type);
+    if (result.policy) {
+        result.cyber_policy = !strcmp(failure->code, "cyber_policy") ||
+                              !strcmp(failure->type, "cyber_policy");
+        result.fallback = result.cyber_policy;
+    } else {
+        result.capacity = !strcmp(failure->code, "context_length_exceeded");
+        result.fallback = true;
+    }
+    return result;
 }
 
 int
@@ -90,8 +100,7 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
         object = (json_t *)root;
     if (!json_is_object(object)) return object && !json_is_null(object) ? -1 : 0;
     const char *metadata_type = snag_json_string(json_object_get(object, "metadata"), "error_type");
-    if (!typed || (!snag_string_in(typed, policy_types) && metadata_type &&
-                      snag_string_in(metadata_type, policy_types)))
+    if (!typed || (!is_policy_type(typed) && metadata_type && is_policy_type(metadata_type)))
         typed = metadata_type;
     {
         const char *keys[] = {"code", "reason", "type"};
@@ -114,11 +123,11 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
     /* Recognized top-level error categories survive; SSE event names do not. */
     const char *category = snag_json_string(object, "type");
     if (category &&
-        (object != root || snag_string_in(category, policy_types) ||
+        (object != root || is_policy_type(category) ||
             snag_string_in(category, "exceed_context_size_error invalid_request_error"))) {
         snprintf(failure->type, sizeof(failure->type), "%s", category);
     }
-    if (typed && snag_string_in(typed, policy_types)) {
+    if (typed && is_policy_type(typed)) {
         snprintf(failure->type, sizeof(failure->type), "%s", typed);
     }
     if (snag_text_valid(message, 0u, sizeof(failure->message) - 1u))
@@ -132,7 +141,7 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
                 &failure->requested_input_tokens) < 0)
             return -1;
     /* Capacity aliases must not erase an explicit policy rejection. */
-    bool policy = snag_provider_failure_is_policy(failure);
+    bool policy = snag_provider_failure_classify(failure).policy;
     if (!policy && ((typed && !strcmp(typed, "context_length_exceeded")) ||
                        !strcmp(failure->type, "exceed_context_size_error")))
         snprintf(failure->code, sizeof(failure->code), "context_length_exceeded");
@@ -997,7 +1006,7 @@ handle_response_completed(struct snag_responses_stream *stream, const json_t *ro
         return -1;
     if (snag_provider_failure_from_json(root, &stream->provider_failure) < 0)
         return stream_fail(stream, EPROTO, "invalid response error details");
-    if (snag_provider_failure_is_capacity(&stream->provider_failure))
+    if (snag_provider_failure_classify(&stream->provider_failure).capacity)
         return stream_fail(stream, EOVERFLOW, "provider context length exceeded");
     if (parse_provider_usage(stream, response) < 0) return -1;
     output = json_object_get(response, "output");

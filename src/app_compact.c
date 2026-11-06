@@ -142,13 +142,15 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
             &app->provider_transport},
         create_request, NULL, NULL, NULL, NULL, NULL, NULL, &graph, &failure, NULL, error,
         error_size, NULL);
-    if (rc != 0 && snag_provider_failure_is_capacity(&failure)) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
+    const struct snag_provider_failure_classification classification =
+        snag_provider_failure_classify(&failure);
+    if (rc != 0 && classification.capacity) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     /* A provider that answered with an error status rejected this request; only
      * a lost body (no provider facts) is worth retrying with a smaller source. */
-    if (rc != 0 && !snag_provider_failure_is_capacity(&failure) &&
+    if (rc != 0 && !classification.capacity &&
         (failure.code[0] || failure.type[0] || failure.message[0]))
         rc = SNAG_PROVIDER_REJECTED;
-    if (rc != 0 && !failure.new_input && snag_provider_failure_is_policy(&failure))
+    if (rc != 0 && !failure.new_input && classification.policy)
         app->turn_policy_stopped = SNAG_POLICY_STOP_PROVIDER;
     if (rc != 0) goto out;
     rc = -1;

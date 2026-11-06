@@ -277,7 +277,7 @@ test_failed_snapshot_preserves_only_consistent_text(void)
         snag_sse_init(&sse, snag_responses_sse_record, &responses);
         assert(snag_sse_feed(&sse, wire.data, wire.len, error, sizeof(error)) < 0);
         assert(responses.failed && !responses.terminal && responses.retry_unsafe);
-        assert(snag_provider_failure_is_policy(&responses.provider_failure));
+        assert(snag_provider_failure_classify(&responses.provider_failure).policy);
         assert((responses.clarification_skipped[0] == '\0') == cases[i].eligible);
         const char *expected = cases[i].eligible ? cases[i].text : "hello";
         assert(emitted.text.len == strlen(expected));
@@ -1177,7 +1177,7 @@ test_structured_capacity_failure(void)
     record.data = (const unsigned char *)payload;
     record.data_len = strlen(payload);
     assert(snag_responses_sse_record(&stream, &record) < 0);
-    assert(snag_provider_failure_is_capacity(&stream.provider_failure));
+    assert(snag_provider_failure_classify(&stream.provider_failure).capacity);
     assert(strcmp(stream.provider_failure.message, "too large") == 0);
     assert(stream.provider_failure.context_limit_tokens == 272000u);
     assert(stream.provider_failure.requested_input_tokens == 300000u);
@@ -1200,7 +1200,7 @@ test_structured_capacity_failure(void)
     }
     assert(root);
     assert(snag_provider_failure_from_json(root, &failure) == 0);
-    assert(!snag_provider_failure_is_capacity(&failure));
+    assert(!snag_provider_failure_classify(&failure).capacity);
     assert(strcmp(failure.code, "rate_limit_exceeded") == 0);
     json_decref(root);
 
@@ -1214,7 +1214,7 @@ test_structured_capacity_failure(void)
     }
     assert(root);
     assert(snag_provider_failure_from_json(root, &failure) == 0);
-    assert(snag_provider_failure_is_capacity(&failure));
+    assert(snag_provider_failure_classify(&failure).capacity);
     assert(strcmp(failure.message, "top-level failure") == 0);
     assert(failure.context_limit_tokens == 42u);
     assert(json_object_set_new(root, "context_length", json_integer(42)) == 0);
@@ -1274,7 +1274,7 @@ test_provider_context_formats(void)
         json_t *root = json_loadb(cases[i].json, strlen(cases[i].json), 0, NULL);
         assert(root);
         assert(snag_provider_failure_from_json(root, &failure) == 0);
-        assert(snag_provider_failure_is_capacity(&failure) == cases[i].capacity);
+        assert(snag_provider_failure_classify(&failure).capacity == cases[i].capacity);
         assert(failure.context_limit_tokens == cases[i].limit);
         assert(failure.requested_input_tokens == cases[i].input);
         json_decref(root);
@@ -1317,8 +1317,8 @@ test_provider_context_formats(void)
         struct snag_provider_failure failure;
         json_t *root = json_loads(policy_errors[i], JSON_REJECT_DUPLICATES, NULL);
         assert(root && snag_provider_failure_from_json(root, &failure) == 0);
-        if (!snag_provider_failure_is_policy(&failure) ||
-            snag_provider_failure_is_capacity(&failure) ||
+        if (!snag_provider_failure_classify(&failure).policy ||
+            snag_provider_failure_classify(&failure).capacity ||
             failure.context_limit_tokens != (!i ? 42u : 0u) ||
             failure.requested_input_tokens != (!i ? 43u : 0u)) {
             fprintf(stderr, "policy/capacity case %zu: code=%s type=%s\n", i, failure.code,
@@ -1343,7 +1343,7 @@ test_provider_context_formats(void)
     record.data = (const unsigned char *)completed;
     record.data_len = strlen(completed);
     assert(snag_responses_sse_record(&stream, &record) < 0);
-    assert(snag_provider_failure_is_capacity(&stream.provider_failure));
+    assert(snag_provider_failure_classify(&stream.provider_failure).capacity);
     snag_responses_stream_free(&stream);
 }
 
@@ -1639,7 +1639,7 @@ test_failed_function_clarification_boundaries(void)
         snag_sse_init(&sse, snag_responses_sse_record, &responses);
         assert(snag_sse_feed(&sse, wire.data, wire.len, error, sizeof(error)) < 0);
         assert(responses.failed && !responses.terminal && responses.retry_unsafe);
-        assert(snag_provider_failure_is_policy(&responses.provider_failure));
+        assert(snag_provider_failure_classify(&responses.provider_failure).policy);
         assert((responses.clarification_skipped[0] == '\0') == (i == 0u));
         assert(snag_responses_stream_finish(&responses, &graph, error, sizeof(error)) < 0);
         assert(!graph.count && !emitted.calls);

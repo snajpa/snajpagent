@@ -472,7 +472,7 @@ request_owner(void *opaque)
             &request->graph, &failure, &request->protection, request->error, sizeof(request->error),
             &request->retries);
         if (request->outcome && request->outcome != 2 &&
-            snag_provider_failure_is_capacity(&failure)) {
+            snag_provider_failure_classify(&failure).capacity) {
             request->outcome = SNAG_PROVIDER_CONTEXT_OVERFLOW;
         }
     }

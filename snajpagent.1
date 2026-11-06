@@ -3377,9 +3377,12 @@ Use an explicit suffix, such as
 when the inherited choice does not fit the new model.
 .TP
 .BR /fallback " [SELECTOR|off] [save|s]"
-Configure an automatic fallback model for terminal
-.B cyber_policy
-errors. The selector accepts the same quoted components, numbered cache rows
+Configure an automatic fallback model used after a failed provider response.
+A
+.B content_filter
+or
+.B misalignment_policy_violation
+refusal does not switch. The selector accepts the same quoted components, numbered cache rows
 and optional
 .B :context
 suffix as model selection. Include provider/model/effort to make the choice
@@ -3398,6 +3401,11 @@ to save that default.
 .sp
 The primary model keeps its yellow clarification attempts. A terminal red
 cyber-policy failure retries only the failed API call on the configured fallback.
+Other provider failures use the same single switch. A
+.B content_filter
+or
+.B misalignment_policy_violation
+refusal remains terminal without switching.
 The next API call uses the primary model and context window, including tool-result
 continuations in the same turn and calls after resume.
 Completed tool results and retained conversation continue with the retry;

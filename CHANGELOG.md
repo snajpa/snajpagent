@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Use a configured `/fallback` after a failed provider response, including a
+  terminal `cyber_policy` rejection. `content_filter` and
+  `misalignment_policy_violation` remain terminal without switching.
+
 - Stop automatic retries after `misalignment_policy_violation`, including during
   active-goal recovery. Retain the provider diagnostic and pause active goals
   while leaving the interactive session open for inspection.

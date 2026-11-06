@@ -799,9 +799,11 @@ snag_voice_failure(
     }
     int outcome = -1;
     const char *reason = "Realtime provider reported an error; details retained in session history";
-    if (snag_provider_failure_is_policy(failure)) {
+    const struct snag_provider_failure_classification classification =
+        snag_provider_failure_classify(failure);
+    if (classification.policy) {
         reason = "Realtime provider rejected the request under its policy";
-    } else if (snag_provider_failure_is_capacity(failure)) {
+    } else if (classification.capacity) {
         reason = "Realtime provider rejected the conversation context";
         outcome = SNAG_VOICE_CAPACITY;
     } else if (snag_provider_failure_retryable(

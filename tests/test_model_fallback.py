@@ -377,6 +377,23 @@ class ModelFallbackTests(unittest.TestCase):
         self.owner.wait_event('turn_failed')
         self.assertEqual(self.models(), ['host-model'])
 
+    def test_non_policy_provider_failure_triggers_fallback(self):
+        self.command('/fallback fake/two-model/high')
+
+        def respond(handler, request, sequence):
+            if request['model'] == 'host-model':
+                return self.deny(handler, sequence, code='insufficient_quota')
+            self.provider.reply(handler,
+                                self.provider.response_body(sequence, 'fallback-finished').encode(),
+                                close_header=True)
+
+        self.provider.runtime_handler = respond
+        os.write(self.owner.initial.master, b'quota fallback fixture\r')
+        self.completed()
+        self.assertEqual(self.models(), ['host-model', 'two-model'])
+        self.assertEqual(len([event for event in self.owner.events()
+                              if event['type'] == 'turn_fallback_started']), 1)
+
     def test_exhausted_yellow_clarifications_use_fallback_once(self):
         self.command('/fallback fake/two-model/high')
 

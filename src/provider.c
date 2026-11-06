@@ -1670,7 +1670,7 @@ snag_provider_responses_count(const struct snag_provider_connection *connection,
             (status == 404 && !ctx.provider_failure.code[0]))
             *endpoint_unsupported = true;
     }
-    if (rc < 0 && snag_provider_failure_is_capacity(&ctx.provider_failure))
+    if (rc < 0 && snag_provider_failure_classify(&ctx.provider_failure).capacity)
         rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc == 0) rc = parse_count_body(&ctx, input_tokens, error, error_size);
     return provider_ctx_finish(&ctx, rc, error, error_size);
@@ -1797,9 +1797,11 @@ snag_provider_responses_compact(const struct snag_provider_connection *connectio
             &ctx, "compact request failed", error, error_size, retry_count);
     const struct snag_provider_failure *failure =
         ctx.stream.failed ? &ctx.stream.provider_failure : &ctx.provider_failure;
+    const struct snag_provider_failure_classification classification =
+        snag_provider_failure_classify(failure);
     long status = ctx.http_status ? ctx.http_status : ctx.last_http_status;
-    if (rc < 0 && snag_provider_failure_is_capacity(failure)) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
-    if (rc < 0 && status == 429 && !snag_provider_failure_is_policy(failure) &&
+    if (rc < 0 && classification.capacity) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
+    if (rc < 0 && status == 429 && !classification.policy &&
         ((!strcmp(failure->code, "proxy_overloaded") &&
              (!failure->type[0] ||
                  snag_string_in(failure->type, "rate_limit_error server_error"))) ||
@@ -1924,9 +1926,11 @@ out:
         else
             *failure = ctx.provider_failure;
         failure->output_correction = ctx.stream.output_correction;
-        if (rc < 0 && snag_provider_failure_is_policy(failure)) {
+        const struct snag_provider_failure_classification classification =
+            snag_provider_failure_classify(failure);
+        if (rc < 0 && classification.policy) {
             const char *skipped = NULL;
-            if (strcmp(failure->code, "cyber_policy") && strcmp(failure->type, "cyber_policy"))
+            if (!classification.cyber_policy)
                 skipped = "policy_type";
             else if (ctx.stream.clarification_skipped[0])
                 skipped = ctx.stream.clarification_skipped;
@@ -2237,8 +2241,9 @@ snag_provider_voice_call(const struct snag_config *config,
             redact_diagnostic(
                 &ctx.secrets, ctx.provider_failure.message, sizeof(ctx.provider_failure.message));
             if (failure) *failure = ctx.provider_failure;
-            if (!snag_provider_failure_is_policy(&ctx.provider_failure) &&
-                !snag_provider_failure_is_capacity(&ctx.provider_failure) &&
+            const struct snag_provider_failure_classification classification =
+                snag_provider_failure_classify(&ctx.provider_failure);
+            if (!classification.policy && !classification.capacity &&
                 snag_provider_failure_retryable(
                     ctx.http_status, ctx.provider_failure.code, ctx.provider_failure.type)) {
                 rc = SNAG_PROVIDER_VOICE_RETRY;

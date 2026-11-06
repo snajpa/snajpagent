@@ -2754,7 +2754,7 @@ change_fallback(struct app_state *app, const char *argument)
             sizeof(error)) < 0)
         return app_error(app, error), -1;
     if (app_textf(app, SNAG_UI_HOST, "Fallback: %s%s", value,
-            !strcmp(value, "off") ? "" : " (automatic on terminal cyber_policy errors)") < 0)
+            !strcmp(value, "off") ? "" : " (automatic after provider failure)") < 0)
         return -1;
     return save ? app_textf(app, SNAG_UI_HOST, "configuration saved: %s", app->config_path) : 0;
 }
@@ -5211,7 +5211,8 @@ record_response_failure(struct app_state *app, struct turn_retry *retry, const c
         json_decref(data);
         data = NULL;
     }
-    if (data && provider_failure && snag_provider_failure_is_policy(provider_failure) &&
+    if (data && provider_failure &&
+        snag_provider_failure_classify(provider_failure).policy &&
         snag_json_set_new(data, "policy",
             json_pack("{s:s,s:s,s:s}", "code", provider_failure->code, "type",
                 provider_failure->type, "clarification_skipped",
@@ -5240,9 +5241,11 @@ start_turn_fallback(struct app_state *app, struct turn_retry *retry, const char 
     const char *response_id, unsigned int cycle, unsigned int retry_count,
     const struct snag_provider_failure *failure, char *error, size_t error_size)
 {
+    const struct snag_provider_failure_classification classification =
+        snag_provider_failure_classify(failure);
     if (app->session.turn_fallback_active || failure->new_input || app->interrupt_requested ||
         app->input_closed || app->model_switch_requested || app->control_requested ||
-        (strcmp(failure->code, "cyber_policy") && strcmp(failure->type, "cyber_policy")) ||
+        !classification.fallback ||
         !strcmp(fallback_model(app), "off")) return 0;
     struct snag_model_selection selected = {0};
     char selection_error[256] = {0};
@@ -5254,7 +5257,7 @@ start_turn_fallback(struct app_state *app, struct turn_retry *retry, const char 
     json_t *partial = snag_app_partial_public_json(app);
     if (!partial) return -1;
     char message[256];
-    (void)snag_strcpy(message, sizeof(message), error[0] ? error : "provider cyber_policy error");
+    (void)snag_strcpy(message, sizeof(message), error[0] ? error : "provider response failed");
     if (record_response_failure(app, retry, turn_id, response_id, cycle, "provider", message,
             partial, retry_count, failure, error, error_size) < 0 ||
         commit_event(app, "turn_fallback_started",
@@ -5263,7 +5266,7 @@ start_turn_fallback(struct app_state *app, struct turn_retry *retry, const char 
                 selected.effort, "context_mode", snag_context_mode_name(selected.context.mode),
                 "context_tokens", (json_int_t)selected.context.tokens), error, error_size) < 0)
         return -1;
-    if (app_textf(app, SNAG_UI_HOST, "Fallback for this API call: %s/%s/%s (cyber_policy)",
+    if (app_textf(app, SNAG_UI_HOST, "Fallback for this API call: %s/%s/%s (automatic)",
             selected.provider->name, selected.model, selected.effort) < 0) return -1;
     return 1;
 }
@@ -6515,7 +6518,9 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 continue;
             }
         }
-        if (snag_provider_failure_is_policy(&provider_failure) &&
+        const struct snag_provider_failure_classification classification =
+            snag_provider_failure_classify(&provider_failure);
+        if (classification.policy &&
             !provider_failure.clarification_skipped[0])
             (void)snag_strcpy(provider_failure.clarification_skipped,
                 sizeof(provider_failure.clarification_skipped),
@@ -6531,8 +6536,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             }
         }
         if (provider_rc < 0 || app->stream_failed) {
-            bool capacity_failure =
-                provider_rc < 0 && snag_provider_failure_is_capacity(&provider_failure);
+            bool capacity_failure = provider_rc < 0 && classification.capacity;
             bool replay_safe = capacity_failure && !app->stream_failed &&
                                !provider_failure.new_input && app->partial_count == 0u &&
                                graph.count == 0u && !app->stream_item_seen;
@@ -6576,7 +6580,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             }
             /* Fresh queued/chat input keeps its existing failed-request handoff. */
             retry->new_input = !app->stream_failed && provider_failure.new_input;
-            if (!provider_failure.new_input && snag_provider_failure_is_policy(&provider_failure))
+            if (!provider_failure.new_input && classification.policy)
                 app->turn_policy_stopped = SNAG_POLICY_STOP_PROVIDER;
             if (!app->stream_failed && provider_failure.new_input &&
                 snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE)
@@ -6584,7 +6588,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             /* A repeated identical provider rejection would replay byte-identically:
              * stop the turn instead of burning the whole budget on it. */
             if (!provider_failure.new_input &&
-                !snag_provider_failure_is_policy(&provider_failure) && !capacity_failure &&
+                !classification.policy && !capacity_failure &&
                 !app->stream_failed && snag_goals_status(&app->session) != SNAG_GOAL_ACTIVE &&
                 provider_failure.output_correction == SNAG_OUTPUT_CORRECTION_NONE &&
                 (provider_failure.code[0] || provider_failure.type[0]) &&

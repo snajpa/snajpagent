@@ -2515,7 +2515,7 @@ test_structured_create_failures(void)
         memset(&failure, 0, sizeof(failure));
         assert(snag_provider_responses_create(&connection, request, NULL, NULL, NULL, NULL, NULL,
                    NULL, &graph, &failure, NULL, error, sizeof(error), NULL) < 0);
-        assert(snag_provider_failure_is_capacity(&failure));
+        assert(snag_provider_failure_classify(&failure).capacity);
         assert(!strstr(error, "transport-secret"));
         assert(!strstr(failure.message, "transport-secret"));
         assert(failure.context_limit_tokens ==
@@ -8160,8 +8160,8 @@ test_voice_provider_errors(void)
                 struct snag_provider_failure failure;
                 assert(snag_provider_failure_from_json(report, &failure) == 0);
                 assert(!strcmp(failure.code, code));
-                assert(snag_provider_failure_is_capacity(&failure) == !shape);
-                assert(snag_provider_failure_is_policy(&failure) == (shape >= 5u));
+                assert(snag_provider_failure_classify(&failure).capacity == !shape);
+                assert(snag_provider_failure_classify(&failure).policy == (shape >= 5u));
                 assert(snag_provider_failure_retryable(0, failure.code, failure.type) ==
                        (shape == 1u));
                 assert(failure.context_limit_tokens == (!shape ? 12345u : 0u));
@@ -8709,9 +8709,9 @@ test_native_voice_transport(void)
                     assert(rc == (retry ? SNAG_PROVIDER_VOICE_RETRY : -1));
                     assert(failure.http_status == status && !output.len);
                     assert(failure.retry_after_ms == (status && status != 403 ? 2000u : 0u));
-                    assert(snag_provider_failure_is_policy(&failure) ==
+                    assert(snag_provider_failure_classify(&failure).policy ==
                            (mode == MODEL_NATIVE_CALL_POLICY));
-                    assert(snag_provider_failure_is_capacity(&failure) ==
+                    assert(snag_provider_failure_classify(&failure).capacity ==
                            (mode == MODEL_NATIVE_CALL_CAPACITY));
                     bool counts =
                         mode == MODEL_NATIVE_CALL_POLICY || mode == MODEL_NATIVE_CALL_CAPACITY;

@@ -374,8 +374,11 @@ clarifications through `response_output_correction`. Public text is retained;
 unexecuted local calls are discarded. Hosted/unknown activity and unsupported
 failed output snapshots stop this clarification path. The original task scope
 and the provider's policy error remain intact.
-At a terminal cyber-policy failure, a configured `/fallback` selects one
-alternative for the failed API call. `response_failed` retains the public prefix
+After a terminal provider failure, a configured `/fallback` selects one
+alternative for the failed API call. A terminal `cyber_policy` rejection
+qualifies; `content_filter`, `misalignment_policy_violation` and other policy
+refusals do not.
+`response_failed` retains the public prefix
 and error provenance, then `turn_fallback_started` changes active selection and
 context without changing primary preferences. A crash between those commits
 recovers the failed primary response before choosing fallback again. Once the

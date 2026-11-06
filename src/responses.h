@@ -23,6 +23,13 @@ struct snag_provider_failure {
     uint32_t retry_after_ms;
 };
 
+struct snag_provider_failure_classification {
+    bool policy;
+    bool cyber_policy;
+    bool capacity;
+    bool fallback;
+};
+
 /* Text fragments are borrowed for the call. A NULL text with zero length closes
  * the message after its first validated completion snapshot; it adds no text. */
 typedef int (*snag_responses_emit_fn)(void *opaque, size_t output_index, enum snag_item_kind kind,
@@ -117,8 +124,8 @@ int snag_responses_sse_record(void *opaque, const struct snag_sse_record *record
 int snag_responses_stream_finish(struct snag_responses_stream *stream,
     struct snag_response_graph *graph, char *error, size_t error_size);
 const char *snag_responses_stream_error(const struct snag_responses_stream *stream);
-bool snag_provider_failure_is_capacity(const struct snag_provider_failure *failure);
-bool snag_provider_failure_is_policy(const struct snag_provider_failure *failure);
+struct snag_provider_failure_classification
+snag_provider_failure_classify(const struct snag_provider_failure *failure);
 int snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure *failure);
 
 #endif
