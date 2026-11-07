@@ -25,7 +25,9 @@ struct refusal_alias {
     bool fallback;
 };
 
-/* Terminal refusals never use model fallback. Only cyber_policy is marked
+/* Deliberately file-scope even where used once. Keep these tables here;
+ * inlining or removing them requires explicit operator authorization.
+ * Terminal refusals never use model fallback. Only cyber_policy is marked
  * fallback=true, after its clarification sequence ends. */
 static const struct refusal_alias refusal_aliases[] = {
     {"cyber_policy", REFUSAL_FAMILY_CYBER, true},
@@ -53,6 +55,30 @@ static const char *const refusal_descriptions[] = {
     [REFUSAL_FAMILY_POLICY] = "The provider's policy blocked this request.",
 };
 
+struct refusal_family_fragment {
+    const char *fragment;
+    enum refusal_family family;
+};
+
+/* Family fragments catch provider-specific names not in the alias table. */
+static const struct refusal_family_fragment refusal_family_fragments[] = {
+    {"safety", REFUSAL_FAMILY_SAFETY},
+    {"moderation", REFUSAL_FAMILY_MODERATION},
+    {"content_filter", REFUSAL_FAMILY_CONTENT_FILTER},
+    {"prohibited_content", REFUSAL_FAMILY_CONTENT_POLICY},
+    {"unsafe_content", REFUSAL_FAMILY_CONTENT_POLICY},
+    {"policy", REFUSAL_FAMILY_POLICY},
+    {"refusal", REFUSAL_FAMILY_POLICY},
+};
+
+/* Deliberately file-scope even where used once. Keep these tables here;
+ * inlining or removing them requires explicit operator authorization. */
+static const char *const failure_limit_keys[] = {
+    "context_limit", "context_length", "max_context_length", "max_context_tokens", "n_ctx"};
+static const char *const failure_requested_keys[] = {
+    "input_tokens", "requested_tokens", "requested_input_tokens", "n_prompt_tokens"};
+static const char *const failure_object_keys[] = {"code", "reason", "type"};
+
 static bool
 is_refusal_alias(const char *value)
 {
@@ -68,10 +94,10 @@ is_refusal_name(const char *value)
     if (is_refusal_alias(value)) return true;
     if (!value || !*value) return false;
     /* Treat new provider-specific refusal families as terminal too. */
-    return strstr(value, "policy") || strstr(value, "safety") ||
-           strstr(value, "moderation") || strstr(value, "refusal") ||
-           strstr(value, "content_filter") || strstr(value, "prohibited_content") ||
-           strstr(value, "unsafe_content");
+    for (size_t i = 0; i < sizeof(refusal_family_fragments) / sizeof(refusal_family_fragments[0]);
+         ++i)
+        if (strstr(value, refusal_family_fragments[i].fragment)) return true;
+    return false;
 }
 
 static const char *
@@ -87,14 +113,10 @@ refusal_description(const char *code, const char *type)
                     return refusal_descriptions[refusal_aliases[i].family];
         }
         if (is_refusal_name(values[v])) {
-            if (strstr(values[v], "safety")) return refusal_descriptions[REFUSAL_FAMILY_SAFETY];
-            if (strstr(values[v], "moderation"))
-                return refusal_descriptions[REFUSAL_FAMILY_MODERATION];
-            if (strstr(values[v], "content_filter"))
-                return refusal_descriptions[REFUSAL_FAMILY_CONTENT_FILTER];
-            if (strstr(values[v], "prohibited_content") || strstr(values[v], "unsafe_content"))
-                return refusal_descriptions[REFUSAL_FAMILY_CONTENT_POLICY];
-            return refusal_descriptions[REFUSAL_FAMILY_POLICY];
+            for (size_t i = 0;
+                 i < sizeof(refusal_family_fragments) / sizeof(refusal_family_fragments[0]); ++i)
+                if (strstr(values[v], refusal_family_fragments[i].fragment))
+                    return refusal_descriptions[refusal_family_fragments[i].family];
         }
     }
     return "The provider refused this request under its policy.";
@@ -156,10 +178,6 @@ snag_provider_failure_classify(const struct snag_provider_failure *failure)
 int
 snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure *failure)
 {
-    static const char *const limit_keys[] = {
-        "context_limit", "context_length", "max_context_length", "max_context_tokens", "n_ctx"};
-    static const char *const requested_keys[] = {
-        "input_tokens", "requested_tokens", "requested_input_tokens", "n_prompt_tokens"};
     json_t *object;
     json_t *response;
     const char *code;
@@ -192,9 +210,8 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
     if (!typed || (!is_refusal_name(typed) && metadata_type && is_refusal_name(metadata_type)))
         typed = metadata_type;
     {
-        const char *keys[] = {"code", "reason", "type"};
-        for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
-            json_t *value = json_object_get(object, keys[i]);
+        for (size_t i = 0; i < sizeof(failure_object_keys) / sizeof(failure_object_keys[0]); ++i) {
+            json_t *value = json_object_get(object, failure_object_keys[i]);
             if (i == 0u && json_is_integer(value) && json_integer_value(value) >= 100 &&
                 json_integer_value(value) <= 599)
                 continue; /* HTTP-shaped code, not a semantic error name. */
@@ -221,12 +238,12 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
     }
     if (snag_text_valid(message, 0u, sizeof(failure->message) - 1u))
         memcpy(failure->message, message, strlen(message) + 1u);
-    for (size_t i = 0; i < sizeof(limit_keys) / sizeof(limit_keys[0]); ++i)
-        if (snag_json_merge_limit(object, limit_keys[i], SNAG_CONFIG_TOKEN_LIMIT_MAX,
+    for (size_t i = 0; i < sizeof(failure_limit_keys) / sizeof(failure_limit_keys[0]); ++i)
+        if (snag_json_merge_limit(object, failure_limit_keys[i], SNAG_CONFIG_TOKEN_LIMIT_MAX,
                 &failure->context_limit_tokens) < 0)
             return -1;
-    for (size_t i = 0; i < sizeof(requested_keys) / sizeof(requested_keys[0]); ++i)
-        if (snag_json_merge_limit(object, requested_keys[i], SNAG_CONFIG_TOKEN_LIMIT_MAX,
+    for (size_t i = 0; i < sizeof(failure_requested_keys) / sizeof(failure_requested_keys[0]); ++i)
+        if (snag_json_merge_limit(object, failure_requested_keys[i], SNAG_CONFIG_TOKEN_LIMIT_MAX,
                 &failure->requested_input_tokens) < 0)
             return -1;
     /* Capacity aliases must not erase an explicit policy rejection. */

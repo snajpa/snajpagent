@@ -27,6 +27,53 @@
 #include <time.h>
 #include <unistd.h>
 
+enum limit_field {
+    LIMIT_CONTEXT,
+    LIMIT_MAX_CONTEXT,
+    LIMIT_INPUT_CONTEXT,
+    LIMIT_MAX_INPUT,
+    LIMIT_MAX_OUTPUT,
+    LIMIT_AUTO_COMPACT,
+    LIMIT_EFFECTIVE,
+    LIMIT_COUNT
+};
+
+struct limit_key {
+    enum limit_field field;
+    const char *key;
+};
+
+/* Deliberately file-scope even where used once. Keep these tables here;
+ * inlining or removing them requires explicit operator authorization. */
+static const struct limit_key limit_keys_generic[] = {{LIMIT_CONTEXT, "context_window_tokens"},
+    {LIMIT_CONTEXT, "contextWindowTokens"}, {LIMIT_CONTEXT, "context_window"},
+    {LIMIT_CONTEXT, "contextWindow"}, {LIMIT_CONTEXT, "context_length"},
+    {LIMIT_CONTEXT, "contextLength"}, {LIMIT_MAX_CONTEXT, "max_context_window_tokens"},
+    {LIMIT_MAX_CONTEXT, "maxContextWindowTokens"}, {LIMIT_MAX_CONTEXT, "max_context_window"},
+    {LIMIT_MAX_CONTEXT, "maxContextWindow"},
+    {LIMIT_INPUT_CONTEXT, "input_context_window_tokens"},
+    {LIMIT_INPUT_CONTEXT, "inputContextWindowTokens"},
+    {LIMIT_INPUT_CONTEXT, "input_context_window"}, {LIMIT_INPUT_CONTEXT, "inputContextWindow"},
+    {LIMIT_MAX_INPUT, "max_input_tokens"}, {LIMIT_MAX_INPUT, "maxInputTokens"},
+    {LIMIT_MAX_OUTPUT, "max_output_tokens"}, {LIMIT_MAX_OUTPUT, "maxOutputTokens"},
+    {LIMIT_AUTO_COMPACT, "auto_compact_input_tokens"},
+    {LIMIT_AUTO_COMPACT, "autoCompactInputTokens"},
+    {LIMIT_AUTO_COMPACT, "auto_compact_token_limit"},
+    {LIMIT_AUTO_COMPACT, "autoCompactTokenLimit"},
+    {LIMIT_EFFECTIVE, "effective_context_window_percent"},
+    {LIMIT_EFFECTIVE, "effectiveContextWindowPercent"}};
+static const struct limit_key limit_keys_native[] = {{LIMIT_CONTEXT, "context_window"},
+    {LIMIT_MAX_CONTEXT, "max_context_window"}, {LIMIT_INPUT_CONTEXT, "input_context_window"},
+    {LIMIT_MAX_INPUT, "max_input_tokens"}, {LIMIT_MAX_OUTPUT, "max_output_tokens"},
+    {LIMIT_AUTO_COMPACT, "auto_compact_token_limit"},
+    {LIMIT_EFFECTIVE, "effective_context_window_percent"}};
+static const char *const limit_output_keys[LIMIT_COUNT] = {"context_window_tokens",
+    "max_context_window_tokens", "input_context_window_tokens", "max_input_tokens",
+    "max_output_tokens", "auto_compact_input_tokens", "effective_context_window_percent"};
+static const char *const limit_nested_objects[] = {"metadata", "capabilities"};
+static const char *const audio_paths[] = {
+    "/v1/chat/completions", "/v1/audio/transcriptions", "/v1/audio/speech"};
+
 struct provider_ctx {
     struct snag_sse_parser sse;
     struct snag_responses_stream stream;
@@ -960,22 +1007,6 @@ struct codex_model_ref {
     size_t order;
 };
 
-enum limit_field {
-    LIMIT_CONTEXT,
-    LIMIT_MAX_CONTEXT,
-    LIMIT_INPUT_CONTEXT,
-    LIMIT_MAX_INPUT,
-    LIMIT_MAX_OUTPUT,
-    LIMIT_AUTO_COMPACT,
-    LIMIT_EFFECTIVE,
-    LIMIT_COUNT
-};
-
-struct limit_key {
-    enum limit_field field;
-    const char *key;
-};
-
 static int
 collect_limits(const json_t *const *objects, size_t object_count, const struct limit_key *keys,
     size_t key_count, uint64_t limits[LIMIT_COUNT])
@@ -992,53 +1023,29 @@ collect_limits(const json_t *const *objects, size_t object_count, const struct l
 static int
 build_model_limits(const json_t *source, bool codex, json_t **out)
 {
-    static const struct limit_key generic[] = {{LIMIT_CONTEXT, "context_window_tokens"},
-        {LIMIT_CONTEXT, "contextWindowTokens"}, {LIMIT_CONTEXT, "context_window"},
-        {LIMIT_CONTEXT, "contextWindow"}, {LIMIT_CONTEXT, "context_length"},
-        {LIMIT_CONTEXT, "contextLength"}, {LIMIT_MAX_CONTEXT, "max_context_window_tokens"},
-        {LIMIT_MAX_CONTEXT, "maxContextWindowTokens"}, {LIMIT_MAX_CONTEXT, "max_context_window"},
-        {LIMIT_MAX_CONTEXT, "maxContextWindow"},
-        {LIMIT_INPUT_CONTEXT, "input_context_window_tokens"},
-        {LIMIT_INPUT_CONTEXT, "inputContextWindowTokens"},
-        {LIMIT_INPUT_CONTEXT, "input_context_window"}, {LIMIT_INPUT_CONTEXT, "inputContextWindow"},
-        {LIMIT_MAX_INPUT, "max_input_tokens"}, {LIMIT_MAX_INPUT, "maxInputTokens"},
-        {LIMIT_MAX_OUTPUT, "max_output_tokens"}, {LIMIT_MAX_OUTPUT, "maxOutputTokens"},
-        {LIMIT_AUTO_COMPACT, "auto_compact_input_tokens"},
-        {LIMIT_AUTO_COMPACT, "autoCompactInputTokens"},
-        {LIMIT_AUTO_COMPACT, "auto_compact_token_limit"},
-        {LIMIT_AUTO_COMPACT, "autoCompactTokenLimit"},
-        {LIMIT_EFFECTIVE, "effective_context_window_percent"},
-        {LIMIT_EFFECTIVE, "effectiveContextWindowPercent"}};
-    static const struct limit_key native[] = {{LIMIT_CONTEXT, "context_window"},
-        {LIMIT_MAX_CONTEXT, "max_context_window"}, {LIMIT_INPUT_CONTEXT, "input_context_window"},
-        {LIMIT_MAX_INPUT, "max_input_tokens"}, {LIMIT_MAX_OUTPUT, "max_output_tokens"},
-        {LIMIT_AUTO_COMPACT, "auto_compact_token_limit"},
-        {LIMIT_EFFECTIVE, "effective_context_window_percent"}};
-    static const char *const output_keys[LIMIT_COUNT] = {"context_window_tokens",
-        "max_context_window_tokens", "input_context_window_tokens", "max_input_tokens",
-        "max_output_tokens", "auto_compact_input_tokens", "effective_context_window_percent"};
     const json_t *objects[3] = {source, NULL, NULL};
     size_t object_count = 1u;
     uint64_t limit[LIMIT_COUNT] = {0};
     json_t *limits = NULL;
 
     if (!codex) {
-        static const char *const nested[] = {"metadata", "capabilities"};
-        for (size_t i = 0; i < sizeof(nested) / sizeof(nested[0]); ++i) {
-            json_t *value = json_object_get(source, nested[i]);
+        for (size_t i = 0;
+             i < sizeof(limit_nested_objects) / sizeof(limit_nested_objects[0]); ++i) {
+            json_t *value = json_object_get(source, limit_nested_objects[i]);
             if (!value || json_is_null(value)) continue;
             if (!json_is_object(value)) goto invalid;
             objects[object_count++] = value;
         }
     }
-    if (collect_limits(objects, object_count, codex ? native : generic,
-            codex ? sizeof(native) / sizeof(native[0]) : sizeof(generic) / sizeof(generic[0]),
+    if (collect_limits(objects, object_count, codex ? limit_keys_native : limit_keys_generic,
+            codex ? sizeof(limit_keys_native) / sizeof(limit_keys_native[0])
+                  : sizeof(limit_keys_generic) / sizeof(limit_keys_generic[0]),
             limit) < 0)
         goto invalid;
     limits = json_object();
     if (!limits) goto fail;
     for (size_t i = 0u; i < LIMIT_COUNT; ++i)
-        if (snag_json_set_new(limits, output_keys[i],
+        if (snag_json_set_new(limits, limit_output_keys[i],
                 limit[i] ? json_integer((json_int_t)limit[i]) : json_null()) < 0)
             goto fail;
     if (!snag_model_limits_valid(limits)) goto invalid;
@@ -2082,8 +2089,6 @@ snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
     snag_provider_pump_fn pump, void *opaque, struct snag_buf *output, char *error,
     size_t error_size)
 {
-    static const char *const paths[] = {
-        "/v1/chat/completions", "/v1/audio/transcriptions", "/v1/audio/speech"};
     struct provider_ctx ctx;
     struct audio_upload upload = {.bytes = wav};
     curl_mime *mime = NULL;
@@ -2106,7 +2111,7 @@ snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
         20u * 1024u * 1024u, 65536u);
     ctx.audio_output = output;
     ctx.multipart = operation == SNAG_AUDIO_TRANSCRIBE;
-    if (provider_request_setup(&ctx, credential, paths[operation],
+    if (provider_request_setup(&ctx, credential, audio_paths[operation],
             operation == SNAG_AUDIO_SPEAK ? "audio/wav" : "application/json", request,
             "Audio request exceeds the byte limit", audio_write_cb, error, error_size) < 0)
         goto out;

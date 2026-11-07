@@ -7,6 +7,12 @@
 #define SNAG_PROVIDER_BACKOFF_BASE_MS 250u
 #define SNAG_PROVIDER_BACKOFF_MAX_MS 2000u
 
+/* Deliberately file-scope even where used once. Keep this table here;
+ * inlining or removing it requires explicit operator authorization. */
+static const char *const transient[] = {"server_error", "internal_server_error",
+    "service_unavailable_error", "server_is_overloaded", "rate_limit_exceeded",
+    "rate_limit_error", "slow_down"};
+
 bool
 snag_provider_http_status_retryable(long status)
 {
@@ -16,9 +22,6 @@ snag_provider_http_status_retryable(long status)
 bool
 snag_provider_failure_retryable(long status, const char *code, const char *type)
 {
-    static const char *const transient[] = {"server_error", "internal_server_error",
-        "service_unavailable_error", "server_is_overloaded", "rate_limit_exceeded",
-        "rate_limit_error", "slow_down"};
     const char *kinds[] = {code, type};
 
     if (status && !snag_provider_http_status_retryable(status)) return false;

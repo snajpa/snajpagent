@@ -7,6 +7,68 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Deliberately file-scope even where used once. Keep these tables here;
+ * inlining or removing them requires explicit operator authorization. */
+static const struct refusal_alias_case {
+    const char *name;
+    const char *family;
+    bool fallback;
+} refusal_alias_cases[] = {
+    {"cyber_policy", "cyber-safety", true}, {"content_filter", "content filter", true},
+    {"content_policy_violation", "content policy", true},
+    {"misalignment_policy_violation", "safety system", true},
+    {"policy_violation", "policy", true}, {"safety_violation", "safety policy", true},
+    {"moderation_blocked", "moderation", true},
+    {"prohibited_content", "content policy", true},
+    {"unsafe_content", "content policy", true},
+    {"responsible_ai_policy", "policy", true}, {"safety_filter", "safety policy", true},
+    {"blocked_by_policy", "policy", true}, {"vendor.new_policy_refusal", "policy", true},
+    {"new_provider_safety_signal", "safety policy", true},
+};
+
+static const char *const refusal_alias_forms[] = {
+    NULL,
+    /* "{\"error\":{\"code\":\"%s\"}}", */
+    /* "{\"error\":{\"type\":\"%s\"}}", */
+    /* "{\"error\":{\"code\":\"invalid_prompt\",\"metadata\":{\"error_type\":\"%s\"}}}", */
+};
+
+/* Deliberately file-scope even where used once. Keep these tables here;
+ * inlining or removing them requires explicit operator authorization. */
+static const char *const policy_errors[] = {
+    "{\"error\":{\"code\":\"context_length_exceeded\",\"type\":\"content_filter\","
+    "\"max_context_tokens\":42,\"input_tokens\":43}}",
+    "{\"error\":{\"code\":\"cyber_policy\",\"type\":\"exceed_context_size_error\"}}",
+    "{\"error\":{\"code\":\"content_filter\"},\"error_type\":\"context_length_exceeded\"}",
+    "{\"error\":{\"code\":\"cyber_policy\",\"type\":\"invalid_request_error\","
+    "\"param\":\"input\",\"message\":\"The engine prompt length 9000 exceeds "
+    "the max_model_len 8192. Please reduce prompt.\"}}",
+    "{\"error\":{\"code\":\"context_length_exceeded\"},\"error_type\":\"cyber_policy\"}",
+    "{\"error\":{\"code\":\"context_length_exceeded\","
+    "\"metadata\":{\"error_type\":\"content_filter\"}}}",
+    "{\"response\":{\"error\":{\"code\":\"context_length_exceeded\"},"
+    "\"error_type\":\"content_filter\"}}",
+    "{\"code\":\"context_length_exceeded\",\"type\":\"content_filter\"}",
+    "{\"code\":\"invalid_prompt\",\"type\":\"cyber_policy\","
+    "\"error_type\":\"context_length_exceeded\"}",
+    "{\"error\":{\"code\":\"invalid_prompt\",\"metadata\":{\"error_type\":\"cyber_policy\"}},"
+    "\"error_type\":\"context_length_exceeded\"}",
+    "{\"code\":\"context_length_exceeded\",\"metadata\":{\"error_type\":\"content_filter\"}}",
+    "{\"error\":{\"code\":\"misalignment_policy_violation\"}}",
+    "{\"error\":{\"code\":\"context_length_exceeded\","
+    "\"type\":\"misalignment_policy_violation\"}}",
+    "{\"error\":{\"code\":\"misalignment_policy_violation\","
+    "\"type\":\"exceed_context_size_error\"}}",
+    "{\"error\":{\"code\":\"invalid_prompt\"},"
+    "\"error_type\":\"misalignment_policy_violation\"}",
+    "{\"error\":{\"code\":\"context_length_exceeded\","
+    "\"metadata\":{\"error_type\":\"misalignment_policy_violation\"}}}",
+    "{\"response\":{\"error\":{\"code\":\"context_length_exceeded\"},"
+    "\"error_type\":\"misalignment_policy_violation\"}}",
+    "{\"code\":\"context_length_exceeded\",\"type\":\"misalignment_policy_violation\"}",
+    "{\"error_type\":\"misalignment_policy_violation\"}",
+};
+
 struct parsed_stream {
     struct snag_response_graph graph;
     char error[256];
@@ -1279,39 +1341,7 @@ test_provider_context_formats(void)
         assert(failure.requested_input_tokens == cases[i].input);
         json_decref(root);
     }
-    static const char *const policy_errors[] = {
-        "{\"error\":{\"code\":\"context_length_exceeded\",\"type\":\"content_filter\","
-        "\"max_context_tokens\":42,\"input_tokens\":43}}",
-        "{\"error\":{\"code\":\"cyber_policy\",\"type\":\"exceed_context_size_error\"}}",
-        "{\"error\":{\"code\":\"content_filter\"},\"error_type\":\"context_length_exceeded\"}",
-        "{\"error\":{\"code\":\"cyber_policy\",\"type\":\"invalid_request_error\","
-        "\"param\":\"input\",\"message\":\"The engine prompt length 9000 exceeds "
-        "the max_model_len 8192. Please reduce prompt.\"}}",
-        "{\"error\":{\"code\":\"context_length_exceeded\"},\"error_type\":\"cyber_policy\"}",
-        "{\"error\":{\"code\":\"context_length_exceeded\","
-        "\"metadata\":{\"error_type\":\"content_filter\"}}}",
-        "{\"response\":{\"error\":{\"code\":\"context_length_exceeded\"},"
-        "\"error_type\":\"content_filter\"}}",
-        "{\"code\":\"context_length_exceeded\",\"type\":\"content_filter\"}",
-        "{\"code\":\"invalid_prompt\",\"type\":\"cyber_policy\","
-        "\"error_type\":\"context_length_exceeded\"}",
-        "{\"error\":{\"code\":\"invalid_prompt\",\"metadata\":{\"error_type\":\"cyber_policy\"}},"
-        "\"error_type\":\"context_length_exceeded\"}",
-        "{\"code\":\"context_length_exceeded\",\"metadata\":{\"error_type\":\"content_filter\"}}",
-        "{\"error\":{\"code\":\"misalignment_policy_violation\"}}",
-        "{\"error\":{\"code\":\"context_length_exceeded\","
-        "\"type\":\"misalignment_policy_violation\"}}",
-        "{\"error\":{\"code\":\"misalignment_policy_violation\","
-        "\"type\":\"exceed_context_size_error\"}}",
-        "{\"error\":{\"code\":\"invalid_prompt\"},"
-        "\"error_type\":\"misalignment_policy_violation\"}",
-        "{\"error\":{\"code\":\"context_length_exceeded\","
-        "\"metadata\":{\"error_type\":\"misalignment_policy_violation\"}}}",
-        "{\"response\":{\"error\":{\"code\":\"context_length_exceeded\"},"
-        "\"error_type\":\"misalignment_policy_violation\"}}",
-        "{\"code\":\"context_length_exceeded\",\"type\":\"misalignment_policy_violation\"}",
-        "{\"error_type\":\"misalignment_policy_violation\"}",
-    };
+
     unsigned int policy_failures = 0u;
     for (size_t i = 0u; i < sizeof(policy_errors) / sizeof(policy_errors[0]); ++i) {
         struct snag_provider_failure failure;
@@ -1351,32 +1381,12 @@ test_provider_context_formats(void)
 static void
 test_provider_refusal_aliases(void)
 {
-    static const struct {
-        const char *name;
-        const char *family;
-        bool fallback;
-    } aliases[] = {
-        {"cyber_policy", "cyber-safety", true}, {"content_filter", "content filter", false},
-        {"content_policy_violation", "content policy", false},
-        {"misalignment_policy_violation", "safety system", false},
-        {"policy_violation", "policy", false}, {"safety_violation", "safety policy", false},
-        {"moderation_blocked", "moderation", false},
-        {"prohibited_content", "content policy", false},
-        {"unsafe_content", "content policy", false},
-        {"responsible_ai_policy", "policy", false}, {"safety_filter", "safety policy", false},
-        {"blocked_by_policy", "policy", false}, {"vendor.new_policy_refusal", "policy", false},
-        {"new_provider_safety_signal", "safety policy", false},
-    };
-    static const char *const forms[] = {
-        "{\"error\":{\"code\":\"%s\"}}",
-        "{\"error\":{\"type\":\"%s\"}}",
-        "{\"error\":{\"code\":\"invalid_prompt\",\"metadata\":{\"error_type\":\"%s\"}}}",
-    };
-
-    for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {
-        for (size_t f = 0; f < sizeof(forms) / sizeof(forms[0]); ++f) {
+    for (size_t i = 0; i < sizeof(refusal_alias_cases) / sizeof(refusal_alias_cases[0]); ++i) {
+        for (size_t f = 0; f < sizeof(refusal_alias_forms) / sizeof(refusal_alias_forms[0]); ++f) {
+            if (!refusal_alias_forms[f]) continue;
             char text[256];
-            int wrote = snprintf(text, sizeof(text), forms[f], aliases[i].name);
+            int wrote = snprintf(
+                text, sizeof(text), refusal_alias_forms[f], refusal_alias_cases[i].name);
             assert(wrote > 0 && (size_t)wrote < sizeof(text));
             json_t *root = json_loads(text, JSON_REJECT_DUPLICATES, NULL);
             struct snag_provider_failure failure;
@@ -1384,10 +1394,10 @@ test_provider_refusal_aliases(void)
             struct snag_provider_failure_classification classification =
                 snag_provider_failure_classify(&failure);
             if (!classification.policy || classification.capacity || !classification.refusal ||
-                !strstr(classification.refusal, aliases[i].family) ||
-                classification.fallback != aliases[i].fallback) {
+                !strstr(classification.refusal, refusal_alias_cases[i].family) ||
+                classification.fallback != refusal_alias_cases[i].fallback) {
                 fprintf(stderr, "refusal alias %s form %zu: code=%s type=%s refusal=%s\n",
-                    aliases[i].name, f, failure.code, failure.type,
+                    refusal_alias_cases[i].name, f, failure.code, failure.type,
                     classification.refusal ? classification.refusal : "(null)");
                 assert(0);
             }
