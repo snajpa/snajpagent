@@ -701,7 +701,7 @@ class RuntimeSkills(SkillsCase):
         self.assertIn("read-only", json.dumps(requests[1]["input"]))
         self.assertFalse(marker.exists())
 
-    def test_dependencies_use_actual_mcp_state_with_actual_authentication(self):
+    def test_dependencies_follow_direct_dispatch_and_actual_authentication(self):
         import sys
         from unittest.mock import patch
         with patch.object(sys, "argv", [sys.argv[0]]):
@@ -733,8 +733,8 @@ class RuntimeSkills(SkillsCase):
             elif len(requests) == 2:
                 tools = [item for item in request["tools"] if item.get("name", "").startswith("mcp_")]
                 self.assertEqual(len(tools), 1)
-                body = provider.function_body(sequence, "unauthorized-effect", tools[0]["name"],
-                    {"destination": "channel-42", "message": "must not send"})
+                body = provider.function_body(sequence, "dependency-effect", tools[0]["name"],
+                    {"destination": "channel-42", "message": "enabled dependency call"})
             else:
                 body = provider.response_body(sequence, "MCP boundary observed")
             provider.reply(handler, body.encode(), close_header=True)
@@ -746,11 +746,18 @@ class RuntimeSkills(SkillsCase):
         receipt = json.loads(outputs[-1])
         self.assertEqual([item["state"] for item in receipt["dependencies"]],
             ["available", "unauthorized", "missing", "endpoint_mismatch", "unsupported"])
-        self.assertIn("requires exact operator approval", json.dumps(requests[2]["input"]))
+        self.assertEqual(len(requests), 3)
+        self.assertIn("server_accepted", json.dumps(requests[2]["input"]))
+        self.assertNotIn("requires exact operator approval", json.dumps(requests[2]["input"]))
         from tmux_terminal import event_list
         result = event_list(self.runtime_events(), "tool_finished")[-1]["data"]["result"]
-        self.assertEqual(result["reason"], "mcp_approval_required")
-        self.assertEqual(available.calls, [])
+        self.assertEqual(result["status"], "succeeded")
+        call_receipt = json.loads(result["model_text"])
+        self.assertEqual(call_receipt["server"], "available")
+        self.assertEqual(call_receipt["tool"], "send.message")
+        self.assertEqual(call_receipt["status"], "server_accepted")
+        self.assertEqual([call["arguments"] for call in available.calls],
+            [{"destination": "channel-42", "message": "enabled dependency call"}])
         self.assertEqual(locked.calls, [])
         self.assertEqual(locked.tokens, [])
 
