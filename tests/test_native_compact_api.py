@@ -127,7 +127,7 @@ def check(binary):
                 text = text.replace("exact_token_count=false", "exact_token_count=true")
             config.write_text(text)
             config.chmod(0o600)
-            env = {**os.environ, "HOME": str(root), "NO_PROXY": "127.0.0.1",
+            env = {**os.environ, "PAGER": "", "HOME": str(root), "NO_PROXY": "127.0.0.1",
                    "no_proxy": "127.0.0.1", "SNAJPAGENT_DOTDIR": str(state)}
             env.pop("OPENAI_API_KEY", None)
             prefix = [str(binary), "--dotdir", str(state), "--config", str(config), "-m", "fixture/gpt-fixture"]
@@ -264,7 +264,7 @@ def check_smaller_model_rate_limit(binary, code="proxy_overloaded"):
             "[model-limit fixture/other-model]\nmax_input_tokens=50000\n"
             "[ui]\ncolor=never\n")
         config.chmod(0o600)
-        env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+        env = {**os.environ, "PAGER": "", "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
                "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1", "OPENAI_API_KEY": None}
         prefix = [str(binary), "--dotdir", str(state), "--config", str(config)]
         child = RemoteProcess(root, prefix, wrapped=None, extra_env=env, winsize=(24, 180))
@@ -358,7 +358,7 @@ def check_context_limits(binary):
                               "connect_timeout_ms=2000\nrequest_timeout_ms=5000\nidle_timeout_ms=3000\n"
                               "[ui]\ncolor=never\n")
             config.chmod(0o600)
-            env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+            env = {**os.environ, "PAGER": "", "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
                    "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1", "OPENAI_API_KEY": None}
             prefix = [str(binary), "--dotdir", str(state), "--config", str(config),
                       "-m", "fixture/gpt-fixture"]
@@ -424,7 +424,7 @@ def check_catalog_refresh(binary):
                           'api_key="fixture-secret"\nexact_token_count=false\nnative_compaction=true\n'
                           "[ui]\ncolor=never\n")
         config.chmod(0o600)
-        env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+        env = {**os.environ, "PAGER": "", "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
                "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1", "OPENAI_API_KEY": None}
         prefix = [str(binary), "--dotdir", str(state), "--config", str(config)]
         child = RemoteProcess(root, prefix, wrapped=None, extra_env=env, winsize=(24, 180))
@@ -496,7 +496,7 @@ def check_default_context_advice(binary):
             "[model-limit fixture/gpt-fixture]\ncontext_window_tokens=500000\n"
             "[ui]\ncolor=never\n")
         config.chmod(0o600)
-        env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+        env = {**os.environ, "PAGER": "", "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
                "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1", "OPENAI_API_KEY": None}
         child = RemoteProcess(root, [str(binary), "--dotdir", str(state), "--config", str(config)],
                               wrapped=None, extra_env=env, winsize=(24, 180))
@@ -542,7 +542,7 @@ def check_local_compact_bounds(binary):
                           "native_compaction=true\nauto_compact_input_tokens=0\n"
                           "[ui]\ncolor=never\nresume_history_turns=0\n")
         config.chmod(0o600)
-        env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+        env = {**os.environ, "PAGER": "", "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
                "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
         env.pop("OPENAI_API_KEY", None)
         prefix = [str(binary), "--dotdir", str(state), "--config", str(config)]
@@ -620,7 +620,7 @@ def check_compact_byte_ratios(binary, mode, exact=True):
                           "[model-limit fixture/gpt-fixture]\nmax_input_tokens=100000\n"
                           "[ui]\ncolor=never\n")
         config.chmod(0o600)
-        env = {**os.environ, "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
+        env = {**os.environ, "PAGER": "", "HOME": str(root), "SNAJPAGENT_DOTDIR": str(state),
                "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
         env.pop("OPENAI_API_KEY", None)
         prefix = [str(binary), "--dotdir", str(state), "--config", str(config)]
@@ -700,7 +700,7 @@ def check_post_turn_usage(binary):
                                       "[model-limit fixture/gpt-fixture]\nmax_input_tokens=10000\n"
                                       "[ui]\ncolor=never\n")
                     config.chmod(0o600)
-                    env = {**os.environ, "HOME": str(case), "SNAJPAGENT_DOTDIR": str(state),
+                    env = {**os.environ, "PAGER": "", "HOME": str(case), "SNAJPAGENT_DOTDIR": str(state),
                            "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
                     env.pop("OPENAI_API_KEY", None)
                     server.requests.clear()
