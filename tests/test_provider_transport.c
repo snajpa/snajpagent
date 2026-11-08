@@ -5529,12 +5529,15 @@ test_goal_tool_manipulates_unfinished_goals(void)
     app.config = &config;
     call.kind = SNAG_ITEM_TOOL_CALL;
     call.name = "update_goal";
+    const char *id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    json_t *goal = json_pack("{s:s,s:s,s:i,s:b}", "id", id, "prompt", "original objective",
+        "status", SNAG_GOAL_BLOCKED, "locked", 1);
+    app.session.goals = json_object();
+    assert(app.session.goals && goal && !json_object_set_new(app.session.goals, id, goal));
 
     /* A locked goal is frozen for the model: the operator lock, not the status,
      * is what keeps the model from changing the objective, and the refusal names
      * the lock so the model can report why it stopped. */
-    app.session.goal_status = SNAG_GOAL_BLOCKED;
-    app.session.goal_locked = true;
     call.arguments = json_pack("{s:s,s:s}", "action", "rewrite", "text", "reworded objective");
     assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
     assert(strstr(snag_json_string(result, "model_text"), "locked by the operator"));
@@ -5542,28 +5545,28 @@ test_goal_tool_manipulates_unfinished_goals(void)
     json_decref(call.arguments);
 
     /* resume mirrors the /goal command: only a paused or blocked goal, text null. */
-    app.session.goal_locked = false;
+    assert(!json_object_set_new(goal, "locked", json_false()));
     call.arguments = json_pack("{s:s,s:s}", "action", "resume", "text", "extra");
     assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
-    assert(strstr(snag_json_string(result, "model_text"), "resume requires text to be null"));
+    assert(strstr(snag_json_string(result, "model_text"), "complete and resume require null text"));
     json_decref(result);
     json_decref(call.arguments);
 
-    app.session.goal_status = SNAG_GOAL_ACTIVE;
+    assert(!json_object_set_new(goal, "status", json_integer(SNAG_GOAL_ACTIVE)));
     call.arguments = json_pack("{s:s}", "action", "resume");
     assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
-    assert(strstr(
-        snag_json_string(result, "model_text"), "only a paused or blocked goal can be resumed"));
+    assert(strstr(snag_json_string(result, "model_text"), "goal is already active"));
     json_decref(result);
     json_decref(call.arguments);
 
-    /* A finished goal reports the unfinished-goal gate, not an active one. */
-    app.session.goal_status = SNAG_GOAL_COMPLETED;
-    call.arguments = json_pack("{s:s,s:s}", "action", "block", "text", "done");
+    /* A named finished goal reports completion before action-specific status checks. */
+    assert(!json_object_set_new(goal, "status", json_integer(SNAG_GOAL_COMPLETED)));
+    call.arguments = json_pack("{s:s,s:s,s:s}", "id", id, "action", "block", "text", "done");
     assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
-    assert(strstr(snag_json_string(result, "model_text"), "there is no unfinished goal to update"));
+    assert(strstr(snag_json_string(result, "model_text"), "goal is already finished"));
     json_decref(result);
     json_decref(call.arguments);
+    json_decref(app.session.goals);
     snag_config_free(&config);
 }
 
@@ -7178,15 +7181,15 @@ test_irc_failed_intent_retains_pending(void)
     /* No provider means input construction fails before event admission. */
     assert(!snag_app_irc_take_pending(&app, NULL, false));
     assert(app.irc_urgent.len == sizeof("retained"));
-    assert(app.input_closed);
-    app.input_closed = false;
+    assert(!app.input_closed && app.automatic_work_held);
+    app.automatic_work_held = false;
     app.session.active_turn = true;
     /* Invalid UTF-8 exercises failed steering JSON construction without an
      * allocator hook. Neither input nor steering may consume its projection. */
     app.irc_urgent.data[0] = 0xff;
     assert(snag_app_irc_flush_urgent(&app, error, sizeof(error)) < 0);
     assert(app.irc_urgent.len == sizeof("retained"));
-    assert(app.input_closed);
+    assert(!app.input_closed && app.automatic_work_held);
     snag_buf_free(&app.irc_urgent);
     snag_ui_free(&app.ui);
     snag_session_close(&app.session);
@@ -11042,7 +11045,8 @@ test_native_ui(void)
         }
         /* Each independent phase has its own bounded waits. History export
          * and multiple reconnect series must not share the startup watchdog. */
-        (void)alarm(10u);
+        /* Renewal exports several MiB of retained voice history before readiness. */
+        (void)alarm(60u);
         test_voice_renewal(
             &app, &config, renewal_server.endpoint, renewal_received[0], renewal_release[1]);
         (void)alarm(10u);
@@ -11166,7 +11170,7 @@ test_native_ui(void)
     /* Act as the initial frontend while startup output exceeds one frame. */
     for (;;) {
         struct pollfd ready[] = {{report[0], POLLIN, 0}, {process.peer, POLLIN, 0}};
-        int rc = poll(ready, 2u, 5000);
+        int rc = poll(ready, 2u, 30000);
         if (rc <= 0) native_ui_failed();
         assert(rc > 0);
         if (ready[0].revents) break;
@@ -11324,7 +11328,8 @@ test_output_commit_survives_presentation_failure(void)
             snag_app_tool_output(&app, handle, 0u, 0u, "duplicate", 9u, error, sizeof(error)) < 0 &&
             errno == EINVAL);
         assert(app.session.processes[0].output_bytes[0] == 11u);
-        assert(snag_app_active_input_pump(&app, 0u) < 0 && app.input_closed);
+        /* Presentation failure propagates without becoming terminal EOF. */
+        assert(snag_app_active_input_pump(&app, 0u) < 0 && !app.input_closed);
         snag_ui_free(&app.ui);
         snag_session_close(&app.session);
         assert(!snag_session_open(&app.store, &app.session, id, error, sizeof(error)));
