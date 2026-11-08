@@ -22,15 +22,14 @@ static const struct refusal_alias_case {
     {"prohibited_content", "content policy", true},
     {"unsafe_content", "content policy", true},
     {"responsible_ai_policy", "policy", true}, {"safety_filter", "safety policy", true},
-    {"blocked_by_policy", "policy", true}, {"vendor.new_policy_refusal", "policy", true},
-    {"new_provider_safety_signal", "safety policy", true},
+    {"blocked_by_policy", "policy", true}, {"vendor.new_policy_refusal", "policy", false},
+    {"new_provider_safety_signal", "safety policy", false},
 };
 
 static const char *const refusal_alias_forms[] = {
-    NULL,
-    /* "{\"error\":{\"code\":\"%s\"}}", */
-    /* "{\"error\":{\"type\":\"%s\"}}", */
-    /* "{\"error\":{\"code\":\"invalid_prompt\",\"metadata\":{\"error_type\":\"%s\"}}}", */
+    "{\"error\":{\"code\":\"%s\"}}",
+    "{\"error\":{\"type\":\"%s\"}}",
+    "{\"error\":{\"code\":\"invalid_prompt\",\"metadata\":{\"error_type\":\"%s\"}}}",
 };
 
 /* Deliberately file-scope even where used once. Keep these tables here;
@@ -1383,7 +1382,6 @@ test_provider_refusal_aliases(void)
 {
     for (size_t i = 0; i < sizeof(refusal_alias_cases) / sizeof(refusal_alias_cases[0]); ++i) {
         for (size_t f = 0; f < sizeof(refusal_alias_forms) / sizeof(refusal_alias_forms[0]); ++f) {
-            if (!refusal_alias_forms[f]) continue;
             char text[256];
             int wrote = snprintf(
                 text, sizeof(text), refusal_alias_forms[f], refusal_alias_cases[i].name);

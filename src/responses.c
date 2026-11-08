@@ -27,8 +27,8 @@ struct refusal_alias {
 
 /* Deliberately file-scope even where used once. Keep these tables here;
  * inlining or removing them requires explicit operator authorization.
- * Terminal refusals never use model fallback. Only cyber_policy is marked
- * fallback=true, after its clarification sequence ends. */
+ * Named aliases permit configured single-call fallback. Other policy-family
+ * names stay terminal; cyber_policy clarification runs before fallback. */
 static const struct refusal_alias refusal_aliases[] = {
     {"cyber_policy", REFUSAL_FAMILY_CYBER, true},
     {"content_filter", REFUSAL_FAMILY_CONTENT_FILTER, true},

@@ -253,29 +253,36 @@ class MultipleControllersTests(unittest.TestCase):
         self.send(child, '/help', '/mcp')
         self.stop(child)
 
-    def test_misalignment_error_stops_ordinary_retries_with_fallback_configured(self):
-        self.check_misalignment_stop(False)
+    def test_unknown_policy_error_stops_ordinary_retries_with_fallback_configured(self):
+        self.check_policy_stop(False, code='new_provider_safety_signal',
+                                     fallback=True, family='safety policy')
+
+    def test_unknown_policy_error_pauses_goal_with_fallback_configured(self):
+        self.check_policy_stop(True, code='new_provider_safety_signal',
+                                     fallback=True, family='safety policy', resume=True)
 
     def test_misalignment_error_pauses_goal_and_stays_stopped_after_resume(self):
-        self.check_misalignment_stop(True, resume=True)
+        self.check_policy_stop(True, resume=True)
 
     def test_misalignment_type_pauses_goal(self):
-        self.check_misalignment_stop(True, kind='type')
+        self.check_policy_stop(True, kind='type')
 
     def test_misalignment_metadata_pauses_goal(self):
-        self.check_misalignment_stop(True, kind='metadata')
+        self.check_policy_stop(True, kind='metadata')
 
     def test_http_misalignment_error_pauses_goal(self):
-        self.check_misalignment_stop(True, http=True)
+        self.check_policy_stop(True, http=True)
 
     def test_content_policy_error_pauses_goal(self):
-        self.check_misalignment_stop(True, code='content_policy_violation')
+        self.check_policy_stop(True, code='content_policy_violation', family='content policy')
 
-    def check_misalignment_stop(self, goal, kind='code', http=False, resume=False,
-                                code='misalignment_policy_violation'):
+    def check_policy_stop(self, goal, kind='code', http=False, resume=False,
+                                code='misalignment_policy_violation', fallback=False,
+                                family='safety system'):
         config = self.state / 'config.ini'
+        model = 'fixture/fallback-model/medium:60000' if fallback else 'off'
         config.write_text(config.read_text().replace('max_turn_retries=0',
-            'max_turn_retries=5\nfallback_model=fixture/fallback-model/medium:60000'))
+            f'max_turn_retries=5\nfallback_model={model}'))
         message = ('This request was blocked by our safety systems. '
                    'Reason: Potentially unintended activity.')
         error = {'message': message, kind: code} if kind != 'metadata' else {
@@ -310,8 +317,7 @@ class MultipleControllersTests(unittest.TestCase):
         self.assertIn(code, failed['policy'].values())
         self.assertIn(message, failed['message'])
         self.assertIn('not retried or sent to another model', failed['message'])
-        self.assertIn('content policy' if code == 'content_policy_violation' else 'safety system',
-                      failed['message'])
+        self.assertIn(family, failed['message'])
         self.assertFalse(any(e['type'] in ('turn_recovery', 'turn_fallback_started',
             'response_output_correction', 'turn_completed') for e in events))
         if goal:

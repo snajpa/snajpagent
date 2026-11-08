@@ -12,20 +12,10 @@ import unittest
 import test_session_view as session
 
 
-# Refusals that must never use model fallback. cyber_policy is intentionally
-# absent: it has its own clarification path and terminal fallback.
+# Provider-specific refusal families remain terminal with fallback configured.
 TERMINAL_REFUSALS = (
-#    ('content_filter', 'content filter'),
-#    ('content_policy_violation', 'content policy'),
-#    ('policy_violation', 'policy'),
-#    ('safety_violation', 'safety policy'),
-#    ('moderation_blocked', 'moderation'),
-#    ('misalignment_policy_violation', 'safety system'),
-#    ('prohibited_content', 'content policy'),
-#    ('unsafe_content', 'content policy'),
-#    ('responsible_ai_policy', 'policy'),
-#    ('safety_filter', 'safety policy'),
-#    ('blocked_by_policy', 'policy'),
+    ('vendor.new_policy_refusal', 'policy'),
+    ('new_provider_safety_signal', 'safety policy'),
 )
 
 
@@ -391,6 +381,24 @@ class ModelFallbackTests(unittest.TestCase):
         self.assertEqual(self.models(), ['host-model', 'two-model'])
         self.assertEqual(len([e for e in self.owner.events()
                               if e['type'] == 'turn_fallback_started']), 1)
+
+    def test_named_policy_failure_uses_configured_fallback(self):
+        self.command('/fallback fake/two-model/high')
+
+        def respond(handler, request, sequence):
+            if request['model'] == 'host-model':
+                return refuse(self.provider, handler, sequence, 'content_policy_violation')
+            self.provider.reply(handler,
+                                self.provider.response_body(sequence, 'fallback-finished').encode(),
+                                close_header=True)
+
+        self.provider.runtime_handler = respond
+        os.write(self.owner.initial.master, b'review the fixture workflow\r')
+        self.completed()
+        self.assertEqual(self.models(), ['host-model', 'two-model'])
+        self.assertEqual(len([event for event in self.owner.events()
+                              if event['type'] == 'turn_fallback_started']), 1)
+        self.assertFalse(any(event['type'] == 'tool_started' for event in self.owner.events()))
 
     def test_non_policy_provider_failure_triggers_fallback(self):
         self.command('/fallback fake/two-model/high')
