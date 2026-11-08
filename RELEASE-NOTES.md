@@ -1,67 +1,118 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
-# snajpagent 0.99.8c — October 2, 2026
+# Unreleased
 
-This release combines terminal, session, provider and context-recovery fixes with
-voice-continuity changes. Sessions retain JSONL storage.
+Indexed native sessions, independent goals and timers, split-pane workspaces,
+project roles and skills extend the terminal workflow. Session monitoring,
+remote transfers, provider recovery and context handling have also changed.
 
-## Changes
+## Sessions and recovery
 
-- Session names, resume selection and status listings preserve live ownership and
-  saved options. Listings group sessions by status and show ten stored sessions
-  by default; `-l N` selects another count.
-- Command reports use the configured pager. Active-turn verbosity controls remain
-  responsive during blocked engine work, with immediate terminal feedback.
-  Successful reports remain available to voice observations; `/cat` contents stay
-  operator-only.
-- Native terminal attachment publishes a handover after the destination frontend
-  confirms it is bound. Input and audio activation follow that acknowledgement;
-  managed work stays with the session owner through detach and attachment changes.
-  Buffered composer edits share one repaint, preserving displayed response rows
-  when the terminal is resized during typing.
-- Context preparation retains cached request prefixes, retry notices and completed
-  tool results across compaction, recovery and model changes. Token preflight keeps
-  generation-only controls out of count requests. HTTP response streams use
-  HTTP/1.1 and preserve completed work across connection failures.
-- Voice captions accumulate transcript fragments. Voice and working-model guidance
-  distinguishes their roles: execution remains with the working model, and original
-  ASR text stays separate from derived paraphrases and approval decisions.
-  Voice intent remains enabled through work and recoverable failures, with honest
-  unavailable states. Conversational guidance supports progress, quiet and resume
-  requests while work continues.
-- POSIX command children reset inherited ignored SIGINT so managed interruption
-  works when the agent is launched in the background as well as in the foreground.
-  Parent signal settings remain unchanged.
+- New sessions use indexed native journals with paired state and provider
+  checkpoints. Resume reads the retained working set and a verified history
+  suffix. History remains available for inspection and context reconstruction.
+- `snajpagent convert --jobs N` converts stopped legacy sessions, preserves their
+  original journals and reports individual results. `snajpagent optimize` upgrades
+  stopped sessions and compresses history losslessly. Both skip running sessions.
+- Session listings cache verified metadata, keeping the session picker and
+  `snajpagent top` responsive while history changes. The monitor adds sorting,
+  field selection, saved layouts and explicit live-owner termination controls.
+- `snajpagent send SESSION_ID -- "prompt"` submits work from another shell while
+  preserving the attached terminal and draft. Receipts distinguish acceptance,
+  queuing, model-free discard and an uncertain outcome.
+- An unavailable saved working directory moves to home before model work resumes.
+  The session retains its goals, commands and an explanation of the recovery.
 
-The changelog contains the complete change list.
+## Goals, commands and project guidance
 
-## Scope and compatibility
+- Repeat `/goal TEXT` to maintain independent goals. `/goal` lists their states;
+  pause/resume can address all unfinished goals or a selected ID. Work continues
+  while any goal is active, with queued prompts taking precedence.
+- Model timers have independent IDs and support one-shot or recurring schedules.
+  Missed recurring intervals coalesce when the session resumes processing.
+- Session-owned pinned PTY jobs retain definitions and explicit resume hooks.
+  `/r` lists active calls and jobs; inspection, input and stop controls preserve
+  their identity across turns. A stopped job's resume hook is disabled.
+- `work_context` enters and leaves temporary project roles without losing the
+  broader conversation or model selection. Project and configured skills provide
+  reusable guidance; activation, replacement and unloading retain provenance.
+- `/model none` and `-m none` keep local controls and IRC available without model
+  activity. Model-bound input received in that mode is discarded.
 
-Hermetic provider, CLI, PTY and terminal fixtures exercise these paths. Device and
-operating-system runtime observations retain their recorded revisions in
-`QUALIFICATION.md`; compilation does not qualify a newer executable on that device.
-Long-session voice continuity and recovery against live providers remain
-unqualified by the fixture results.
+## Terminal and remote work
 
-Native attachment uses a new private protocol. Use a compatible executable to
-attach to an older running owner and finish or stop it deliberately. Existing
-processes keep their running code until their operators restart them.
+- `snajpagent vm` provides saved split-pane workspaces, session selection,
+  retained-history navigation, search, selection and clipboard copy. POSIX panes
+  run the ordinary terminal frontend and share the session's draft and undo
+  history. The Windows workspace retains its single-live-agent limitation.
+- Detach, attach and interactive resume preserve terminal ownership and drafts.
+  Interactive resume confirms takeover of an occupied classic terminal. Native
+  macOS attachment deadlines account for sleep without expiring the session.
+- Command reports use the configured pager while managed work and IRC continue.
+  Fenced code displays its literal contents for copying, and restored sessions
+  retain their selected view and verbosity.
+- Native workstation transfers support SSH, Mosh and focused remote tmux panes.
+  Detached downloads retain queued intent; completion requires verified transfer
+  acknowledgements. Mosh batching reduces title-channel exchanges while keeping
+  protocol frames out of ordinary input and scrollback.
+- Hosted IRC accepts up to 1,024 remote connections, subject to the process's
+  file-descriptor limit. Exact private/channel routing survives recovery;
+  `irc_sleep` and `irc_compact` control model-context admission.
 
-Production recipes enable device audio and native voice backends across the
-implemented matrix. File decoding, configured provider routes and device access
-are separate capabilities. Office rendering uses the separately installed runtime
-documented in the manual.
+## Providers and tools
+
+- Meta subscription login and direct DeepSeek V4 Pro Responses support join the
+  existing provider paths. DeepSeek reasoning continuity survives tool calls
+  and resume within its originating model and account.
+- Configured automatic fallback applies to one failed API call; subsequent calls
+  return to the primary model. Named policy-refusal codes can use that fallback;
+  other provider-specific policy families remain terminal. Without an eligible
+  configured fallback, policy rejections retain their diagnostic and pause
+  active goals.
+- Context preparation retains completed tool results and pending input across
+  compaction, model changes and recovery. Rate-limited native compaction can
+  recover a smaller-model turn through durable history.
+- Configured MCP Streamable HTTP servers expose enabled, non-denied tools for
+  direct execution with OAuth credentials. `deny_tools` withholds tools and
+  `read_only_tools` selects availability during read-only turns. Transport loss
+  after dispatch reports an unknown outcome without automatically replaying the
+  tool call. The former per-call approval queue has been removed.
+- PDF builds support the pinned Poppler API variants. macOS PDF rendering uses
+  native fonts when the implicit Fontconfig configuration is absent. Windows
+  credential inspection and reuse retain owner/ACL checks for Unicode paths.
+
+## Upgrade and compatibility
+
+Keep backups before offline conversion or optimization. Release 0.99.8c uses
+legacy JSONL storage and cannot open native sessions. Running owners retain
+loaded code until deliberately exited and resumed; use compatible executables
+for terminal attachment and workstation wrappers.
+
+Filesystem writes use kernel-managed asynchronous writeback. Successful writes
+and atomic renames are immediately visible, but abrupt failure can lose the
+newest tail. Resume restores a verified prefix; logical acknowledgements do not
+promise power-loss persistence.
+
+The current production matrix has 18 OS/architecture/ABI targets. Choose the
+exact variant and verify its SHA-256 before installation. Experimental platforms
+retain their labels and recorded runtime-qualification limits. macOS downloads
+are not Developer ID signed or notarized; the manual describes the per-file
+quarantine exception for a verified executable. Office rendering requires a
+separately installed compatible LibreOffice runtime.
+
+The changelog contains the complete change list. `QUALIFICATION.md` records
+runtime and fixture scope; building an executable does not establish runtime
+qualification on every supported operating system. Physical audio devices,
+live-provider behavior and legacy operating systems retain their separately
+recorded testing boundaries.
 
 ## Downloads and updates
 
-The release includes the complete implemented `PROD_TARGETS` matrix, matching
-symbols, manual, application and dependency sources, notices and `SHA256SUMS`.
-Select the exact OS, architecture and ABI, then verify its checksum before
-installation. Experimental platforms retain their qualification labels. macOS
-builds retain the documented per-file quarantine exception for a verified download.
+Release companions include matching symbols, the manual, application and
+required dependency sources, licensing notices and `SHA256SUMS`. Executables
+run independently of their symbol files.
 
-Official stable builds use `latest` and default automatic updates to on. Updating
-replaces the executable for the next launch; it does not replace running processes.
-Git-suffixed development builds use `latest-dev` and default automatic updates to
-off. Older releases and their immutable assets remain available under their
-original GitHub tags.
+Official stable builds use `latest` and default automatic updates to on. An
+update replaces the executable for its next launch; existing processes retain
+their loaded code. Git-suffixed development builds use `latest-dev` and default
+updates to off. Previously published tags and asset bytes remain immutable.

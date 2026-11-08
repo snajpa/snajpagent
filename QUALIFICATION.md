@@ -2,6 +2,25 @@
 
 # Qualification ledger
 
+## 0.99.9 native regression scope
+
+Release preparation uses a native Linux x86_64 executable with workspace VM,
+audio/video file decoding and PDF support. Device audio, RTC and Office are
+disabled in this test build. The fixtures use loopback providers, real child
+processes and terminal/IRC connections to exercise storage, command ownership,
+recovery, transfers and user controls. Native-context owner-frame integration
+is skipped because the required device/RTC capabilities are absent.
+
+The native fixture gate passes across the complete check recipe, combining
+retained native runs with focused reruns of repaired fixtures. Capability skips
+remain outside the passing scope.
+
+These checks cover the native test executable and its enabled features.
+Physical audio devices, live providers, native Windows desktop rendering and
+execution of each production binary on its target OS have separate scope.
+The platform and feature records below retain their original build and runtime
+coverage; production cross-compilation supplies build evidence for each target.
+
 ## Mosh transfer batching and paste demultiplexing
 
 The permanent remote-terminal fixture transfers a 4 KiB incompressible file

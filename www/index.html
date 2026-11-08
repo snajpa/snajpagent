@@ -37,8 +37,8 @@
       <p>Start <code>snajpagent</code> and describe the task. Sessions start at home;
         the model manages its working directory. Local tools read/edit files and
         run commands with your OS permissions, without per-call approval.
-        Tool details start hidden; show them when useful. Current-source MCP adds
-        configured Streamable HTTP tools with OAuth and exact call approvals.
+        Tool details start hidden. Configured MCP servers add Streamable HTTP
+        tools with OAuth; enabled tools execute directly.
         See the <a href="manual.html#Native_MCP">MCP reference</a> for setup and recovery.</p>
       <figure>
         <a href="screenshots/ordinary.png">
@@ -52,20 +52,20 @@
         stay alive; the model can let them finish or stop them. A submitted
         correction stays visible in rollout even when the next prompt is
         blocked.</p>
-      <p>With current source, a reply while commands are running waits for your
+      <p>A reply while commands are running waits for your
         input or command completion. Output keeps buffering; <code>/yield</code>
         returns control to the model.</p>
       <p>Foreground slash commands finish before another command runs. Controls
         needing a safe boundary acknowledge it. The prompt shows context usage.
         <code>/history N</code> shows retained turns; <code>/cat PATH</code> opens
-        a file in your pager. Current-source keyboard command reports, including
+        a file in your pager. Keyboard command reports, including
         <code>/status</code> and <code>/history</code>, use <code>$PAGER</code>,
         or <code>less -FX</code> when unset and less is available,
         for scrolling and search. Short reports return automatically.
         Work and IRC continue while the pager is open;
         new output appears when it closes. <code>/ro QUERY</code> queues read-only inspection,
         and <code>/compact</code> summarizes context while preserving the local log.</p>
-      <p>Current source supports <code>-m none</code> and <code>/model none</code>
+      <p>Use <code>-m none</code> or <code>/model none</code>
         for local controls and IRC while discarding model-bound input.
         Select a real model to enable new input.</p>
       <p>Ask the model to pin a long-running PTY job. <code>/r</code> lists jobs;
@@ -73,16 +73,19 @@
       <p>Resume continues unfinished work without a new prompt. For scripts, use
         <code>snajpagent -e --resume SESSION_ID &lt;/dev/null</code>. Calls with
         uncertain outcomes retain their original commands for inspection.</p>
-      <p>Current Linux source starts detachable sessions on ANSI terminals at
+      <p>Linux starts detachable sessions on ANSI terminals at
         least 20 columns wide. Use
         <code>/s d</code> to return to the shell while work continues, then
         <code>snajpagent --attach SESSION_ID</code> to reconnect with the retained
         draft. Detach prints a copyable resume command for the same session.
-        Current source accepts <code>snajpagent send SESSION_ID -- "prompt"</code>
+        Use <code>snajpagent send SESSION_ID -- "prompt"</code>
         from another shell while retaining the attached terminal and its draft.
-        Without an ID, attach lists running sessions. Current source accepts
+        Without an ID, attach lists running sessions. Use
         <code>-N NAME</code> to name a new session and select it on attach or resume;
-        <code>/session name NAME</code> names an existing session. <code>--resume</code> attaches to a running owner and restarts a stored session. Current-source interactive resume asks before moving control from an older classic terminal. Session lists show
+        <code>/session name NAME</code> names an existing session.
+        <code>--resume</code> attaches to a running owner or restarts a stored
+        session; interactive resume confirms takeover of an occupied terminal.
+        Session lists show
         <code>attached</code>, <code>detached</code>, <code>running</code> (attachment status unavailable) or <code>stored</code> with prompts and IRC <code>nick@endpoint</code> (<code>s/</code> server, <code>c/</code> client).
         <code>snajpagent -l</code> lists sessions in that order, with the 10 most recent
         stored sessions; each group sorts newest activity first.
@@ -92,15 +95,15 @@
         chat/rollout view and verbosity when restarting a stored session. Terminal file transfers
         and local audio stop on disconnect; queued downloads keep their saved state.
         Restart microphone capture explicitly after reconnecting.</p>
-      <p>Set a goal to continue beyond the next reply. Current source supports
-        several goals: repeat <code>/goal TEXT</code> to add one and use
+      <p>Goals continue beyond the next reply. Repeat <code>/goal TEXT</code>
+        to add independent goals and use
         <code>/goal</code> to list their states. Work continues while any goal is
         active. <code>/goal pause</code> pauses all; <code>/goal resume</code>
         directs the model to resume unfinished work. Use <code>/goal clear ID</code>
         to cancel one listed goal. Resume preserves inputs and tool results;
         uncertain commands require inspection.</p>
       <p>Stage images or files with <code>/attach PATH</code> and submit them with
-        your prompt. Current source provides a workstation wrapper:
+        your prompt. Connect through the workstation wrapper:
         <code>snajpagent remote ssh -t target snajpagent</code>.
         For stock Mosh use <code>snajpagent remote mosh target snajpagent</code>:
         a checked, slower screen-state mode keeps transfer frames out of scrollback.
@@ -154,9 +157,9 @@ snajpagent -c</code></pre>
       <h2 id="install-heading">Run it where the work is</h2>
       <p><a href="downloads.html">Download 0.99.8c</a> for Linux, macOS, Windows or BSD,
         or build from source. The downloads page lists architectures and requirements.</p>
-      <p>A normal build needs C11/POSIX with pthreads, GNU make, libcurl and Jansson.
-        <code>./configure</code> probes the compiler and the optional modalities and
-        reports what it enabled and disabled:</p>
+      <p>Source builds need C11/POSIX with pthreads, GNU make and the
+        <a href="https://github.com/snajpa/snajpagent/blob/master/DEPENDENCIES.md">development libraries</a>.
+        <code>./configure</code> reports enabled features:</p>
       <pre><code>git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent
 ./configure
@@ -170,7 +173,8 @@ sudo make install</code></pre>
     </section>
     <section id="supported-providers" aria-labelledby="supported-providers-heading">
       <h2 id="supported-providers-heading">Supported providers</h2>
-      <p>Supported connections: OpenAI, ChatGPT/Codex subscription, OpenRouter, and custom
+      <p>Supported connections: OpenAI, ChatGPT/Codex and Meta subscriptions,
+        OpenRouter, DeepSeek, and custom
         providers with an OpenAI-compatible Responses API.</p>
       <p>Enterprise Codex access tokens use
         <code>snajpagent login codex --with-access-token</code>, reading the token from stdin.
@@ -183,7 +187,8 @@ sudo make install</code></pre>
       <ul>
         <li><strong>OpenAI GPT-5+:</strong> recommended; the only model family thoroughly tested and
           known to work reliably with snajpagent.</li>
-        <li><strong>DeepSeek:</strong> an open-model option. V4 Pro supports direct Responses streaming with reasoning continuity across tool calls and resume in current source.</li>
+        <li><strong>DeepSeek:</strong> V4 Pro supports direct Responses streaming
+          with reasoning continuity across tool calls and resume.</li>
         <li><strong>Anthropic:</strong> not supported. The project's assessment is that alignment
           problems make its models unsuitable for long-horizon autonomous work without
           oversight.</li>

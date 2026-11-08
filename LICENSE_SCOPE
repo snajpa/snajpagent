@@ -19,7 +19,10 @@ for its pre-10.12 monotonic clock implementation.
 `nix/cares-legacy-windows.patch` retains c-ares's upstream MIT terms.
 `nix/cares-legacy-darwin.patch` and `nix/nghttp2-legacy-darwin.patch` retain
 their upstream MIT terms for the old-Darwin monotonic clock implementations.
-`nix/curl-legacy-windows.patch` retains curl's upstream curl license terms.
+`nix/curl-legacy-windows.patch` and `nix/curl-mbedtls-write.patch` retain
+curl's upstream curl license terms.
+`nix/fontconfig-macos-fallback.patch` includes Fontconfig source context;
+preserve its upstream COPYING notice with the corresponding source.
 `nix/winpty-owned-pipes.patch` retains WinPTY's MIT terms.
 `nix/libunwind-legacy-windows.patch` retains LLVM's Apache-2.0 WITH
 LLVM-exception terms, including its GPLv2 compatibility provision.
@@ -28,6 +31,9 @@ Preserve those notices and corresponding patched sources with distributions.
 Device-enabled builds link SpeexDSP under its upstream BSD terms. Preserve its
 copyright notices, redistribution conditions and disclaimers from the matching
 library source when distributing linked executables.
+
+YAML front matter uses libyaml under its upstream MIT terms. Preserve its
+copyright notices and License file with distributions containing that dependency.
 
 Project design notes live under design/. System Jansson and system libcurl are
 build/runtime dependencies; no third-party

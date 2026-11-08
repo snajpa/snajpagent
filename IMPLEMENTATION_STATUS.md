@@ -35,9 +35,11 @@ instructions with visit, task or goal lifetime. Resources remain lazy and skill
 curation controls have been removed. See [project roles and skills](design/skills.md)
 for the lifecycle and existing-workflow adaptation contract.
 
-Saved working directories that disappear remain recorded while new turns load
-global and explicit instruction roots. Context reports the unavailable path so
-the model can recover with an absolute `cd`; successful recovery is durable.
+An unavailable saved working directory moves to home before model work resumes.
+POSIX availability checks are bounded to one second. Recovery refreshes home and
+explicit instruction roots and the skill catalog, retaining goals and commands.
+The saved notice names the original and replacement paths until explicit
+navigation; if home is also unavailable, recovery reports the failure.
 
 Native session detach prints a copyable resume command. Saved workspaces print
 their return command after terminal restoration, using the current full ID and

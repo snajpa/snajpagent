@@ -10,7 +10,7 @@ sessions carry work across turns; IRC connects agents across machines.
 [Install](#install-and-choose-a-provider) ·
 [User manual](https://agent.snajpa.net/manual.html)
 
-For differences from current source, check `snajpagent -V` and your downloaded manual.
+Check `snajpagent -V` against your download's companion manual.
 
 ## 1. Work on a project
 
@@ -72,8 +72,6 @@ while retaining the full log; failure preserves previous context.
 Ask the model to pin a long-running PTY job with `running_commands`. `/r` lists
 active calls and pinned jobs; `/r ID` inspects output and `/r k ID` stops one.
 An explicit saved resume hook runs once when a new owner resumes the session.
-`snajpagent top` monitors sessions; `h` lists its controls and `W` saves monitor
-defaults in the selected config.
 
 ### Keep working, or leave and come back
 
@@ -88,7 +86,7 @@ A final answer ends the turn; a goal continues work:
 /goal fix the bug and validate the change
 ```
 
-Current source supports independent goals: repeat `/goal TEXT` to add one, and
+Repeat `/goal TEXT` to add independent goals, and
 use `/goal` to list every goal and state. Work continues while any goal is active;
 queued prompts come first. `/goal pause` pauses all, and `/goal resume` directs the
 model to resume unfinished work. Add a listed ID to target one goal, including
@@ -110,7 +108,7 @@ terminal loss. Use `/s d` to detach, then `snajpagent --attach SESSION_ID`
 running-session picker. `/s a ID` switches live sessions; failure keeps the source.
 Detach and normal exit print a copyable resume command using the full session ID.
 It reconnects to a running owner and retains session settings.
-Current-source interactive `--resume` asks before moving control from an older
+Interactive `--resume` asks before moving control from an older
 classic terminal connection. Confirm with `y` and Enter; the owner keeps working.
 Restart restores saved view and verbosity.
 File transfers and local audio stop on disconnect; queued downloads remain
@@ -124,8 +122,8 @@ snajpagent send SESSION_ID -- "Check the pending changes"
 printf '%s\n' "Check the pending changes" | snajpagent send SESSION_ID
 ```
 
-The terminal and draft stay in place. Receipts report accepted, queued or
-discarded input; model `none` discards it. Inspect unknown outcomes before resending.
+Receipts report accepted, queued or discarded input; model `none` discards it.
+Inspect unknown outcomes before resending.
 
 List sessions or reopen the latest one:
 
@@ -135,12 +133,15 @@ snajpagent -l 25
 snajpagent --resume --last
 ```
 
-`-l` groups running sessions, then lists ten stored sessions, sorted by activity.
-`-l N` changes the stored count; `-l 0` lists running sessions.
+`-l` lists running sessions, then ten stored sessions, sorted by activity.
+`-l N` changes the stored count; `-l 0` shows running sessions only.
 
 Convert stopped legacy sessions with `snajpagent convert --jobs 4`. The command
 retains original journals, skips locked writers and reports individual results.
 The [manual](snajpagent.1) covers interruption and recovery.
+
+New sessions use indexed native storage. `snajpagent optimize` upgrades stopped
+sessions and compresses history losslessly; running sessions are skipped.
 
 Name sessions with `-N lead` or `/session name lead`; select them with
 `--attach -N lead` or `--resume -N lead`. Duplicate names require IDs.
@@ -283,7 +284,7 @@ sandbox.
 
 ## Further controls
 
-`/help` lists controls; `/status` shows state; `/queue` lists and edits waiting work.
+`/status` shows state; `/queue` edits waiting work.
 Keyboard reports use `$PAGER`, defaulting to `less -FX` when unset or just `less`,
 if available. Short reports return automatically; longer reports wait for quit.
 Work and IRC keep buffering output. `[ui] pager = off` displays reports directly.
@@ -404,10 +405,10 @@ on a trusted newer machine and transfer over a trusted channel.
 
 ### Installation paths, updates and source builds
 
-On Linux, macOS and the BSDs, place the verified executable in `$HOME/.local/bin`,
-add that directory to PATH, and start it from your
-project directory; the [manual](https://agent.snajpa.net/manual.html#Getting_started)
-has complete user-local installation, ABI requirements and startup troubleshooting.
+On Linux, macOS and the BSDs, place the verified executable in `$HOME/.local/bin`
+and add that directory to PATH. Sessions start at home; describe your project's
+path when you launch. The [manual](https://agent.snajpa.net/manual.html#Getting_started)
+covers installation, ABI requirements and troubleshooting.
 Android remains experimental source work without a production download target.
 
 Official stable binaries update in the background and show a restart banner;
@@ -418,19 +419,15 @@ updater-free. The manual covers channels, publisher URLs and recovery.
 `./configure` probes the toolchain and the four optional modalities and tunes the
 tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
-`snajpagent vm` saves pane workspaces with sessions and conversations. Click a
-session pane for INSERT mode; Escape returns to NORMAL, where `:` opens workspace
-commands. Enter on the picker's **New session** entry or `:new [NAME]` creates a
-session; `:session ID` resumes one.
-Attached POSIX panes run the ordinary terminal frontend with its configured
-prompt, editor, colors and output at the pane's dimensions. Each mirror has its
-own frontend; focus changes transfer the session's shared draft and undo history.
-In NORMAL, `i` returns to terminal input.
-`:workspace detach` saves the layout while agents continue and prints its resume
-command. Restoring a workspace leaves stopped owners stopped. `:q` and `:q!`
-close the current pane and preserve drafts; closing the last pane detaches.
-`:qa` saves and detaches the whole workspace; `:qa!` stops controlled sessions
-and exits, preserving drafts.
+`snajpagent vm` saves split-pane workspaces with sessions and conversations.
+Click or press `i` for terminal input; Escape returns to NORMAL, where `:` opens
+commands. The picker's **New session** entry or `:new [NAME]` creates a session;
+`:session ID` resumes one. POSIX panes share ordinary terminal controls and
+transfer the session's draft and undo history on focus changes.
+`:workspace detach` saves the layout, leaves agents running and prints its resume
+command. Restoring leaves stopped owners stopped. `:q` and `:q!` close the pane
+and preserve drafts; closing the last detaches. `:qa` detaches all panes;
+`:qa!` stops controlled sessions and exits, preserving drafts.
 
 Use `:history` for retained transcript search, selection and yanking. The
 [manual](snajpagent.1) covers workspace controls, clipboard policy and `:classic`
@@ -456,11 +453,9 @@ is `/usr/local`. Production builds need `strip` and ELF `objcopy` or macOS
 installation. [Dependency notes](DEPENDENCIES.md) cover recipes, ABI requirements
 and experimental platforms.
 
-Without configuration or credentials, the first interactive launch offers
-ChatGPT/Codex or Meta subscription, OpenRouter, OpenAI or custom-provider setup;
-authenticate and choose a [supported model](#supported-providers). `snajpagent login status`
-reports local credential sources without contacting a provider, and the manual
-explains login methods and logout.
+First-launch setup offers ChatGPT/Codex or Meta subscription, OpenRouter, OpenAI
+or a custom provider. Choose a [supported model](#supported-providers).
+`snajpagent login status` reports credential sources without contacting a provider.
 
 For an Enterprise Admin Console token with Codex permission:
 
@@ -497,14 +492,14 @@ Use `/configure` to reload saved settings, credentials and the local model cache
 `/config` opens `$EDITOR` first. Invalid changes leave the previous state active.
 
 Windows uses `HOME/.snajpagent`, falling back to `USERPROFILE/.snajpagent`;
-`--dotdir DIR` overrides it. The same configuration works there. Set credentials
+`--dotdir DIR` overrides it. Set credentials
 with PowerShell's `$env:OPENAI_API_KEY = 'your-key'` or Command Prompt's
 `set "OPENAI_API_KEY=your-key"`; masked setup entry avoids shell history.
 Windows tools use `cmd.exe`; POSIX command examples need adaptation.
 
 ## Use it in scripts
 
-One-shot mode runs a prompt without an interactive conversation:
+Run one prompt in one-shot mode:
 
 ```sh
 snajpagent -e -- "run the tests and summarize failures"

@@ -4,19 +4,19 @@
 
 ## Unreleased
 
-- Use a configured `/fallback` after a failed provider response, including a
-  terminal `cyber_policy` rejection. `content_filter` and
-  `misalignment_policy_violation` remain terminal without switching.
+- Refresh introductory and build documentation for direct MCP execution,
+  home-directory recovery and native session storage.
 
-- Recognize `content_policy_violation`, `policy_violation`, `safety_violation`,
-  `moderation_blocked`, `prohibited_content`, `unsafe_content`,
-  `responsible_ai_policy`, `safety_filter` and `blocked_by_policy` refusals,
-  plus unknown names in those policy/safety families. Keep them terminal and
-  explain that the request was not retried or sent to another model.
+- Use a configured `/fallback` once for a failed provider API call, including
+  recognized policy-refusal codes such as `cyber_policy`, `content_filter`,
+  `content_policy_violation` and `misalignment_policy_violation`. Eligible
+  cyber-policy clarification runs before fallback; the next call returns to
+  the primary model.
 
-- Stop automatic retries after `misalignment_policy_violation`, including during
-  active-goal recovery. Retain the provider diagnostic and pause active goals
-  while leaving the interactive session open for inspection.
+- Retain structured refusal diagnostics, including gateway error-type metadata.
+  Provider-specific policy/safety families outside the named refusal list remain
+  terminal. Without an eligible configured fallback, policy rejections stop
+  automatic retries and pause active goals while leaving inspection available.
 
 - Remove the MCP per-call approval queue and its pending/approve/deny commands.
   Enabled, non-denied tools dispatch directly; read-only filtering and uncertain

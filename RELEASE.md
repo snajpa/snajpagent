@@ -107,7 +107,6 @@ The current required outputs are:
 | `linux-riscv64` | `snajpagent` | RV64GC/LP64D static PIE with embedded application libraries and trust roots; experimental |
 | `linux-ppc64le` | `snajpagent` | POWER8 little-endian ELFv2 static PIE with embedded application libraries and trust roots; experimental |
 | `linux-i686` | `snajpagent` | 32-bit self-contained static, linked non-PIE: the pinned FFmpeg's CELT SIMD object carries absolute relocations that a static-PIE link refuses; not Linux 2.4 qualification |
-| `linux-i686-legacy` | `snajpagent` | Static non-PIE LinuxThreads; Linux 2.4.27 exercised; added after 0.99.1; **not built for 0.99.6**: the pinned uClibc source set cannot build it (check 0.15.2's own test suite, then fontconfig 2.17.1's `fc-cache` link against undefined `Brotli*` symbols while the link order is the one static archives need — a chain inside the pin, not this tree; `make prod-linux-i686-legacy` stays buildable) |
 | `macos-x86_64` | `snajpagent` | Intel, static application libraries; experimental |
 | `macos-arm64` | `snajpagent` | Apple Silicon, static application libraries; experimental |
 | `macos-universal` | `snajpagent` | Both macOS slices in one native executable; experimental |
@@ -120,6 +119,12 @@ The current required outputs are:
 | `openbsd-amd64` | `snajpagent` | OpenBSD 7.9, static application libraries, native libc/thread ABI; experimental |
 | `openbsd-amd64-legacy` | `snajpagent` | OpenBSD 5.9 libc/thread ABI, static application libraries; experimental |
 | `openbsd-amd64-early` | `snajpagent` | OpenBSD 3.5 libc/thread ABI, non-PIE, static application libraries; experimental |
+
+Linux i686 legacy remains a deferred static non-PIE LinuxThreads recipe outside
+`PROD_TARGETS`. Its `make prod-linux-i686-legacy` target remains available for
+work on the pinned uClibc build chain. The recorded blocker is Fontconfig
+2.17.1's `fc-cache` link against undefined `Brotli*` symbols. Historical Linux
+2.4.27 runtime coverage applies to the earlier build.
 
 On September 23, 2026, the operator removed Linux PPC32 from the supported
 production matrix before the 0.99.8 release; no PPC32 executable shipped in

@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: GPL-2.0-only
-.TH SNAJPAGENT 1 "October 2026" "snajpagent" "User Commands"
+.TH SNAJPAGENT 1 "November 2026" "snajpagent" "User Commands"
 .SH NAME
 snajpagent \- terminal coding agent with built-in IRC
 .SH SYNOPSIS
@@ -3378,11 +3378,7 @@ when the inherited choice does not fit the new model.
 .TP
 .BR /fallback " [SELECTOR|off] [save|s]"
 Configure an automatic fallback model used after a failed provider response.
-A
-.B content_filter
-or
-.B misalignment_policy_violation
-refusal does not switch. The selector accepts the same quoted components, numbered cache rows
+The selector accepts the same quoted components, numbered cache rows
 and optional
 .B :context
 suffix as model selection. Include provider/model/effort to make the choice
@@ -3399,13 +3395,16 @@ to disable future automatic switches, or
 .B /fallback off save
 to save that default.
 .sp
-The primary model keeps its yellow clarification attempts. A terminal red
-cyber-policy failure retries only the failed API call on the configured fallback.
-Other provider failures use the same single switch. A
+Eligible cyber-policy clarification runs on the primary model before fallback.
+The configured fallback then handles only the failed API call. Named refusals,
+including
 .B content_filter
-or
+and
 .B misalignment_policy_violation
-refusal remains terminal without switching.
+are also eligible, as are ordinary provider failures. Provider-specific
+policy/safety families outside the named refusal list remain terminal.
+Without an eligible configured fallback, policy-stop handling retains the
+diagnostic and pauses active goals.
 The next API call uses the primary model and context window, including tool-result
 continuations in the same turn and calls after resume.
 Completed tool results and retained conversation continue with the retry;
@@ -4050,7 +4049,7 @@ Invalid local model/context settings wait for correction in interactive mode;
 one-shot execution exits with status 2. With automatic retry enabled, active
 goals recover ordinary failures without an attempt limit. Same-process
 recovery retains live command handles; after restart their outcomes are settled
-without reusing old handles. Eligible terminal cyber-policy failures use the
+without reusing old handles. Eligible policy failures use the
 configured /fallback before policy-stop handling. Remaining policy stops survive
 restart and require clarification.
 .TP
@@ -4098,8 +4097,8 @@ extra goal work in those requests. An unarmed queue requires /next or explicit
 goal start/resume, and an open queue editor prevents draining.
 .PP
 Ordinary errors retain active goals and use interruptible recovery without an
-attempt limit. Terminal cyber-policy errors first use an eligible configured
-fallback. Remaining policy stops, provider refusals and explicit turn interruption
+attempt limit. Eligible policy failures first use the configured fallback.
+Remaining policy stops, provider refusals and explicit turn interruption
 pause active goals. Session resume preserves saved stops and wording, even if a
 later configured wording limit is lower. Clearing a draft leaves active goals
 running; Ctrl-C on an empty composer interrupts the turn and pauses them.
@@ -4511,7 +4510,7 @@ model context and preserves the append-only local log.
 .PP
 A session checkpoint captures recoverable state and the provider conversation at
 one verified journal boundary, with the summary and uncovered continuation after
-successful compaction. Current development builds create native sessions with
+successful compaction. New sessions use native storage with
 paired core and provider checkpoint images and indexed admission. Release
 0.99.8c and unconverted legacy sessions use JSONL, with a versioned
 checkpoint record in the same journal. Legacy resume locates the latest checkpoint
@@ -7679,9 +7678,10 @@ It does not trigger model-facing policy clarification. Access, quota and unknown
 failures retain paced turn recovery.
 A
 .B misalignment_policy_violation
-error stops automatic retries, clarification and model fallback. Its diagnostic
-is retained, active goals pause, and the interactive session remains available
-for inspection. Review the blocked workflow before submitting further work.
+error can use the configured single-call fallback. Without an eligible fallback,
+its diagnostic is retained, active goals pause and the interactive session
+remains available for inspection. Review the blocked workflow before submitting
+further work.
 For an eligible
 .B cyber_policy
 rejection, the model receives a durable clarification instruction immediately,
@@ -7698,10 +7698,14 @@ for accurate restatement of ambiguous phrasing with purpose, actions, targets
 and authorization unchanged, and operator clarification where needed.  New input
 or observed refusal, provider-executed tool or unknown activity prevents another
 automatic clarification. After five clarification attempts, a further rejection
-stops automatic retries and pauses an active goal. Other policy rejections also
-stop automatic retries. A policy pause is recorded as a provider rejection;
+uses an eligible configured fallback before policy-stop handling. Without that
+fallback, policy rejection stops automatic retries and pauses an active goal.
+A policy pause is recorded as a provider rejection;
 an explicit model refusal has a separate pause reason and notice.
-Recognized refusals include
+The named refusal codes eligible for configured fallback are
+.BR cyber_policy ,
+.BR content_filter ,
+.BR misalignment_policy_violation ,
 .BR content_policy_violation ,
 .BR policy_violation ,
 .BR safety_violation ,
@@ -7712,15 +7716,17 @@ Recognized refusals include
 .BR safety_filter
 and
 .BR blocked_by_policy .
-Any code or type containing policy, safety, moderation, refusal,
-content_filter, prohibited_content or unsafe_content is treated the same way.
-The failure notice names the refusal family and explains that the request was
+Other code or type names containing policy, safety, moderation, refusal,
+content_filter, prohibited_content or unsafe_content are recognized as policy
+failures but remain terminal without model fallback. When no fallback is used,
+the failure notice names the refusal family and explains that the request was
 not retried or sent to another model.
 Existing running commands are retained while the policy-stopped turn waits.
 The input prompt stays hidden while the command is retained.
 Press Ctrl-C to leave that turn before submitting a clarification or another
 command; retained commands are not replayed.
-There is no provider switch or concealed task scope.
+Clarification keeps the original task scope and provider; configured fallback
+is a separate, visible API-call transition.
 .PP
 Rollout shows one concise "provider clarification N/5" notice at every verbosity
 level.  Existing levels 4, 5 and 6 add event, redacted protocol and wire details.

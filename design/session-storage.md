@@ -4,7 +4,7 @@
 
 ## Writeback and recovery
 
-Current development source uses kernel-managed asynchronous disk writeback across
+Storage uses kernel-managed asynchronous disk writeback across
 journals, checkpoints, presentation/history, configuration, credentials, caches,
 media, uploads, tools, skills and updater files. Successful writes and atomic
 renames are immediately visible; command, display and request handling never wait
@@ -20,13 +20,11 @@ when its readers need the bytes; that user-space flush issues no disk barrier.
 
 ## Status and purpose
 
-Engineering design, September 27, 2026, with framing implementation begun
-September 28. Current source creates native sessions and opens them through
-bounded checkpoint admission. Released 0.99.8c and existing legacy sessions use
-JSONL until explicitly converted with `snajpagent convert`. Its bounded worker
-pool streams session IDs, skips locked writers, preserves originals and reports
-independent results. The draft header,
-commit-batch codec and bounded positional reader are exercised by the store tests.
+New sessions use native storage and bounded checkpoint admission. Release
+0.99.8c and unconverted legacy sessions use JSONL. Explicit conversion with
+`snajpagent convert` streams session IDs through a bounded worker pool, skips
+locked writers, preserves originals and reports independent results. Store tests
+exercise the header, commit-batch codec and bounded positional reader.
 Typed payloads and data adapters cover all 77 assigned semantic kinds. Archive
 profiles also preserve public checkpoint views and explicitly unassigned source
 names as inert observations.

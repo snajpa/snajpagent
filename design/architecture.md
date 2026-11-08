@@ -364,20 +364,18 @@ eligibility; active turns cannot be retried. Failures hint `/retry` in both
 views. Queued turns and paused goals stay paused. This uses ordinary durable
 turn events; retry eligibility is derived while replaying the session.
 
-A `misalignment_policy_violation` code or type follows the terminal policy-stop
-path: retain the error, pause active goals and return control without automatic
-retry, clarification or model fallback. Gateway error-type metadata retains the
-same classification, including when capacity aliases are also present.
-
 Refusal names are explicit: `cyber_policy`, `content_filter`,
 `content_policy_violation`, `misalignment_policy_violation`, `policy_violation`,
 `safety_violation`, `moderation_blocked`, `prohibited_content`, `unsafe_content`,
-`responsible_ai_policy`, `safety_filter` and `blocked_by_policy`. Unknown names
+`responsible_ai_policy`, `safety_filter` and `blocked_by_policy`. These named
+codes can use a configured fallback. Unknown names
 containing policy, safety, moderation, refusal, content_filter,
-prohibited_content or unsafe_content take the same terminal path. Except for
-the `cyber_policy` clarification path, these refusals do not retry or switch
-models. The user-facing failure notice names the refusal family and explains
-that the request was not retried or sent to another model.
+prohibited_content or unsafe_content take the terminal policy-stop path without
+model fallback. Gateway error-type metadata retains the same classification,
+including when capacity aliases are also present. If no eligible configured
+fallback is used, retain the diagnostic, pause active goals and return control;
+the failure notice names the refusal family and explains that the request was
+not retried or sent to another model.
 
 An eligible `cyber_policy` rejection receives up to five model-facing
 clarifications through `response_output_correction`. Public text is retained;
@@ -385,9 +383,10 @@ unexecuted local calls are discarded. Hosted/unknown activity and unsupported
 failed output snapshots stop this clarification path. The original task scope
 and the provider's policy error remain intact.
 After a terminal provider failure, a configured `/fallback` selects one
-alternative for the failed API call. A terminal `cyber_policy` rejection
-qualifies; `content_filter`, `misalignment_policy_violation` and other policy
-refusals do not.
+alternative for the failed API call. The named refusal codes above qualify,
+including `content_filter` and `misalignment_policy_violation`; eligible
+`cyber_policy` clarification runs first. Provider-specific policy-family names
+outside that list remain terminal.
 `response_failed` retains the public prefix
 and error provenance, then `turn_fallback_started` changes active selection and
 context without changing primary preferences. A crash between those commits
