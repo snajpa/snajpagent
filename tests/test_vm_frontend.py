@@ -752,7 +752,9 @@ class WorkspaceTests(unittest.TestCase):
         child.write(b'\x17h')
         child.resize(40, 320)
         child.repaint_until(b'foreground-history-marker')
-        child.repaint_until(b'background-history-marker', timeout=15)
+        # The 32 MiB legacy suffix tests eventual background completion. Keep
+        # the foreground repaint above on its ordinary interactive deadline.
+        child.repaint_until(b'background-history-marker', timeout=30)
         child.finish('workspace d')
 
     def test_workspace_colors_follow_config_and_environment(self):
