@@ -20,6 +20,9 @@ class RetryFixture(QueryFixture):
                   'event=join sender=observer' in e['data'].get('text', '')
                   for e in self.events()))
         self.wait_idle()
+        # Peer cleanup can admit a new IRC turn after the retry assertions.
+        # Restore its ordinary handler before those peers disconnect.
+        self.addCleanup(setattr, self.provider, 'runtime_handler', self.respond)
 
     def start(self, *args, **kwargs):
         if self.retry_default is not None and 'retry_auto=' not in self.config.read_text():
