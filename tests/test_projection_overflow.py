@@ -214,7 +214,8 @@ def check_source_fit(binary, native, exact, reject_all=False, model_switch=None)
             if exact:
                 config.write_text(config.read_text().replace(
                     'exact_token_count = false', 'exact_token_count = true'))
-            env = {**os.environ, 'HOME': str(root), 'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'}
+            env = {**os.environ, 'PAGER': '', 'HOME': str(root),
+                   'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'}
             prefix = [str(binary), '--config', str(config), '--dotdir', str(state)]
             journal = create_legacy(state, root, 'fake', 'host-model')
             sid = journal.parent.name
