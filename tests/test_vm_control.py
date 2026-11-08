@@ -55,6 +55,15 @@ class ControlTests(unittest.TestCase):
         self.owner.setUp()
         self.addCleanup(self.owner.tearDown)
         self.root = self.owner.root
+        if self._testMethodName == 'test_history_scan_keeps_other_live_pane_refreshing':
+            # This held response overlaps a 128 MiB scan, rather than testing
+            # the mock provider's ordinary five-second HTTP retry deadline.
+            text = self.owner.config.read_text().replace(
+                'idle_timeout_ms = 3000', 'idle_timeout_ms = 15000')
+            text = text.replace('request_timeout_ms = 5000', 'request_timeout_ms = 20000')
+            self.owner.config.write_text(text)
+            os.write(self.owner.initial.master, b'/configure\r')
+            self.owner.initial.until(b'configuration reloaded:')
         self.owner.detach()
 
     @unittest.skipUnless(sys.platform.startswith('linux'), 'requires Linux process CPU accounting')
