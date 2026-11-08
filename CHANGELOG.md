@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- List the remote terminal wrapper and session monitor in short command-line help.
+
 - Refresh introductory and build documentation for direct MCP execution,
   home-directory recovery and native session storage.
 

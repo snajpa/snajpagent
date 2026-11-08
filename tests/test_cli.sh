@@ -139,6 +139,8 @@ grep -q -- '--no-markdown' "$root/help"
 grep -q -- '--no-listen' "$root/help"
 grep -q -- '--no-client' "$root/help"
 grep -q "^usage: $SNAJPAGENT_TEST_NAME " "$root/help"
+grep -Fq -- "$SNAJPAGENT_TEST_NAME remote [--config PATH] [--dotdir PATH] [--] [COMMAND ARG...]" "$root/help"
+grep -Fq -- "$SNAJPAGENT_TEST_NAME top [--config PATH] [--dotdir PATH] [OPTIONS]" "$root/help"
 
 # Short help stays short; long help invokes man directly and falls back on failure.
 grep -Fq -- '-m [PROVIDER/]MODEL[/EFFORT][:CONTEXT]' "$root/help"
