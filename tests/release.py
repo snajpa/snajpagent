@@ -31,9 +31,10 @@ def rejected(function):
 
 with tempfile.TemporaryDirectory(prefix="portable-tty-", dir=root / "build") as tmp:
     # Older OpenBSD has tcgetpgrp, but no tcgetsid declaration or implementation.
+    # Compile-only probes avoid wrapper linker flags; discard their object output.
     header = Path(tmp) / "terminal.h"
     header.write_text("#include <termios.h>\n#pragma GCC poison tcgetsid\n")
-    subprocess.run(["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-fsyntax-only",
+    subprocess.run(["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-c", "-o", os.devnull,
                     "-include", str(header), str(root / "src/session_host.c")], check=True)
 print("PASS: session redraw builds with the portable controlling-terminal API")
 
@@ -44,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix="portable-env-", dir=root / "build") as 
     header.write_text("#include <stdlib.h>\n"
                       "static void legacy_unsetenv(const char *name) { (void)unsetenv(name); }\n"
                       "#define unsetenv legacy_unsetenv\n")
-    subprocess.run(["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-fsyntax-only",
+    subprocess.run(["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-c", "-o", os.devnull,
                     "-include", str(header), str(root / "src/remote.c")], check=True)
 print("PASS: client terminal builds with void-returning unsetenv")
 
@@ -59,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix="portable-stale-", dir=root / "build") a
         flags = ["cc", "-std=c11", "-D_GNU_SOURCE", "-DSNAJPAGENT_VM=1",
                  "-Werror", "-include", str(header)]
         for abi in ([], ["-DSNAJPAGENT_FORCE_LOCAL_JANSSON_ABI=1"]):
-            subprocess.run(flags + abi + ["-fsyntax-only", str(root / "src/ui.c")],
+            subprocess.run(flags + abi + ["-c", "-o", os.devnull, str(root / "src/ui.c")],
                            check=True)
         for include in ("base.h", "fs.h"):
             probe.write_text(f'#include "{include}"\n'
@@ -81,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix="windows-attachments-", dir=root / "buil
     curl_flags = shlex.split(subprocess.check_output(
         shlex.split(os.environ.get("PKG_CONFIG", "pkg-config")) + ["--cflags", "libcurl"],
         text=True))
-    subprocess.run(["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-fsyntax-only",
+    subprocess.run(["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-c", "-o", os.devnull,
                     *curl_flags, "-I" + str(root / "src"), "-include", str(header),
                     str(root / "src/app_upload.c")], check=True)
 print("PASS: Windows queued attachments retain the common media checkpoint")
@@ -1642,7 +1643,7 @@ static_assert(category(-0.0) == FP_ZERO);
 """)
         for target in ("x86_64-unknown-netbsd2.0", "x86_64-unknown-openbsd3.5"):
             subprocess.run(["clang++", "--target=" + target, "-std=c++20",
-                            "-fsyntax-only", "-I", str(temporary), "-I", str(root / "nix"),
+                            "-c", "-o", os.devnull, "-I", str(temporary), "-I", str(root / "nix"),
                             str(source)], check=True)
 freebsd_pdf = freebsd.split("  pdf = ", 1)[1].split("  miniaudio = ", 1)[0]
 assert './poppler-static-fonts.patch' in freebsd_pdf
@@ -1759,13 +1760,14 @@ int main(void) {
                     "-o", str(tmp / "math")], check=True)
     subprocess.run([str(tmp / "math")], check=True)
     source.write_text("static_assert(sizeof(int) > 0, \"integer size\");\n")
-    failed = subprocess.run(["cc", "-std=c11", "-Werror", "-fsyntax-only", str(source)], capture_output=True)
+    failed = subprocess.run(["cc", "-std=c11", "-Werror", "-c", "-o", os.devnull, str(source)],
+                            capture_output=True)
     assert failed.returncode != 0
     subprocess.run(["cc", "-std=c11", "-Werror", "-Dstatic_assert=_Static_assert",
-                    "-fsyntax-only", str(source)], check=True)
+                    "-c", "-o", os.devnull, str(source)], check=True)
     source.write_text("static_assert(sizeof(int) == 0, \"must fail\");\n")
     failed = subprocess.run(["cc", "-std=c11", "-Werror", "-Dstatic_assert=_Static_assert",
-                             "-fsyntax-only", str(source)], capture_output=True)
+                             "-c", "-o", os.devnull, str(source)], capture_output=True)
     assert failed.returncode != 0, "the alias must preserve failed compile-time assertions"
 print("PASS: legacy FFmpeg math preserves NaNs, infinities, signed zero and compile-time assertions")
 
@@ -1929,7 +1931,8 @@ with tempfile.TemporaryDirectory(prefix="bsd-thread-headers-", dir=root / "build
                                       "int pthread_stackseg_np(pthread_t, stack_t *);\n")
     source = tmp / "thread.c"
     flags = "#define HAVE_PTHREAD_SET_NAME_NP 1\n#define HAVE_PTHREAD_NP_H 1\n"
-    command = ["cc", "-std=c11", "-Wall", "-Werror", "-I" + str(tmp), "-fsyntax-only", str(source)]
+    command = ["cc", "-std=c11", "-Wall", "-Werror", "-I" + str(tmp), "-c",
+               "-o", os.devnull, str(source)]
     source.write_text(flags + "\n".join(before))
     result = subprocess.run(command, capture_output=True)
     assert result.returncode != 0, "old extension header must reproduce missing pthread types"
@@ -2030,7 +2033,7 @@ with tempfile.TemporaryDirectory(prefix="openbsd35-headers-", dir=root / "build"
     (tmp / "sys/param.h").write_text("#ifdef OLD_OPENBSD\n#define OpenBSD3_5 1\n#endif\n")
     (tmp / "wchar.h").write_text("#ifdef OLD_OPENBSD\n#error wchar.h unavailable\n#endif\n#define WIDE_HEADER_INCLUDED 1\n")
     source = tmp / "header.c"
-    command = ["cc", "-std=c11", "-Werror", "-I" + str(tmp), "-fsyntax-only", str(source)]
+    command = ["cc", "-std=c11", "-Werror", "-I" + str(tmp), "-c", "-o", os.devnull, str(source)]
     source.write_text("#include <wchar.h>\n")
     assert subprocess.run(command + ["-DOLD_OPENBSD"], capture_output=True).returncode != 0
     for old in (True, False):
@@ -2181,7 +2184,8 @@ with tempfile.TemporaryDirectory(prefix="bsd-native-errno-", dir=root / "build")
                               ("#define " + name + " 99\n" if present else "") + block +
                               "\n_Static_assert(" + name + " == " + str(99 if present else 45) +
                               ', "native errno preserved");\n')
-            subprocess.run(["cc", "-std=c11", "-Werror", "-fsyntax-only", str(source)], check=True)
+            subprocess.run(["cc", "-std=c11", "-Werror", "-c", "-o", os.devnull, str(source)],
+                           check=True)
 print("PASS: old BSD unsupported/overflow spellings preserve native and existing error codes")
 
 # Extend libarchive's existing size-based formats for unsigned ZIP diagnostics.
@@ -2602,7 +2606,8 @@ int main(void) {
         subprocess.run([str(Path(tmp) / "finite")], check=True)
         source.write_text("#define __OpenBSD__ 1\n#define isfinite(value) 17\n" + finite +
                           '\n_Static_assert(isfinite(1.0) == 17, "native macro kept");\n')
-        subprocess.run(["clang", "-std=c11", "-Werror", "-fsyntax-only", str(source)], check=True)
+        subprocess.run(["clang", "-std=c11", "-Werror", "-c", "-o", os.devnull, str(source)],
+                       check=True)
     print("PASS: early OpenBSD media finite checks preserve types, rejection and single evaluation")
 else:
     print("SKIP: Clang unavailable for early OpenBSD finite regression")
