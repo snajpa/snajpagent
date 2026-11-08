@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
-# Unreleased
+# 0.99.9
 
 Indexed native sessions, independent goals and timers, split-pane workspaces,
 project roles and skills extend the terminal workflow. Session monitoring,

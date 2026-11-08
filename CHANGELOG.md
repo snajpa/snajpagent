@@ -2,7 +2,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.99.9 — November 8, 2026
 
 - List the remote terminal wrapper and session monitor in short command-line help.
 
