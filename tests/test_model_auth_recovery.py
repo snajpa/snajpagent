@@ -3,6 +3,7 @@
 """Credential failures must leave model selection and explicit reload usable."""
 
 import json
+import os
 from pathlib import Path
 
 from store_history import journal_paths, read_events
@@ -41,6 +42,10 @@ class RecoveryTests(unittest.TestCase):
         return child
 
     def completed(self, child, route, token, model, effort):
+        # Selection and reload repair settings; explicit work retries the failed turn.
+        self.assertEqual(self.fixture.server.requests, [])
+        child.output.clear()
+        os.write(child.master, b'/retry\r')
         child.until(b'RELOAD_OK', 5)
         child.until(b'READY>', 5)
         self.fixture.finish(child)
