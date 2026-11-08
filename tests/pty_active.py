@@ -848,9 +848,13 @@ def test_resume_attaches_live_session():
         sid = original.session_id()
         engine = original.engine_pid()
         original.send_wait_idle(b"ping\r", b"pong")
-        with Child(["--resume", sid]) as competing:
-            competing.wait_text(b"session already has a terminal")
-            assert competing.reap() != 0
+        for answer in (b"\r", b"n\r"):
+            with Child(["--resume", sid]) as competing:
+                competing.wait_text(b"Move it to this terminal? [y/N]")
+                competing.send(answer)
+                assert competing.reap() == 0
+                assert b"Attached session" not in competing.buf, bytes(competing.buf)
+                os.kill(engine, 0)
         original.send_wait(b"retained resume draft", b"retained resume draft")
         # Simulate a terminal client dying while its separate owner survives.
         os.kill(original.pid, signal.SIGTERM)
