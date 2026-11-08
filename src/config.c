@@ -867,7 +867,7 @@ top_setting(struct snag_top_settings *settings, const char *key, const char *val
     long n = strtol(value, &end, 10);
     if (!*value || *end || errno) return -1;
     if (k == 0u && n >= 200 && n <= 86400000) settings->delay_ms = (unsigned int)n;
-    else if (k == 1u && n >= 0 && n <= SNAG_TOP_FIELDS) settings->sort = (unsigned int)n;
+    else if (k == 1u && n >= 0 && n <= (long)SNAG_TOP_FIELDS) settings->sort = (unsigned int)n;
     else if (k == 2u && n > 0 && n < (1 << (SNAG_TOP_FIELDS + 1u)))
         settings->visible = (unsigned int)n;
     else if (k == 3u && n >= 0 && n <= 2) settings->color = (unsigned int)n;

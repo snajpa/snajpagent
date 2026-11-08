@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Keep the portability guard sensitive to both native PTY branches."""
+"""Exercise terminal/process portability guards and compiler ABI regressions."""
 import contextlib
 import importlib.util
 import io
@@ -19,6 +19,56 @@ SPEC.loader.exec_module(CHECKER)
 
 
 class PortabilityTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('clang'), 'Clang required for 32-bit compile regression')
+    def test_top_settings_compile_with_32_bit_long(self):
+        source = (ROOT / 'src/config.c').read_text()
+        settings = (ROOT / 'src/config.h').read_text().split(
+            '#define SNAG_TOP_FIELDS ', 1)[1].split('\nint ', 1)[0]
+        function = source.split('static int\ntop_setting(', 1)[1].split('\n}\n', 1)[0]
+        keys = source.split('static const char *const top_keys[] = ', 1)[1].split(';', 1)[0]
+        body = ('typedef __SIZE_TYPE__ size_t;\ntypedef _Bool bool;\n'
+                '#define true 1\n#define false 0\n#define INT_MAX __INT_MAX__\n'
+                'extern int errno;\nextern size_t strlen(const char *);\n'
+                'extern int strcmp(const char *, const char *);\n'
+                'extern long strtol(const char *, char **, int);\n'
+                '#define SNAG_TOP_FIELDS ' + settings + '\n'
+                'static const char *const top_keys[] = ' + keys + ';\n'
+                'int top_setting(' + function + '\n}\n')
+        with tempfile.TemporaryDirectory(prefix='snag-top-abi-') as directory:
+            path = Path(directory) / 'top.c'
+            path.write_text(body)
+            for target in ('i386-linux-gnu', 'armv6-linux-gnueabihf', 'x86_64-linux-gnu'):
+                with self.subTest(target=target):
+                    result = subprocess.run(
+                        ['clang', '--target=' + target, '-ffreestanding', '-std=c11',
+                         '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-c', str(path),
+                         '-o', os.devnull],
+                        capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which('cc'), 'C compiler required for ioctl ABI regression')
+    def test_workspace_resize_compiles_with_int_ioctl_request(self):
+        source = (ROOT / 'src/vm_terminal.c').read_text()
+        function = source.split('int\nsnag_vm_terminal_resize(', 1)[1].split('\n}\n', 1)[0]
+        body = ('#define USHRT_MAX 65535\n#define EINVAL 22\n'
+                '#define TIOCSWINSZ ((4U << 29) | (116 << 8) | 103 | '
+                '(sizeof(struct winsize) << 16))\n'
+                'struct winsize { unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel; };\n'
+                'struct snag_vm_terminal { void *terminal; int fd, error;\n'
+                '    struct { unsigned short rows, columns; } child; };\n'
+                'extern int snag_errno(int);\nextern int ioctl(int, int, ...);\n'
+                'extern void vterm_get_size(void *, int *, int *);\n'
+                'extern void vterm_set_size(void *, int, int);\n'
+                'extern int vterm_get_error(void *);\n'
+                'int snag_vm_terminal_resize(' + function + '\n}\n')
+        with tempfile.TemporaryDirectory(prefix='snag-resize-abi-') as directory:
+            path = Path(directory) / 'resize.c'
+            path.write_text(body)
+            result = subprocess.run(
+                ['cc', '-std=c11', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-c', str(path),
+                 '-o', os.devnull], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_recursive_make_preserves_build_configuration(self):
         with tempfile.TemporaryDirectory(prefix='snag-make-flags-') as directory:
             root = Path(directory)

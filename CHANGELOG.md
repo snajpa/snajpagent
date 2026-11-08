@@ -4,6 +4,9 @@
 
 ## 0.99.9 — November 8, 2026
 
+- Keep monitor sort validation and workspace terminal resizing compatible with
+  32-bit Linux and the PPC64LE musl ioctl ABI.
+
 - List the remote terminal wrapper and session monitor in short command-line help.
 
 - Refresh introductory and build documentation for direct MCP execution,

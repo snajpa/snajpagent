@@ -15,6 +15,11 @@ The native fixture gate passes across the complete check recipe, combining
 retained native runs with focused reruns of repaired fixtures. Capability skips
 remain outside the passing scope.
 
+Compiler regressions cover monitor-setting comparisons with 32-bit `long` and
+the PPC musl terminal-resize request encoding. The corrected units compile with
+the ARMv6, i686 and PPC64LE production compilers. Native configuration, workspace
+wire, portability and style checks pass after these portability corrections.
+
 These checks cover the native test executable and its enabled features.
 Physical audio devices, live providers, native Windows desktop rendering and
 execution of each production binary on its target OS have separate scope.

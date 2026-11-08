@@ -357,7 +357,8 @@ snag_vm_terminal_resize(struct snag_vm_terminal *terminal, unsigned int rows, un
         terminal->child.rows == rows && terminal->child.columns == columns) return 0;
     struct winsize geometry = {.ws_row = (unsigned short)rows,
         .ws_col = (unsigned short)columns};
-    if (terminal->fd >= 0 && ioctl(terminal->fd, TIOCSWINSZ, &geometry) < 0) return -1;
+    if (terminal->fd >= 0 &&
+        ioctl(terminal->fd, (unsigned int)TIOCSWINSZ, &geometry) < 0) return -1;
     vterm_set_size(terminal->terminal, (int)rows, (int)columns);
     int error = vterm_get_error(terminal->terminal);
     if (error) { terminal->error = error; return snag_errno(error); }

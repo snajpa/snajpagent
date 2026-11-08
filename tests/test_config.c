@@ -100,7 +100,8 @@ test_top_settings(const char *path)
     restored = (struct snag_top_settings){.sort = 5u, .visible = 255u};
     assert(snag_config_top(path, &restored, error, sizeof(error)) == 0);
     assert(restored.sort == 5u && restored.visible == 255u);
-    const char *invalid[] = {"delay_ms=199", "sort=9", "visible=0", "color=3",
+    const char *invalid[] = {"delay_ms=199", "sort=-1", "sort=9", "sort=2147483648",
+        "visible=0", "color=3",
         "extra_width=2147483648", "reverse=yes", "highlight=1", "commands=on", "fields=001234567",
         "unknown=1", "sort=1\nsort=2", "sort=1\n[top]\nsort=2"};
     for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
