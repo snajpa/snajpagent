@@ -64,8 +64,10 @@ class ClipboardTests(unittest.TestCase):
                '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
                '-o', 'StrictHostKeyChecking=yes', '-o', f'UserKnownHostsFile={known}',
                '-o', 'GlobalKnownHostsFile=/dev/null', 'root@127.0.0.1']
-        environment = ['env', f'HOME={self.root}', 'LC_ALL=C.UTF-8',
-                       'TERM=xterm-256color', *(f'{k}={v}' for k, v in extra_env.items())]
+        # This SSH fixture stays on the same host; retain its pinned helper PATH.
+        environment = ['env', f'HOME={self.root}', f'PATH={os.environ["PATH"]}',
+                       'LC_ALL=C.UTF-8', 'TERM=xterm-256color',
+                       *(f'{k}={v}' for k, v in extra_env.items())]
         script = self.root / 'ssh-transport.py'
         script.write_text('import os, shlex, sys\n'
                           f'command = {"cd " + shlex.quote(str(self.root)) + " && exec "!r}'
@@ -231,7 +233,8 @@ class ClipboardTests(unittest.TestCase):
     def interrupted_copy(self, wrappers):
         _, child = self.open_text('copy ' + 'x' * 400000, wrappers=wrappers)
         child.write(b'v$y')
-        child.until(b'\x1b]52;c;')
+        # Long-selection preparation is not the abort-ordering check below.
+        child.until(b'\x1b]52;c;', timeout=15)
         time.sleep(.1)
         child.signal(signal.SIGTERM)
         time.sleep(.08)
