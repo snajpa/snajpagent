@@ -2881,6 +2881,7 @@ def run_goal_interrupt_http_case(binary, root, chat=False):
             terminal.run("send-keys", "-t", terminal.target, "Enter", "Enter")
             terminal.wait_until(lambda text: text.count("I>") >= 3, "resumed paused prompts")
             assert len(requests) == 1
+            assert not event_list(read_events(state)[1], "input_received")
             ready.clear()
             terminal.submit("/goal resume")
             assert ready.wait(SUPPLY_TIMEOUT)
@@ -2891,7 +2892,11 @@ def run_goal_interrupt_http_case(binary, root, chat=False):
         log = read_events(state)[1]
         assert len(requests) == len(event_list(log, "turn_started")) == 2
         assert len(event_list(log, "goal_resumed")) == 1
-        assert not event_list(log, "input_received")
+        received = event_list(log, "input_received")
+        assert len(received) == 1, received
+        resumed = received[0]["data"]["text"]
+        assert "goals made active by this /goal resume command" in resumed
+        assert event_list(log, "turn_started")[1]["data"]["text"] == resumed
         assert not any(e["data"].get("text") == "Continue." for e in log)
     finally:
         release.set(); provider.close()
@@ -2915,13 +2920,15 @@ def run_help_case(binary, root, active=False, chat=False, width=80):
         text = normalize_space(terminal.capture(join_wrapped=True))
         assert text.index("Files and media") < text.index("Network chat")
         assert text.index("Network chat") < text.index("/chat [ADDRESS]")
-        for syntax in ("/state", "/state goal [status|help]", "/state goal [set] TEXT", '/state goal "TEXT"',
-                "/state goal pause|resume", "/state goal lock|unlock", "/state goal complete|cancel|clear",
+        for syntax in ("/state", "/state goal [status|help]", "/state goal [add] TEXT",
+                "/state goal set [ID] TEXT", "/state goal pause|resume [ID]",
+                "/state goal lock|unlock [ID]", "/state goal complete|cancel|clear [ID]",
                 "/goal ...",
                 "/queue N delete|d", "/queue N edit|e", "/queue Nd|Ne",
                 "/model [#]N[:CONTEXT] [save|s]", "/model MODEL[/EFFORT][:CONTEXT] [save|s]",
                 "/model PROVIDER/MODEL/EFFORT[:CONTEXT] [save|s]", "[optional]", "UPPERCASE"):
             assert syntax in text, (syntax, screen)
+        assert "quotes accept reserved first words" in text, screen
         for syntax in ("/help", "/?", "/status", "/history [N]", "/config", "/effort [LEVEL]",
                 "/ro QUERY", "/verbose [0..6]", "/queue [TEXT]", "/queue clear|c", "/queue pop|p",
                 "/next", "/retry", "/yield", "/compact", "/delete", "/exit",
@@ -2947,14 +2954,17 @@ def run_help_case(binary, root, active=False, chat=False, width=80):
             lambda screen: normalize_space(screen).count("Full reference: man snajpagent") == 2,
             "second complete help response", timeout=5, join_wrapped=True))
         assert alias[alias.rindex("Syntax:"):].split("Full reference:")[0] == overview
-        goals_before = alias.count("clear=cancel")
+        goal_end = "/state goal complete|cancel|clear [ID]"
+        goals_before = alias.count(goal_end)
         terminal.send_key("C-l")
         terminal.submit("/goal help")
         goal = normalize_space(terminal.wait_until(
-            lambda screen: normalize_space(screen).count("clear=cancel") == goals_before + 1,
+            lambda screen: normalize_space(screen).count(goal_end) == goals_before + 1,
             "new goal help response", join_wrapped=True))
         goal = goal[goal.rindex("Syntax:"):]
-        assert '/state goal "TEXT"' in goal and "/state goal pause|resume" in goal
+        assert "/state goal [add] TEXT" in goal and "/state goal set [ID] TEXT" in goal
+        assert "/state goal pause|resume [ID]" in goal
+        assert "quotes accept reserved first words" in goal
         assert "/model PROVIDER" not in goal
         terminal.exit()
         _, log = maybe_events(terminal.dotdir)
@@ -3065,7 +3075,7 @@ def run_blank_enter_stream_case(binary, root, help_commands=False):
             assert (state / "prompt_history").read_bytes() == history
             if help_commands:
                 for command, end in (("/help", "Full reference:"), ("/?", "Full reference:"),
-                                     ("/goal help", "clear=cancel")):
+                                     ("/goal help", "/state goal complete|cancel|clear [ID]")):
                     previous = normalize_space(terminal.capture(join_wrapped=True)).count(end)
                     terminal.send_key("C-l")
                     terminal.submit(command)
