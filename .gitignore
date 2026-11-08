@@ -39,6 +39,8 @@
 /tests/test_vm_layout
 /tests/test_vm_input
 /tests/test_vm_text
+/tests/test_vm_terminal_wire
+/tests/test_vm_classic_state
 /tests/test_vm_selection
 /tests/test_vm_navigation
 /tests/test_vm_public
