@@ -135,7 +135,9 @@ class RemoteSSHTests(unittest.TestCase):
                                 self.assertIsNone(tmux.poll())
                                 self.assertLess(time.monotonic(), deadline)
                                 time.sleep(.02)
-                            command = ["env", "LC_ALL=C.UTF-8", "tmux", "-u", "-S", str(tmux_socket), "new-session",
+                            # Use the same tmux client as the local fixture server.
+                            command = ["env", f"PATH={os.environ['PATH']}", "LC_ALL=C.UTF-8",
+                                       "tmux", "-u", "-S", str(tmux_socket), "new-session",
                                        *command]
                         if scenario == "screen":
                             sockets = state / "screens"
