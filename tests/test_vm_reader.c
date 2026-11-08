@@ -34,8 +34,9 @@ await_page_at(struct snag_vm_reader *reader, uint64_t generation, const char *ca
 {
     uint64_t start = snag_monotonic_ms();
     struct snag_vm_read_result *result;
+    /* Backward motions can require two full passes through multi-megabyte history. */
     while (!(result = snag_vm_reader_take(reader))) {
-        if (snag_monotonic_ms() - start >= 10000u) {
+        if (snag_monotonic_ms() - start >= 30000u) {
             uint64_t bytes = 0u, events = 0u, total = 0u;
             bool progress = snag_vm_reader_progress(reader, generation, &bytes, &events, &total);
             fprintf(stderr, "vm reader timeout: %s:%u generation %llu", caller, line,
