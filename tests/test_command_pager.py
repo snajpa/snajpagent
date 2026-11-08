@@ -173,7 +173,7 @@ class CommandPagerTests(unittest.TestCase):
             ("/state goal", "no goal has been set", "goal actions:"),
             ("/goal", "no goal has been set", "goal actions:"),
             ("/state goal status", "no goal has been set"),
-            ("/goal help", "/state goal [set] TEXT"),
+            ("/goal help", "/state goal [add] TEXT", "/state goal set [ID] TEXT"),
             ("/queue", "future-turn queue is empty"),
             ("/q", "future-turn queue is empty"),
             ("/session", "current session:", "running sessions:"),
