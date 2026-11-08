@@ -583,9 +583,8 @@ input()
         self.wait_snapshot(lambda rows:
             rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None)
         resumed.command('history')
-        resumed.write(b'i')
-        control.ControlTests.escape(self, resumed)
-        resumed.write(b'0d$i/attachments\r')
+        # Select the workspace composer; i alone opens the native frontend.
+        resumed.write(b'\t0d$i/attachments\r')
         resumed.repaint_until(b'1 unsent attachment(s)')
         self.assertEqual([p.read_bytes() for p in (self.owner.directory / 'media').iterdir()],
                          [body])
@@ -654,6 +653,8 @@ input()
         self.addCleanup(resumed.close)
         self.terminals.append(resumed)
         self._terminals.append(resumed)
+        # The surviving mux still owns the screen; reconnects also receive diffs.
+        resumed.capture_screen = child.capture_screen
         resumed.until(b'host-model', 10)
         resumed.write(b'\x03')
         self.wait_snapshot(lambda rows:
