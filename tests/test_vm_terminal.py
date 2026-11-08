@@ -1283,7 +1283,6 @@ class NativePaneTests(unittest.TestCase):
         pane.send_text('before-checkpoint-failure\x1b:w\r')
         pane.wait('Workspace saved')
         snapshot = next((self.root / 'state' / 'workspaces').glob('*/workspace.json'))
-        before = snapshot.read_bytes()
         shell = int(pane.run('display-message', '-p', '-t', pane.target,
                              '#{pane_pid}').strip())
         processes = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='], text=True)
@@ -1304,6 +1303,12 @@ class NativePaneTests(unittest.TestCase):
         pane.wait('EXACT-host-model-PROMPT> before-checkpoint-failure-after')
         pane.send_key('Escape')
         time.sleep(.08)
+        # Autosave can advance the initial checkpoint during process discovery.
+        # Compare the failed write with the latest acknowledged successful save.
+        pane.submit(':w')
+        pane.wait_until(lambda screen: self.checkpointed_draft('before-checkpoint-failure-after'),
+                        'updated checkpoint before frontend failure')
+        before = snapshot.read_bytes()
         os.kill(frontend, signal.SIGKILL)
         pane.submit(':w')
         pane.wait('checkpoint unavailable')
@@ -1874,7 +1879,8 @@ class NativePaneTests(unittest.TestCase):
         pane = self.resume_pane(snapshot)
         pane.wait('Retained frontend input')
         pane.submit(':w')
-        pane.wait('Workspace saved')
+        pane.wait_until(lambda screen: json.loads(snapshot.read_text())['state']['v'] == 16,
+                        'legacy input migration checkpoint')
         migrated = json.loads(snapshot.read_text())['state']
         self.assertEqual(migrated['v'], 16)
         self.assertEqual(migrated['native_input'][0]['window'], migrated['focus'])
