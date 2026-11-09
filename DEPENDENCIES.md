@@ -479,6 +479,11 @@ gzip/Brotli/Zstd support remain available. No third-party shared libraries,
 Nix installation or certificate sidecar are required on the destination.
 This is distinct from the smaller native executable, which uses system libraries.
 
+The Curl/Mbed TLS write patch belongs to the target application libraries in
+each platform recipe. The shared source-mirror overlay preserves upstream build
+tools, including CMake and LLVM, so these runtime patches retain the pinned
+compiler cache identity.
+
 The shared Linux recipe selects libcurl's existing nonblocking pipe-and-fcntl
 wakeup backend. Its eventfd/pipe2 branches assume those syscalls exist at runtime;
 on older kernels their failure can surface as a misleading out-of-memory error

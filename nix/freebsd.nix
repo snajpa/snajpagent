@@ -395,7 +395,8 @@ let
     "-DCURL_USE_LIBPSL=OFF" "-DCURL_USE_LIBSSH2=OFF" "-DCURL_USE_LIBSSH=OFF"
     "-DCURL_DISABLE_LDAP=ON" "-DCURL_DISABLE_LDAPS=ON"
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
-  ] networkLibraries).overrideAttrs (_: {
+  ] networkLibraries).overrideAttrs (old: {
+    patches = (old.patches or []) ++ [ ./curl-mbedtls-write.patch ];
     postInstall = lib.optionalString (!legacy) ''
       # curl prefixes the imported Threads target's -lpthread flag twice.
       substituteInPlace "$out/lib/pkgconfig/libcurl.pc" \

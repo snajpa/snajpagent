@@ -19,6 +19,16 @@ SPEC.loader.exec_module(CHECKER)
 
 
 class PortabilityTests(unittest.TestCase):
+    def test_runtime_curl_patch_does_not_modify_build_tools(self):
+        overlay = (ROOT / 'nix/source-mirrors.nix').read_text()
+        self.assertNotIn('curl-mbedtls-write.patch', overlay)
+        for name in ('linux', 'macos', 'windows', 'freebsd', 'openbsd', 'netbsd', 'android'):
+            with self.subTest(recipe=name):
+                source = (ROOT / 'nix' / (name + '.nix')).read_text()
+                curl = source.split('  curl = ', 1)[1].split('  application = ', 1)[0]
+                self.assertIn('patches = (old.patches or []) ++ [ ./curl-mbedtls-write.patch ]',
+                              curl)
+
     @unittest.skipUnless(shutil.which('clang'), 'Clang required for 32-bit compile regression')
     def test_top_settings_compile_with_32_bit_long(self):
         source = (ROOT / 'src/config.c').read_text()

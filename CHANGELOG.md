@@ -4,6 +4,9 @@
 
 ## 0.99.9 — November 8, 2026
 
+- Scope the Curl/Mbed TLS patch to application libraries, retaining the pinned
+  CMake and LLVM build-tool cache.
+
 - Keep monitor sort validation and workspace terminal resizing compatible with
   32-bit Linux and the PPC64LE musl ioctl ABI.
 

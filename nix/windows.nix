@@ -260,7 +260,8 @@ let
     "-DCURL_DISABLE_LDAP=ON" "-DCURL_DISABLE_LDAPS=ON"
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
   ] networkLibraries).overrideAttrs (old: {
-    patches = (old.patches or []) ++ pkgs.lib.optional legacy ./curl-legacy-windows.patch;
+    patches = (old.patches or []) ++ [ ./curl-mbedtls-write.patch ] ++
+      pkgs.lib.optional legacy ./curl-legacy-windows.patch;
   });
   regex = import ./windows-regex.nix { inherit pkgs windows threads unistring winver; };
   pty = if legacy && windows.stdenv.cc.isClang then

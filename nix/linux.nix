@@ -145,6 +145,7 @@ let
     c-aresSupport = true;
   }).overrideAttrs (old: {
     propagatedBuildInputs = old.propagatedBuildInputs ++ [ tls ];
+    patches = (old.patches or []) ++ [ ./curl-mbedtls-write.patch ];
     # Keep curl's checked, nonblocking pipe wakeup on pre-eventfd/pipe2 kernels.
     ac_cv_func_eventfd = "no";
     ac_cv_func_pipe2 = "no";

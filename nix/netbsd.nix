@@ -401,7 +401,9 @@ let
     "-DCURL_USE_LIBPSL=OFF" "-DCURL_USE_LIBSSH2=OFF" "-DCURL_USE_LIBSSH=OFF"
     "-DCURL_DISABLE_LDAP=ON" "-DCURL_DISABLE_LDAPS=ON"
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
-  ] networkLibraries);
+  ] networkLibraries).overrideAttrs (old: {
+    patches = (old.patches or []) ++ [ ./curl-mbedtls-write.patch ];
+  });
 in {
   inherit sdk target compiler tools cflags ldflags jansson tls curl regex unistring av pdf png freetype expat fontconfig jpeg openjpeg miniaudio xml archive iconv zlib cxx;
   application = { source, packageName, version, revision, debug ? false,

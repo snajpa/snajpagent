@@ -527,7 +527,8 @@ let
     "-DCURL_USE_LIBPSL=OFF" "-DCURL_USE_LIBSSH2=OFF" "-DCURL_USE_LIBSSH=OFF"
     "-DCURL_DISABLE_LDAP=ON" "-DCURL_DISABLE_LDAPS=ON"
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
-  ] networkLibraries).overrideAttrs (_: {
+  ] networkLibraries).overrideAttrs (old: {
+    patches = (old.patches or []) ++ [ ./curl-mbedtls-write.patch ];
     postPatch = lib.optionalString early ''
       # The native socket/time headers require sys/types.h first. Let curl
       # probe the real headers instead of marking available functions absent.
