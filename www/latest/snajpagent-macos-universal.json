@@ -1,9 +1,9 @@
 {
   "name": "snajpagent",
   "target": "macos-universal",
-  "version": "0.99.8c",
-  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.8c/snajpagent-0.99.8c-macos-universal",
-  "sha256": "eb91c4fde6fa2522db65c416c56692bba97a09e0cfcf9ae6852908196eb1b0af",
-  "size": 54400832,
+  "version": "0.99.9",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.9/snajpagent-0.99.9-macos-universal",
+  "sha256": "e23cec7cb8005ce0af3c938485feaf7919ff804fae3f04f4e7fe88b88c9edaa9",
+  "size": 57607104,
   "changelog": "https://agent.snajpa.net/downloads.html#changelog"
 }

@@ -1,9 +1,9 @@
 {
   "name": "snajpagent",
   "target": "windows-x86_64",
-  "version": "0.99.8c",
-  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.8c/snajpagent-0.99.8c-windows-x86_64.exe",
-  "sha256": "9c6e34b10f825773a5ec0f9204998ee1120828e626fbadcfd2eb0147bb5675fc",
-  "size": 32229888,
+  "version": "0.99.9",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.9/snajpagent-0.99.9-windows-x86_64.exe",
+  "sha256": "414c6cc352bf9938b4d02aec0daf2a9d3bd68a10fcd66c717c25dd2ef79d1c0f",
+  "size": 33809920,
   "changelog": "https://agent.snajpa.net/downloads.html#changelog"
 }

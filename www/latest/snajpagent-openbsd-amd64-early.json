@@ -1,9 +1,9 @@
 {
   "name": "snajpagent",
   "target": "openbsd-amd64-early",
-  "version": "0.99.8c",
-  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.8c/snajpagent-0.99.8c-openbsd-amd64-early",
-  "sha256": "14fea9d29f7231e1ee137321024bdc4e2a31b45bfcb5aabd73fce7bf6064ee7e",
-  "size": 31499464,
+  "version": "0.99.9",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.9/snajpagent-0.99.9-openbsd-amd64-early",
+  "sha256": "273570baa097acc3ea76681d115c06144df50e1dd960463b070a222c777f6258",
+  "size": 33164568,
   "changelog": "https://agent.snajpa.net/downloads.html#changelog"
 }
