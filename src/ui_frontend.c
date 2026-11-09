@@ -80,12 +80,11 @@ frontend_history(struct snag_ui *ui, struct frontend_source *source, const json_
     char error[256];
     /* Read an owner-certified prefix without acquiring or probing its writer lock. */
     store->root_path = snag_strdup_checked(root, SNAG_PATH_MAX_BYTES);
-    store->root_fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    store->root_fd = snag_open_read(root, true);
     if (!store->root_path || store->root_fd < 0 ||
         snag_store_verify_private_fd(store->root_fd, true, "state root", error, sizeof(error)) < 0)
         return -1;
-    store->sessions_fd = openat(store->root_fd, "sessions",
-        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    store->sessions_fd = snag_open_read_at(store->root_fd, "sessions", true);
     if (store->sessions_fd < 0 || snag_store_verify_private_fd(store->sessions_fd, true,
             "sessions directory", error, sizeof(error)) < 0 ||
         snag_session_history_open(store, session, id, &tail, error, sizeof(error)) < 0)

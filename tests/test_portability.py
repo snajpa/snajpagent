@@ -19,6 +19,26 @@ SPEC.loader.exec_module(CHECKER)
 
 
 class PortabilityTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('cc'), 'C compiler required for legacy directory API regression')
+    def test_frontend_history_uses_portable_directory_opens(self):
+        source = (ROOT / 'src/ui_frontend.c').read_text()
+        root = source.split('    store->root_fd = ', 1)[1].split(';', 1)[0]
+        sessions = source.split('    store->sessions_fd = ', 1)[1].split(';', 1)[0]
+        body = ('typedef _Bool bool;\n#define true 1\n'
+                'struct store { int root_fd, sessions_fd; };\n'
+                'extern int snag_open_read(const char *, bool);\n'
+                'extern int snag_open_read_at(int, const char *, bool);\n'
+                'void frontend_directories(struct store *store, const char *root) {\n'
+                'store->root_fd = ' + root + ';\n'
+                'store->sessions_fd = ' + sessions + ';\n}\n')
+        with tempfile.TemporaryDirectory(prefix='snag-frontend-open-') as directory:
+            path = Path(directory) / 'directories.c'
+            path.write_text(body)
+            result = subprocess.run(
+                ['cc', '-std=c99', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-c', str(path),
+                 '-o', os.devnull], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     @unittest.skipUnless(shutil.which('cc'), 'C compiler required for Windows poll API regression')
     def test_send_wait_compiles_without_posix_poll(self):
         source = (ROOT / 'src/send.c').read_text()

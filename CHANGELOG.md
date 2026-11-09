@@ -4,6 +4,8 @@
 
 ## 0.99.9 — November 8, 2026
 
+- Keep frontend history reads compatible with legacy BSD directory APIs.
+
 - Keep workspace-send polling compatible with the Windows socket API.
 
 - Preserve bounded prompt fields on older BSD systems without `strnlen`.

@@ -27,6 +27,9 @@ values, including an unterminated buffer ending at the scan bound.
 The workspace-send wait probe compiles its actual event wait with the portable
 socket API declarations and without POSIX poll types or constants.
 
+The frontend-history directory-open probe compiles both directory acquisitions
+against the portable descriptor helpers used for legacy BSD path tracking.
+
 These checks cover the native test executable and its enabled features.
 Physical audio devices, live providers, native Windows desktop rendering and
 execution of each production binary on its target OS have separate scope.
