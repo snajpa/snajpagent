@@ -5,11 +5,11 @@
 #include "session_host.h"
 #include "session_view.h"
 #include "store.h"
+#if SNAJPAGENT_VM
+#include "net.h"
+#endif
 
 #include <errno.h>
-#if SNAJPAGENT_VM
-#include <poll.h>
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -123,11 +123,11 @@ exchange(struct snag_view_channel *channel, const char *session, const char *id,
             }
             json_decref(value);
         }
-        struct pollfd fd = {.fd = channel->fd,
-            .events = POLLIN | (channel->output ? POLLOUT : 0)};
+        snag_socket_event fd = {.fd = channel->fd,
+            .events = SNAG_NET_READ | (channel->output ? SNAG_NET_WRITE : 0)};
         uint64_t now = snag_monotonic_ms();
         if (now >= deadline) break;
-        if (poll(&fd, 1u, (int)(deadline - now)) < 0 && errno != EINTR) break;
+        if (snag_socket_poll(&fd, 1u, (int)(deadline - now)) < 0 && errno != EINTR) break;
     }
     (void)snag_errorf(error, error_size, submitted ?
         "outcome unknown for request %s; no final receipt, do not automatically resend" :

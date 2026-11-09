@@ -24,6 +24,9 @@ The prompt-field regression compiles the actual bounded length scan as C99
 without `strnlen`. Native execution covers empty, exact-bound and over-bound
 values, including an unterminated buffer ending at the scan bound.
 
+The workspace-send wait probe compiles its actual event wait with the portable
+socket API declarations and without POSIX poll types or constants.
+
 These checks cover the native test executable and its enabled features.
 Physical audio devices, live providers, native Windows desktop rendering and
 execution of each production binary on its target OS have separate scope.

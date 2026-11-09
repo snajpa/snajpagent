@@ -19,6 +19,29 @@ SPEC.loader.exec_module(CHECKER)
 
 
 class PortabilityTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('cc'), 'C compiler required for Windows poll API regression')
+    def test_send_wait_compiles_without_posix_poll(self):
+        source = (ROOT / 'src/send.c').read_text()
+        start = source.index(' fd = {.fd = channel->fd,')
+        wait = source[source.rfind('\n', 0, start) + 1:source.index('\n    }\n', start)]
+        body = ('typedef __SIZE_TYPE__ size_t;\ntypedef __UINT64_TYPE__ uint64_t;\n'
+                'struct snag_view_channel { int fd; void *output; };\n'
+                'typedef struct { int fd; short events, revents; } snag_socket_event;\n'
+                '#define SNAG_NET_READ 1\n#define SNAG_NET_WRITE 4\n#define EINTR 4\n'
+                'extern int errno;\nextern uint64_t snag_monotonic_ms(void);\n'
+                'extern int snag_socket_poll(snag_socket_event *, size_t, int);\n'
+                'void send_wait(struct snag_view_channel *channel, uint64_t deadline) {\n'
+                'while (1) {\n' + wait + '\nbreak;\n}\n}\n')
+        with tempfile.TemporaryDirectory(prefix='snag-send-poll-') as directory:
+            path = Path(directory) / 'wait.c'
+            path.write_text(body)
+            result = subprocess.run(
+                ['cc', '-std=c99', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-c', str(path),
+                 '-o', os.devnull], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('#include "net.h"', source)
+        self.assertNotIn('#include <poll.h>', source)
+
     @unittest.skipUnless(shutil.which('cc'), 'C compiler required for legacy string API regression')
     def test_prompt_value_length_compiles_without_strnlen(self):
         source = (ROOT / 'src/ui.c').read_text().split('static int\nsend_prompt(', 1)[1]
