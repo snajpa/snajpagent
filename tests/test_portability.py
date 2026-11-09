@@ -19,6 +19,32 @@ SPEC.loader.exec_module(CHECKER)
 
 
 class PortabilityTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('cc'), 'C compiler required for legacy string API regression')
+    def test_prompt_value_length_compiles_without_strnlen(self):
+        source = (ROOT / 'src/ui.c').read_text().split('static int\nsend_prompt(', 1)[1]
+        scan = source.split('        size_t size = ', 1)[1].split(
+            '        if (size > limit', 1)[0]
+        body = ('typedef __SIZE_TYPE__ size_t;\n'
+                'size_t prompt_value_length(const char *const values[], size_t limit) {\n'
+                'size_t i = 0u;\nsize_t size = ' + scan + 'return size;\n}\n'
+                'int main(void) {\nchar bounded[4] = {\'a\', \'b\', \'c\', \'d\'};\n'
+                'const char *values[] = {bounded};\n'
+                'if (prompt_value_length(values, 3u) != 4u) return 1;\n'
+                'values[0] = "abc";\nif (prompt_value_length(values, 3u) != 3u) return 2;\n'
+                'values[0] = "";\nif (prompt_value_length(values, 0u) != 0u) return 3;\n'
+                'values[0] = "x";\nif (prompt_value_length(values, 0u) != 1u) return 4;\n'
+                'return 0;\n}\n')
+        with tempfile.TemporaryDirectory(prefix='snag-prompt-string-') as directory:
+            path = Path(directory) / 'prompt.c'
+            output = Path(directory) / 'prompt'
+            path.write_text(body)
+            result = subprocess.run(
+                ['cc', '-std=c99', '-Wall', '-Wextra', '-Wpedantic', '-Werror', str(path),
+                 '-o', str(output)], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_runtime_curl_patch_does_not_modify_build_tools(self):
         overlay = (ROOT / 'nix/source-mirrors.nix').read_text()
         self.assertNotIn('curl-mbedtls-write.patch', overlay)

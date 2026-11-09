@@ -4069,7 +4069,8 @@ send_prompt(struct snag_ui *ui, enum snag_ui_operation kind, bool active, const 
     for (size_t i = 0u; values && i < SNAG_PROMPT_HOUR; ++i) {
         size_t limit = i == SNAG_PROMPT_SESSION_NAME ? SNAG_PATH_MAX_BYTES : SNAG_TERM_LABEL_BYTES;
         if (!values[i]) return snag_errno(EINVAL);
-        size_t size = strnlen(values[i], limit + 1u);
+        size_t size = 0u;
+        while (size <= limit && values[i][size]) ++size;
         if (size > limit || !snag_size_add(length, size + 1u, &length))
             return snag_errno(EOVERFLOW);
         sizes[i] = size + 1u;

@@ -4,6 +4,8 @@
 
 ## 0.99.9 — November 8, 2026
 
+- Preserve bounded prompt fields on older BSD systems without `strnlen`.
+
 - Scope the Curl/Mbed TLS patch to application libraries, retaining the pinned
   CMake and LLVM build-tool cache.
 

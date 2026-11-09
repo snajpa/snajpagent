@@ -20,6 +20,10 @@ the PPC musl terminal-resize request encoding. The corrected units compile with
 the ARMv6, i686 and PPC64LE production compilers. Native configuration, workspace
 wire, portability and style checks pass after these portability corrections.
 
+The prompt-field regression compiles the actual bounded length scan as C99
+without `strnlen`. Native execution covers empty, exact-bound and over-bound
+values, including an unterminated buffer ending at the scan bound.
+
 These checks cover the native test executable and its enabled features.
 Physical audio devices, live providers, native Windows desktop rendering and
 execution of each production binary on its target OS have separate scope.
