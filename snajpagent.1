@@ -1457,8 +1457,9 @@ An empty or whitespace-only draft leaves its prompt line in the transcript and
 opens a fresh prompt.  This is local: it starts no model request, sends no chat,
 adds no history or queued turn, and leaves active work and goals unchanged.
 Queue editing and confirmation prompts retain their own blank-answer behavior.
-For nonempty text, submit while idle.  In rollout during model generation,
-interrupt the response and steer from its delivered prefix.  A running command is handed back alive;
+For nonempty text, submit while idle. In an active rollout turn, Enter steers
+even if its captured prompt predates the turn or a local command redraws it.
+During model generation, interrupt the response and steer from its delivered prefix.  A running command is handed back alive;
 it is not killed. In operator chat, send to the selected room or private peer.
 Agent queries are read-only. A model-nick mention
 steers at the next safe response/tool boundary without truncating generation.
@@ -1517,6 +1518,9 @@ start a new line, and open a clean prompt.  With an empty active composer, also
 interrupt the turn and pause automatic goal continuation. While the engine settles
 the interruption, the prompt shows "Cancellation requested; waiting...".
 Further empty-draft interrupts keep that pending prompt on the same line.
+After interruption settles, armed queued user turns run oldest first. Goals
+remain paused. An idle, unarmed queue still waits for /next. Queue inspection
+and local commands remain available when retained work cannot advance.
 Cancelling a queue edit restores the active prompt and leaves the turn interruptible.
 Context preparation checks cancellation between journal events. The next idle prompt
 reflects the settled goal state; its active goal flag is cleared before the pause

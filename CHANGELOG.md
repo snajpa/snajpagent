@@ -2,6 +2,14 @@
 
 # Changelog
 
+## Unreleased
+
+- Keep rollout Enter as steering even when its prompt snapshot predates the active
+  turn. Tab and `/queue` remain explicit future-turn controls.
+- Run armed queued user input after Ctrl-C settles the interrupted turn, while
+  pausing goals. Keep queue inspection and other terminal commands responsive
+  when retained work cannot advance.
+
 ## 0.99.9 — November 8, 2026
 
 - Keep frontend history reads compatible with legacy BSD directory APIs.

@@ -2253,7 +2253,6 @@ apply_event_one(struct snag_session *session, const char *type, const json_t *da
             goto invalid;
         json_decref(session->pending_input);
         session->pending_input = NULL;
-        session->queue_armed = false;
     } else if (strcmp(type, "turn_started") == 0) {
         const char *turn_id;
         const char *text;
@@ -2480,7 +2479,6 @@ apply_event_one(struct snag_session *session, const char *type, const json_t *da
     } else if (strcmp(type, "turn_cancel_requested") == 0) {
         if (!current_turn || !snag_json_exact_keys(data, "turn_id")) goto invalid;
         session->cancel_requested = true;
-        session->queue_armed = false;
     } else if (strcmp(type, "turn_recovery") == 0) {
         const char *message = snag_json_string(data, "message");
         bool retry = json_object_get(data, "retry_attempts") != NULL;
@@ -3332,7 +3330,11 @@ apply_event_one(struct snag_session *session, const char *type, const json_t *da
             if (session->response_open ||
                 (session->response_complete && !all_pending_finished(session)))
                 goto invalid;
-            if (!session->response_handoff || !strcmp(type, "turn_interrupted"))
+            bool user_cancel = !strcmp(type, "turn_interrupted") &&
+                snag_string_in(snag_json_string(data, "origin"), "user") &&
+                snag_string_in(reason, "cancelled");
+            if (!user_cancel &&
+                (!session->response_handoff || !strcmp(type, "turn_interrupted")))
                 session->queue_armed = false;
             if (!strcmp(type, "turn_interrupted")) {
                 if (!snag_json_exact_keys(data, "origin reason turn_id") ||

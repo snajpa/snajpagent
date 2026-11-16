@@ -4990,9 +4990,7 @@ again:;
     if (app->queue_edit_id[0] && !snag_prompt_command(line)) {
         rc = finish_queue_edit(app, line, true, error, sizeof(error));
         if (rc != 0 && error[0]) (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
-    } else if (action == SNAG_TERM_QUEUE ||
-               (!app->ui.input_active && app->session.active_turn &&
-                   app->ui.input_view == SNAG_RENDER_ROLLOUT && !snag_prompt_command(line))) {
+    } else if (action == SNAG_TERM_QUEUE) {
         rc = queue_future_turn(app, line, true, error, sizeof(error));
         if (rc != 0) {
             (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
@@ -7408,7 +7406,8 @@ run_queued_chain(struct app_state *app)
         int turn_rc = run_tracked_turn(
             app, queued->text, queued, false, queued->read_only, queued->content, false);
         if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) {
-            if (!app->input_closed && snag_app_queue_arm(app, false) < 0) return 3;
+            if (!app->input_closed && !app->interrupt_requested &&
+                snag_app_queue_arm(app, false) < 0) return 3;
             return turn_rc;
         }
     }
@@ -7496,11 +7495,8 @@ run_ready_chains(struct app_state *app)
             continue;
         }
         if (app->session.active_turn) {
-            /* Post-cancel deferral: a user interrupt ends the turn with no
-             * new turn from model/queue/reminder/goal sources. Pending user
-             * input and IRC traffic still wake via their own branches below;
-             * everything else waits for the next direct turn start, which
-             * clears interrupt_requested on entry to run_tracked_turn. */
+            /* A cancelled retained turn waits for direct input. Armed user
+             * queue entries run after that turn has actually closed. */
             if (app->interrupt_requested) return 0;
             if (app->session.policy_stopped) return 0;
             if (app->session.active_goal &&
@@ -7522,15 +7518,14 @@ run_ready_chains(struct app_state *app)
                 continue;
             }
         }
-        /* Post-cancel deferral (see above): queue/timer/goal wait for the
-         * next direct turn start; IRC already had its chance above. */
-        if (app->interrupt_requested) return 0;
         if (app->session.queue_armed && !app->queue_edit_id[0] &&
             app->session.pending_queue_count != 0u) {
             turn_rc = run_queued_chain(app);
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) return turn_rc;
             continue;
         }
+        /* Ctrl-C stops automatic work, but keeps explicitly queued user work. */
+        if (app->interrupt_requested) return 0;
         if (timer_due(app)) {
             turn_rc = run_due_timer(app);
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) return turn_rc;
@@ -7691,7 +7686,8 @@ submit_idle(
         if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
             (app->session.queue_armed || app->goal_armed || app->session.pending_controls))
             rc = run_ready_chains(app);
-        else if (rc != 0 && !app->input_closed && snag_app_queue_arm(app, false) < 0)
+        else if (rc != 0 && !app->input_closed && !app->interrupt_requested &&
+            snag_app_queue_arm(app, false) < 0)
             return 3;
     }
     return rc == 3 || rc == 6 ? rc : 0;
@@ -7760,6 +7756,7 @@ interactive_loop(struct app_state *app, const char *initial)
         }
         if (!prompt && !app->automatic_work_held && snag_app_model_enabled(app) &&
             !snag_ui_leaving(&app->ui) &&
+            !app->session.active_turn &&
             app->session.queue_armed &&
             !app->queue_edit_id[0] && app->session.pending_queue_count) {
             rc = run_ready_chains(app);

@@ -43,7 +43,8 @@ Tool details start hidden: `/verbose 1` shows activity,
 
 A **turn** runs from your request through the final answer in **rollout**. Type
 while it runs; Enter sends a correction at a safe boundary and keeps running
-commands alive. Blank Enter starts no work.
+commands alive. Enter keeps this meaning across prompt redraws and local commands.
+Blank Enter starts no work.
 If the model replies while a command is running, the turn waits for your input
 or command completion. Output keeps buffering; `/yield` returns to the model.
 
@@ -96,7 +97,8 @@ to a 4096-byte UTF-8 limit. The model can also set independent one-shot or recur
 reminders with the `timer` tool.
 
 Ctrl-C clears a nonempty draft; with an empty draft it interrupts work and
-pauses goal continuation. Empty Enter leaves the goal paused; use `/goal resume`.
+pauses goal continuation. Armed queued user prompts then run oldest first; goals
+stay paused. Empty Enter leaves the goal paused; use `/goal resume`.
 Ctrl-D on an empty draft exits, and no work continues after exit. Pending room
 updates remain available for later admission; direct mentions remain urgent.
 

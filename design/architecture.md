@@ -442,6 +442,9 @@ answer. Durable queued user turns take precedence over that continuation.
 All goal states remain projected during queued and read-only turns with an
 explicit suspended-controller notice, including after the last queue item is
 dequeued. This state snapshot authorizes no extra goal work in those turns.
+Once cancellation settles, armed queued user turns run before automatic work;
+paused goals remain paused. A retained active turn prevents idle queue dispatch
+and leaves the input pump available for inspection, cancellation or recovery.
 An unarmed queue blocks goal continuation until `/next`, explicit goal
 start/resume, or queue removal. An open queue editor always prevents draining.
 Goal turns carry a distinct `input_kind` and labelled host continuation input.
@@ -506,7 +509,8 @@ The active input pump admits queued UI and IRC events during provider streams
 and tool execution. Independent UI and IRC owners service the terminal and
 sockets even when the engine is busy. Rollout Enter submits immediate steering: it
 interrupts a provider response or returns a running command with a live handle,
-then re-arms the empty active composer before the next model cycle. Outside
+then re-arms the empty active composer before the next model cycle. A stale idle
+composer snapshot does not change Enter into a future-turn submission. Outside
 command/mention completion, Tab appends a future FIFO turn and changes neither the active response nor
 the managed command. Only direct-mention IRC messages
 remain durably coalesced for their documented urgent boundary. Other room
