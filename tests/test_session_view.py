@@ -740,6 +740,40 @@ class SessionViewTests(unittest.TestCase):
         self.status('attached')
         self.assertEqual(self.identity(), self.owner_identity)
 
+    def test_enter_with_idle_capture_steers_the_current_turn(self):
+        started = threading.Event()
+
+        def held(handler, request, sequence):
+            started.set()
+            self.release.wait(10)
+            try:
+                self.provider.reply(handler, self.provider.response_body(
+                    sequence, 'completed after hold').encode(), close_header=True)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        self.provider.runtime_handler = held
+        self.detach()
+        peer = self.view(bind=True)
+        request = peer.submit('start held turn')
+        self.assertEqual(peer.result(request)['status'], 'committed')
+        self.assertTrue(started.wait(5))
+        # A physical frontend can capture Enter before a turn-start redraw.
+        # Replaying that valid capture must retain Enter's steering intent.
+        capture = dict(received=int(time.time() * 1000), label='idle > ', view=1,
+                       active=False, view_applied=False, turn=0, verbosity=0,
+                       selection=[0, 0], targets=[], scopes=[], conversation=None,
+                       address=None)
+        steering = peer.submit('change from an idle capture', route='rollout', capture=capture)
+        receipt = peer.result(steering)
+        self.assertEqual(receipt['status'], 'committed', receipt)
+        self.assertEqual(receipt['event'], 'steering_added', receipt)
+        peer.send(type='cancel', generation=peer.generation)
+        peer.until('control')
+        self.release.set()
+        self.wait_event('turn_interrupted')
+        self.assertFalse(any(event['type'] == 'future_turn_queued' for event in self.events()))
+
     def test_rejected_input_preserves_owner_and_receipt(self):
         self.detach()
         peer = self.view(bind=True)
